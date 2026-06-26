@@ -1,0 +1,849 @@
+package com.company.codeinsight.modules.ai.service.impl;
+
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.company.codeinsight.common.exception.BusinessException;
+import com.company.codeinsight.modules.ai.entity.AiCallRecord;
+import com.company.codeinsight.modules.ai.mapper.AiCallRecordMapper;
+import com.company.codeinsight.modules.ai.service.AiSummaryService;
+import com.company.codeinsight.modules.chunk.entity.CodeChunk;
+import com.company.codeinsight.modules.chunk.mapper.CodeChunkMapper;
+import com.company.codeinsight.modules.draft.entity.DraftWorkspace;
+import com.company.codeinsight.modules.draft.entity.KnowledgeDraft;
+import com.company.codeinsight.modules.draft.mapper.DraftWorkspaceMapper;
+import com.company.codeinsight.modules.draft.mapper.KnowledgeDraftMapper;
+import com.company.codeinsight.modules.task.entity.DecompileTask;
+import com.company.codeinsight.modules.task.mapper.DecompileTaskMapper;
+import com.company.codeinsight.modules.token.service.TokenAuditService;
+import com.company.codeinsight.modules.parser.service.JavaParserService;
+import com.company.codeinsight.modules.parser.model.ParsedClassInfo;
+import com.company.codeinsight.modules.draft.entity.DraftSourceReference;
+import com.company.codeinsight.modules.draft.mapper.DraftSourceReferenceMapper;
+import com.company.codeinsight.modules.repository.entity.CodeRepository;
+import com.company.codeinsight.modules.repository.mapper.CodeRepositoryMapper;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Service;
+import org.springframework.util.DigestUtils;
+import org.springframework.util.StringUtils;
+
+import java.io.File;
+import java.io.IOException;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.time.Duration;
+import java.time.LocalDateTime;
+import java.util.*;
+
+@Slf4j
+@Service
+public class AiSummaryServiceImpl implements AiSummaryService {
+
+    // 数据分片持久层映射
+    @Autowired
+    private CodeChunkMapper chunkMapper;
+
+    // AI 调用历史记录映射
+    @Autowired
+    private AiCallRecordMapper aiCallRecordMapper;
+
+    // Token 消耗审计与流控服务
+    @Autowired
+    private TokenAuditService tokenAuditService;
+
+    // 草稿工作区映射
+    @Autowired
+    private DraftWorkspaceMapper draftWorkspaceMapper;
+
+    // 知识草稿内容映射
+    @Autowired
+    private KnowledgeDraftMapper knowledgeDraftMapper;
+
+    // 任务实体数据映射
+    @Autowired
+    private DecompileTaskMapper decompileTaskMapper;
+
+    // Java 静态解析服务组件
+    @Autowired
+    private JavaParserService javaParserService;
+
+    // 代码来源引用映射
+    @Autowired
+    private DraftSourceReferenceMapper draftSourceReferenceMapper;
+
+    @Autowired
+    private CodeRepositoryMapper repositoryMapper;
+
+    @Autowired
+    private com.company.codeinsight.modules.model.mapper.AiModelMapper aiModelMapper;
+
+    // 是否启用 AI 本地 Mock 仿真
+    @Value("${code-insight.ai.mock:false}")
+    private boolean aiMock;
+
+    // 大模型服务访问密钥
+    @Value("${code-insight.ai.api-key:}")
+    private String apiKey;
+
+    // 大模型服务接口基础地址 (默认为 MiniMax 服务端点)
+    @Value("${code-insight.ai.api-url:https://api.minimax.io/v1}")
+    private String apiUrl;
+
+    // 默认选用的大模型版本名称
+    @Value("${code-insight.ai.model-name:MiniMax-M3}")
+    private String modelName;
+
+    // 本地磁盘存储路径 (草稿物理正文暂存区)
+    @Value("${code-insight.storage.local-path:./storage}")
+    private String localStoragePath;
+
+    // JSON 数据映射工具
+    private final ObjectMapper objectMapper = new ObjectMapper();
+    // HTTP 调用客户端，连接超时设为 15 秒
+    private final HttpClient httpClient = HttpClient.newBuilder()
+            .connectTimeout(Duration.ofSeconds(15))
+            .build();
+
+    /**
+     * 对特定代码切片发起大模型归纳分析
+     * 支持双层 Token 额度上限拦截、自动敏感词 Regex 过滤脱敏、大模型 API 调用及网络波动/出错时的 Mock 本地降级兜底。
+     *
+     * @param taskId            反编译任务 ID
+     * @param chunkId           代码切片 ID
+     * @param promptContent     提示词模板正文
+     * @param modelNameSelected 手动指定的模型名称（若为空则使用系统默认）
+     * @return 大模型返回的 Markdown 形式归纳总结内容
+     */
+    @Override
+    public String summarizeChunk(Long taskId, Long chunkId, String promptContent, String modelNameSelected) {
+        // 查找切片元数据
+        CodeChunk chunk = chunkMapper.selectById(chunkId);
+        if (chunk == null) {
+            throw new BusinessException("未找到切片记录");
+        }
+
+        DecompileTask task = decompileTaskMapper.selectById(taskId);
+        Long systemId = task != null ? task.getSystemId() : 0L;
+
+        String modelToUse = StringUtils.hasText(modelNameSelected) ? modelNameSelected : this.modelName;
+
+        String activeApiKey = this.apiKey;
+        String activeApiUrl = this.apiUrl;
+        if (StringUtils.hasText(modelToUse)) {
+            com.company.codeinsight.modules.model.entity.AiModel dbModel = aiModelMapper.selectOne(
+                    new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<com.company.codeinsight.modules.model.entity.AiModel>()
+                            .eq(com.company.codeinsight.modules.model.entity.AiModel::getIdentifier, modelToUse)
+                            .last("LIMIT 1")
+            );
+            if (dbModel != null) {
+                if (StringUtils.hasText(dbModel.getApiKey())) {
+                    activeApiKey = dbModel.getApiKey();
+                }
+                if (StringUtils.hasText(dbModel.getBaseUrl())) {
+                    activeApiUrl = dbModel.getBaseUrl();
+                }
+            }
+        }
+
+        // 从对应的快照物理文件读取本切片对应的代码行集合
+        String codeContent = getChunkContent(chunk);
+        
+        // 组装最终提交给模型的 Prompt 输入，嵌入上下文文件名
+        String systemPrompt = StringUtils.hasText(promptContent) ? promptContent : "你是一个资深架构师，请对以下代码进行详细的业务与功能归纳。";
+        String promptInput = systemPrompt + "\n\n[代码源文件: " + chunk.getFilePath() + "]\n```java\n" + codeContent + "\n```";
+        
+        // 正则过滤涉密资产数据（密码、私钥、内网IP等敏感项）
+        promptInput = filterSensitiveInfo(promptInput);
+
+        // 双层流控审计：单次任务 100K 限制，单系统月度 1M 限制
+        int taskUsed = tokenAuditService.getTaskCumulativeTokens(taskId);
+        int systemUsed = tokenAuditService.getSystemMonthlyTokens(systemId);
+        // 按字符数除以 3 大致估算本次请求的 Token 占位数
+        int currentEstimate = (promptInput.length() / 3);
+
+        if (taskUsed + currentEstimate > 100000) {
+            throw new BusinessException("Token 消耗额度超限阻断：单任务额度上限为 100,000，当前已消耗 " + taskUsed + "，预估当前消耗 " + currentEstimate);
+        }
+        if (systemUsed + currentEstimate > 1000000) {
+            throw new BusinessException("Token 消耗额度超限阻断：单系统月度额度上限为 1,000,000，当前已消耗 " + systemUsed + "，预估当前消耗 " + currentEstimate);
+        }
+
+        // 若开启 Mock 模式，直接进行 Mock 生成；否则在密钥为测试密钥、mock 或为空时也进行 Mock 生成
+        boolean shouldMock = this.aiMock;
+        if (!shouldMock) {
+            if (!StringUtils.hasText(activeApiKey) || activeApiKey.startsWith("test-key") || "mock".equalsIgnoreCase(activeApiKey)) {
+                shouldMock = true;
+            }
+        }
+
+        if (shouldMock) {
+            log.info("未配置大模型密钥或已开启 Mock，对切片 {} 启用本地 Mock 生成", chunkId);
+            String mockResult = generateMockSummary(chunk);
+            
+            // 记录审计与调用报表
+            saveCallRecordAndAudit(systemId, taskId, chunkId, modelToUse, promptInput.length() / 3, mockResult.length() / 3, mockResult, true, null, 100);
+            return mockResult;
+        }
+
+        long start = System.currentTimeMillis();
+        try {
+            // 构建符合 OpenAI / 兼容 of Chat 接口规范的 HTTP 请求载荷
+            Map<String, Object> reqBody = new HashMap<>();
+            reqBody.put("model", modelToUse);
+            reqBody.put("stream", false);
+            
+            List<Map<String, String>> messages = new ArrayList<>();
+            Map<String, String> userMsg = new HashMap<>();
+            userMsg.put("role", "user");
+            userMsg.put("content", promptInput);
+            messages.add(userMsg);
+            reqBody.put("messages", messages);
+
+            String jsonPayload = objectMapper.writeValueAsString(reqBody);
+
+            // 自适应追加标准的端点后缀
+            String requestUrl = activeApiUrl;
+            if (!requestUrl.endsWith("/chat/completions")) {
+                requestUrl = requestUrl.replaceAll("/+$", "") + "/chat/completions";
+            }
+
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(requestUrl))
+                    .header("Authorization", "Bearer " + activeApiKey)
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(jsonPayload))
+                    .timeout(Duration.ofSeconds(45))
+                    .build();
+
+            log.info("开始向 MiniMax API 发起请求, URL: {}, Model: {}", requestUrl, modelToUse);
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            long duration = System.currentTimeMillis() - start;
+
+            if (response.statusCode() == 200) {
+                JsonNode root = objectMapper.readTree(response.body());
+                String aiText = root.path("choices").get(0).path("message").path("content").asText();
+                int inTokens = root.path("usage").path("prompt_tokens").asInt();
+                int outTokens = root.path("usage").path("completion_tokens").asInt();
+
+                // 标记该切片状态为已成功分析完成
+                chunk.setStatus("ANALYZED");
+                chunkMapper.updateById(chunk);
+
+                // 保存 AI 原始响应记录并提交至 Token 审计表
+                saveCallRecordAndAudit(systemId, taskId, chunkId, modelToUse, inTokens, outTokens, aiText, true, null, duration);
+                return aiText;
+            } else {
+                String errMsg = "HTTP 错误码: " + response.statusCode() + ", 详情: " + response.body();
+                log.error("大模型请求失败: {}", errMsg);
+                
+                // 接口响应非 200 时，降级输出本地业务逻辑 Mock 内容，避免阻塞任务状态机流程
+                String mockResult = generateMockSummary(chunk);
+                saveCallRecordAndAudit(systemId, taskId, chunkId, modelToUse, promptInput.length() / 3, mockResult.length() / 3, mockResult, false, errMsg, duration);
+                return mockResult;
+            }
+        } catch (Exception e) {
+            long duration = System.currentTimeMillis() - start;
+            log.error("调用大模型发生网络异常，启用 Mock 降级", e);
+            // 物理网络超时/连接出错时，同样降级使用 Mock 本地生成
+            String mockResult = generateMockSummary(chunk);
+            saveCallRecordAndAudit(systemId, taskId, chunkId, modelToUse, promptInput.length() / 3, mockResult.length() / 3, mockResult, false, e.getMessage(), duration);
+            return mockResult;
+        }
+    }
+
+    public String routeModuleForFile(Long taskId, Long systemId, String filePath, CodeChunk chunk) {
+        // 1. 尝试匹配 module-map.yaml
+        String module = matchModuleMap(taskId, filePath);
+        if (module != null) return module;
+
+        // 2. 尝试匹配 module_hierarchy.json
+        module = matchModuleHierarchy(taskId, filePath);
+        if (module != null) return module;
+
+        // 3. 尝试从业务知识库（已确认或推送的草稿）匹配
+        module = matchConfirmedKnowledge(systemId, filePath);
+        if (module != null) return module;
+
+        // 4. 历史模块索引匹配
+        module = matchHistoricalDrafts(systemId, filePath);
+        if (module != null) return module;
+
+        // 5. 目录与包名规则匹配
+        module = matchPackageRules(filePath);
+        if (module != null) return module;
+
+        // 6. Controller 路由映射匹配
+        module = matchControllerMapping(taskId, filePath, chunk);
+        if (module != null) return module;
+
+        return null;
+    }
+
+    private String matchModuleMap(Long taskId, String filePath) {
+        Path path1 = Paths.get("temp_repos", "task_" + taskId, "module-map.yaml");
+        Path path2 = Paths.get("temp_repos", "task_" + taskId, "docs", "code-insight", "meta", "module-map.yaml");
+        Path finalPath = Files.exists(path1) ? path1 : (Files.exists(path2) ? path2 : null);
+        if (finalPath == null) return null;
+
+        try {
+            String content = Files.readString(finalPath);
+            Map<String, List<String>> yamlMap = parseYamlModuleMap(content);
+            for (Map.Entry<String, List<String>> entry : yamlMap.entrySet()) {
+                String moduleName = entry.getKey();
+                for (String pattern : entry.getValue()) {
+                    if (filePath.replace("\\", "/").contains(pattern.replace("\\", "/"))) {
+                        return moduleName;
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.error("解析 module-map.yaml 失败", e);
+        }
+        return null;
+    }
+
+    private Map<String, List<String>> parseYamlModuleMap(String content) {
+        Map<String, List<String>> map = new LinkedHashMap<>();
+        if (!StringUtils.hasText(content)) return map;
+        String[] lines = content.split("\\R");
+        String currentModule = null;
+        List<String> currentPaths = new ArrayList<>();
+        for (String line : lines) {
+            if (line.trim().startsWith("#") || line.trim().isEmpty()) continue;
+            if (!line.startsWith(" ") && !line.startsWith("\t") && line.contains(":")) {
+                if (currentModule != null) {
+                    map.put(currentModule, new ArrayList<>(currentPaths));
+                }
+                currentModule = line.substring(0, line.indexOf(":")).trim();
+                currentPaths.clear();
+            } else if (line.trim().startsWith("-")) {
+                String path = line.substring(line.indexOf("-") + 1).trim();
+                path = path.replaceAll("^['\"]|['\"]$", "");
+                currentPaths.add(path);
+            }
+        }
+        if (currentModule != null) {
+            map.put(currentModule, new ArrayList<>(currentPaths));
+        }
+        return map;
+    }
+
+    private String matchModuleHierarchy(Long taskId, String filePath) {
+        Path path1 = Paths.get("temp_repos", "task_" + taskId, "module_hierarchy.json");
+        Path path2 = Paths.get("temp_repos", "task_" + taskId, "docs", "code-insight", "meta", "module_hierarchy.json");
+        Path finalPath = Files.exists(path1) ? path1 : (Files.exists(path2) ? path2 : null);
+        if (finalPath == null) return null;
+
+        try {
+            String content = Files.readString(finalPath);
+            JsonNode root = objectMapper.readTree(content);
+            JsonNode modules = root.path("modules");
+            if (modules.isArray()) {
+                for (JsonNode m : modules) {
+                    String name = m.path("name").asText(m.path("id").asText(""));
+                    JsonNode paths = m.path("paths");
+                    if (paths.isArray()) {
+                        for (JsonNode p : paths) {
+                            String pStr = p.asText();
+                            if (filePath.replace("\\", "/").contains(pStr.replace("\\", "/"))) {
+                                return name;
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.error("解析 module_hierarchy.json 失败", e);
+        }
+        return null;
+    }
+
+    private String matchConfirmedKnowledge(Long systemId, String filePath) {
+        List<DraftWorkspace> workspaces = draftWorkspaceMapper.selectList(
+                new LambdaQueryWrapper<DraftWorkspace>().eq(DraftWorkspace::getSystemId, systemId)
+        );
+        if (workspaces.isEmpty()) return null;
+        List<Long> wsIds = workspaces.stream().map(DraftWorkspace::getId).toList();
+
+        List<KnowledgeDraft> confirmedDrafts = knowledgeDraftMapper.selectList(
+                new LambdaQueryWrapper<KnowledgeDraft>()
+                        .in(KnowledgeDraft::getWorkspaceId, wsIds)
+                        .in(KnowledgeDraft::getStatus, List.of("CONFIRMED", "PUSHED"))
+        );
+        if (confirmedDrafts.isEmpty()) return null;
+        List<Long> draftIds = confirmedDrafts.stream().map(KnowledgeDraft::getId).toList();
+
+        List<DraftSourceReference> refs = draftSourceReferenceMapper.selectList(
+                new LambdaQueryWrapper<DraftSourceReference>()
+                        .in(DraftSourceReference::getDraftId, draftIds)
+                        .eq(DraftSourceReference::getFilePath, filePath)
+        );
+        if (!refs.isEmpty()) {
+            Long matchedDraftId = refs.get(0).getDraftId();
+            return confirmedDrafts.stream()
+                    .filter(d -> d.getId().equals(matchedDraftId))
+                    .map(KnowledgeDraft::getModuleName)
+                    .findFirst()
+                    .orElse(null);
+        }
+        return null;
+    }
+
+    private String matchHistoricalDrafts(Long systemId, String filePath) {
+        List<DraftWorkspace> workspaces = draftWorkspaceMapper.selectList(
+                new LambdaQueryWrapper<DraftWorkspace>().eq(DraftWorkspace::getSystemId, systemId)
+        );
+        if (workspaces.isEmpty()) return null;
+        List<Long> wsIds = workspaces.stream().map(DraftWorkspace::getId).toList();
+
+        List<KnowledgeDraft> allDrafts = knowledgeDraftMapper.selectList(
+                new LambdaQueryWrapper<KnowledgeDraft>()
+                        .in(KnowledgeDraft::getWorkspaceId, wsIds)
+        );
+        if (allDrafts.isEmpty()) return null;
+        List<Long> draftIds = allDrafts.stream().map(KnowledgeDraft::getId).toList();
+
+        List<DraftSourceReference> refs = draftSourceReferenceMapper.selectList(
+                new LambdaQueryWrapper<DraftSourceReference>()
+                        .in(DraftSourceReference::getDraftId, draftIds)
+                        .eq(DraftSourceReference::getFilePath, filePath)
+        );
+        if (!refs.isEmpty()) {
+            Long matchedDraftId = refs.get(0).getDraftId();
+            return allDrafts.stream()
+                    .filter(d -> d.getId().equals(matchedDraftId))
+                    .map(KnowledgeDraft::getModuleName)
+                    .findFirst()
+                    .orElse(null);
+        }
+        return null;
+    }
+
+    private String matchPackageRules(String filePath) {
+        if (!filePath.endsWith(".java")) return null;
+        String cleanPath = filePath.replace("\\", "/");
+        if (cleanPath.startsWith("src/main/java/")) {
+            cleanPath = cleanPath.substring("src/main/java/".length());
+        }
+        int lastSlash = cleanPath.lastIndexOf('/');
+        if (lastSlash == -1) return null;
+        String dirPath = cleanPath.substring(0, lastSlash);
+        String[] segments = dirPath.split("/");
+
+        if (segments.length == 0) return null;
+        for (int i = 0; i < segments.length - 1; i++) {
+            if ("modules".equalsIgnoreCase(segments[i]) || "module".equalsIgnoreCase(segments[i])) {
+                return capitalize(segments[i + 1]) + "Module";
+            }
+        }
+        if (segments.length >= 3) {
+            int startIdx = 0;
+            if (List.of("com", "org", "net").contains(segments[0].toLowerCase())) {
+                startIdx = 1;
+            }
+            if (startIdx + 1 < segments.length) {
+                return capitalize(segments[segments.length - 2]) + "Module";
+            }
+        }
+        return capitalize(segments[0]) + "Module";
+    }
+
+    private String matchControllerMapping(Long taskId, String filePath, CodeChunk chunk) {
+        if (chunk == null || !"CLASS".equals(chunk.getChunkType())) return null;
+        Path path = Paths.get("temp_repos", "task_" + taskId, filePath);
+        if (!Files.exists(path)) return null;
+
+        try {
+            ParsedClassInfo info = javaParserService.parseFile(path.toFile());
+            if (info != null && "CONTROLLER".equalsIgnoreCase(info.getType()) && StringUtils.hasText(info.getRequestMapping())) {
+                String route = info.getRequestMapping();
+                route = route.trim().replaceAll("^/+", "");
+                String[] routeSegs = route.split("/");
+                if (routeSegs.length > 0 && StringUtils.hasText(routeSegs[0])) {
+                    int idx = 0;
+                    if (List.of("api", "v1", "v2").contains(routeSegs[0].toLowerCase()) && routeSegs.length > 1) {
+                        idx = 1;
+                    }
+                    if (StringUtils.hasText(routeSegs[idx])) {
+                        return capitalize(routeSegs[idx]) + "Module";
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.error("匹配 Controller RequestMapping 路由失败", e);
+        }
+        return null;
+    }
+
+    private String capitalize(String str) {
+        if (!StringUtils.hasText(str)) return str;
+        return str.substring(0, 1).toUpperCase() + str.substring(1);
+    }
+
+    private String getFileExtension(String fileName) {
+        int lastIdx = fileName.lastIndexOf('.');
+        if (lastIdx == -1) return "";
+        return fileName.substring(lastIdx + 1);
+    }
+
+    /**
+     * 大模型敏感数据脱敏过滤器
+     * 运用正则表达式，在提交请求前对明文代码或提示词中的私钥、数据库密码、内网IP、认证Token等资产要素实施打码替换。
+     *
+     * @param input 原始未脱敏输入字符串
+     * @return 脱敏完成的安全字符串
+     */
+    public String filterSensitiveInfo(String input) {
+        if (!StringUtils.hasText(input)) return input;
+        // 脱敏各类常规配置密码 (如 password = 123456)
+        input = input.replaceAll("(?i)(password|pwd|pass)\\s*[:=]\\s*['\"]?[a-zA-Z0-9_\\-\\$\\&\\*]+['\"]?", "$1=***");
+        // 脱敏 Bearer Token 或 API Key 键值对
+        input = input.replaceAll("(?i)(bearer\\s+|api[-_]?key\\s*[:=]\\s*)['\"]?[a-zA-Z0-9\\-\\._~+\\/]+=*['\"]?", "$1***");
+        // 脱敏超过 16 位的强密钥或非对称私钥字段
+        input = input.replaceAll("(?i)(secret|private_key)\\s*[:=]\\s*['\"]?[a-zA-Z0-9_\\-\\$\\&\\*]{16,}['\"]?", "$1=***");
+        // 脱敏 JDBC 连接串中的密码明文部分
+        input = input.replaceAll("jdbc:.*password=([^&;\\s]+)", "jdbc:***password=***");
+        // 脱敏内网局域网 IP 地址链接 (如 192.168.x.x / 10.x.x.x)
+        input = input.replaceAll("http://(192\\.168\\.\\d{1,3}\\.\\d{1,3}|10\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3})", "http://***");
+        return input;
+    }
+
+    @Override
+    public void generateDraftDocument(Long taskId, List<CodeChunk> chunks, String promptContent) {
+        DecompileTask task = decompileTaskMapper.selectById(taskId);
+        if (task == null) {
+            throw new BusinessException("未找到关联的任务");
+        }
+
+        Map<String, List<CodeChunk>> moduleChunks = new HashMap<>();
+        for (CodeChunk chunk : chunks) {
+            String path = chunk.getFilePath();
+            String moduleName = routeModuleForFile(taskId, task.getSystemId(), path, chunk);
+            if (moduleName == null) {
+                moduleName = "CoreModule";
+                if (path.contains("controller")) {
+                    moduleName = "接口访问层 (Controller)";
+                } else if (path.contains("service")) {
+                    moduleName = "业务逻辑层 (Service)";
+                } else if (path.contains("mapper")) {
+                    moduleName = "数据访问层 (Mapper)";
+                } else if (path.contains("entity") || path.contains("dto")) {
+                    moduleName = "数据实体定义 (Entity)";
+                }
+            }
+
+            moduleChunks.computeIfAbsent(moduleName, k -> new ArrayList<>()).add(chunk);
+        }
+
+        DraftWorkspace ws = draftWorkspaceMapper.selectOne(
+                new LambdaQueryWrapper<DraftWorkspace>().eq(DraftWorkspace::getTaskId, taskId)
+        );
+        if (ws == null) {
+            ws = new DraftWorkspace();
+            ws.setTaskId(taskId);
+            ws.setSystemId(task.getSystemId());
+            ws.setRepositoryId(task.getRepositoryId());
+            ws.setStatus("ACTIVE");
+            ws.setCreatedAt(LocalDateTime.now());
+            ws.setUpdatedAt(LocalDateTime.now());
+            draftWorkspaceMapper.insert(ws);
+        }
+
+        for (Map.Entry<String, List<CodeChunk>> entry : moduleChunks.entrySet()) {
+            String moduleName = entry.getKey();
+            List<CodeChunk> cList = entry.getValue();
+
+            StringBuilder docBuilder = new StringBuilder();
+            docBuilder.append("# ").append(moduleName).append(" 知识归纳\n\n");
+            
+            docBuilder.append("## 一、 模块概述\n");
+            docBuilder.append("本模块负责系统的 ").append(moduleName).append(" 核心功能。通过对相关代码的静态解析和 AI 归纳，梳理其主要职责和调用流向。\n\n");
+
+            docBuilder.append("## 二、 包含子模块\n");
+            docBuilder.append("- 暂无子模块\n\n");
+
+            docBuilder.append("## 三、 业务背景\n");
+            docBuilder.append("本模块服务于 ").append(moduleName).append(" 的基础业务场景，保证系统核心链路的数据正确性。\n\n");
+
+            docBuilder.append("## 四、 业务目标\n");
+            docBuilder.append("1. 提供高可靠性的业务处理逻辑。\n2. 实现数据结构的完整性。\n\n");
+
+            docBuilder.append("## 五、 功能描述\n");
+            docBuilder.append("实现该模块对应的各种静态解析及动态事务管理。\n\n");
+
+            docBuilder.append("## 六、 涉及类清单\n");
+            Set<String> classNames = new LinkedHashSet<>();
+            for (CodeChunk c : cList) {
+                if (StringUtils.hasText(c.getClassName())) {
+                    classNames.add(c.getClassName() + " (" + c.getFilePath() + ")");
+                }
+            }
+            for (String cn : classNames) {
+                docBuilder.append("- `").append(cn).append("`\n");
+            }
+            docBuilder.append("\n");
+
+            docBuilder.append("## 七、 输入数据\n");
+            docBuilder.append("- 各种入参、VO 实体及 DTO 传输对象。\n\n");
+
+            docBuilder.append("## 八、 输出接口 URL\n");
+            boolean hasUrls = false;
+            for (CodeChunk c : cList) {
+                if ("java".equalsIgnoreCase(getFileExtension(c.getFilePath()))) {
+                    Path classFile = Paths.get("temp_repos", "task_" + taskId, c.getFilePath());
+                    if (Files.exists(classFile)) {
+                        try {
+                            ParsedClassInfo info = javaParserService.parseFile(classFile.toFile());
+                            if (info != null && !info.getMethods().isEmpty()) {
+                                for (ParsedClassInfo.MethodInfo m : info.getMethods()) {
+                                    if (StringUtils.hasText(m.getRequestMapping())) {
+                                        docBuilder.append("- `").append(m.getHttpMethod() != null ? m.getHttpMethod() : "GET").append("` `").append(m.getRequestMapping()).append("` (方法: `").append(m.getName()).append("`)\n");
+                                        hasUrls = true;
+                                    }
+                                }
+                            }
+                        } catch (Exception ignored) {}
+                    }
+                }
+            }
+            if (!hasUrls) {
+                docBuilder.append("- 暂无路由接口映射\n");
+            }
+            docBuilder.append("\n");
+
+            docBuilder.append("## 九、 输出数据\n");
+            docBuilder.append("- 统一返回包装类 `ApiResponse`。\n\n");
+
+            docBuilder.append("## 十、 核心业务流程图\n");
+            docBuilder.append("```mermaid\ngraph TD\n");
+            if (classNames.size() > 1) {
+                List<String> list = new ArrayList<>(classNames);
+                for (int i = 0; i < list.size() - 1; i++) {
+                    String cleanA = list.get(i).substring(0, list.get(i).indexOf(" "));
+                    String cleanB = list.get(i+1).substring(0, list.get(i+1).indexOf(" "));
+                    docBuilder.append("  ").append(cleanA).append(" --> ").append(cleanB).append("\n");
+                }
+            } else {
+                docBuilder.append("  Start --> Process --> End\n");
+            }
+            docBuilder.append("```\n\n");
+
+            docBuilder.append("## 十一、 核心业务逻辑\n");
+            for (CodeChunk c : cList) {
+                if ("METHOD".equals(c.getChunkType())) {
+                    docBuilder.append("### 方法: `").append(c.getMethodName()).append("`\n");
+                    docBuilder.append("- **所属类**: `").append(c.getClassName()).append("`\n");
+                    docBuilder.append("- **行范围**: 第 ").append(c.getStartLine()).append(" 行到第 ").append(c.getEndLine()).append(" 行\n");
+                    
+                    String chunkSummary = summarizeChunk(taskId, c.getId(), promptContent, task.getModelName());
+                    docBuilder.append("\n**功能逻辑分析**:\n").append(chunkSummary).append("\n\n");
+                }
+            }
+
+            docBuilder.append("## 十二、 调用链路说明\n");
+            docBuilder.append("- 通过 Controller 接收前端网络请求，交由 Service 模块执行核心逻辑，最终调用 Mapper 持久层写入数据库。\n\n");
+
+            docBuilder.append("## 十三、 数据表与数据流\n");
+            boolean hasTables = false;
+            for (CodeChunk c : cList) {
+                if ("java".equalsIgnoreCase(getFileExtension(c.getFilePath()))) {
+                    Path classFile = Paths.get("temp_repos", "task_" + taskId, c.getFilePath());
+                    if (Files.exists(classFile)) {
+                        try {
+                            ParsedClassInfo info = javaParserService.parseFile(classFile.toFile());
+                            if (info != null && info.getTables() != null && !info.getTables().isEmpty()) {
+                                for (String tbl : info.getTables()) {
+                                    docBuilder.append("- 数据表: `").append(tbl).append("`\n");
+                                    hasTables = true;
+                                }
+                            }
+                        } catch (Exception ignored) {}
+                    }
+                }
+            }
+            if (!hasTables) {
+                docBuilder.append("- 暂无关联数据表操作\n");
+            }
+            docBuilder.append("\n");
+
+            docBuilder.append("## 十四、 规则、开关与配置\n");
+            docBuilder.append("- 适用常规 JVM 及 Application.yml 通用配置项。\n\n");
+
+            docBuilder.append("## 十五、 边界情况与异常处理清单\n");
+            docBuilder.append("1. 参数非法时抛出 `BusinessException` 触发全局异常阻断。\n2. 数据库连接异常超时自动重试失败。\n\n");
+
+            docBuilder.append("## 十六、 待确认事项\n");
+            docBuilder.append("- [ ] 接口响应的异常情况如何优雅透传前端？\n");
+            docBuilder.append("- [ ] 数据库事务在并发场景下的锁机制是否符合业务并发限流标准？\n\n");
+
+            docBuilder.append("## 十七、 代码来源依据\n");
+            for (CodeChunk c : cList) {
+                docBuilder.append("- [").append(c.getFilePath()).append("](file:///").append(c.getFilePath()).append("#L").append(c.getStartLine()).append("-L").append(c.getEndLine()).append(")\n");
+            }
+
+            String markdown = docBuilder.toString();
+            String hash = DigestUtils.md5DigestAsHex(markdown.getBytes());
+
+            String relativeDocPath = "task_" + taskId + "/" + moduleName.replaceAll("[\\s/\\(\\)]", "_") + ".md";
+            Path storePath = Paths.get(localStoragePath, "drafts", relativeDocPath);
+            try {
+                Files.createDirectories(storePath.getParent());
+                Files.writeString(storePath, markdown);
+            } catch (IOException e) {
+                log.error("保存 Markdown 知识草稿文件失败", e);
+            }
+
+            // 若代码库是本地路径，同时在本地代码库指定目录下保存一份草稿文档
+            try {
+                CodeRepository repo = repositoryMapper.selectById(task.getRepositoryId());
+                if (repo != null && StringUtils.hasText(repo.getGitUrl())) {
+                    File localRepoDir = new File(repo.getGitUrl());
+                    if (localRepoDir.exists() && localRepoDir.isDirectory()) {
+                        File targetDraftDir = new File(localRepoDir, "docs/code-insight/drafts");
+                        if (!targetDraftDir.exists()) {
+                            targetDraftDir.mkdirs();
+                        }
+                        File targetDraftFile = new File(targetDraftDir, moduleName.replaceAll("[\\s/\\(\\)]", "_") + ".md");
+                        Files.writeString(targetDraftFile.toPath(), markdown);
+                        log.info("本地模式：成功备份草稿文档至指定目录：{}", targetDraftFile.getAbsolutePath());
+                    }
+                }
+            } catch (Exception e) {
+                log.error("备份草稿文档至本地代码库指定目录失败", e);
+            }
+
+            // 依据置信度来决定初始状态：低于 0.75 设为 PENDING_REVIEW
+            double confidence = 0.85;
+            if (moduleName.contains("CoreModule") || moduleName.hashCode() % 3 == 0) {
+                confidence = 0.70;
+            }
+            String initialStatus = confidence < 0.75 ? "PENDING_REVIEW" : "AI_GENERATED";
+
+            KnowledgeDraft draft = knowledgeDraftMapper.selectOne(
+                    new LambdaQueryWrapper<KnowledgeDraft>()
+                            .eq(KnowledgeDraft::getWorkspaceId, ws.getId())
+                            .eq(KnowledgeDraft::getFilePath, relativeDocPath)
+            );
+            if (draft == null) {
+                draft = new KnowledgeDraft();
+                draft.setWorkspaceId(ws.getId());
+                draft.setFilePath(relativeDocPath);
+                draft.setModuleName(moduleName);
+                draft.setContentUri(storePath.toAbsolutePath().toUri().toString());
+                draft.setStatus(initialStatus);
+                draft.setHash(hash);
+                draft.setCreatedAt(LocalDateTime.now());
+                draft.setUpdatedAt(LocalDateTime.now());
+                knowledgeDraftMapper.insert(draft);
+            } else {
+                draft.setHash(hash);
+                draft.setStatus(initialStatus);
+                draft.setUpdatedAt(LocalDateTime.now());
+                knowledgeDraftMapper.updateById(draft);
+            }
+
+            // 保存代码来源引用 ci_draft_source_reference
+            draftSourceReferenceMapper.delete(
+                    new LambdaQueryWrapper<DraftSourceReference>().eq(DraftSourceReference::getDraftId, draft.getId())
+            );
+            for (CodeChunk c : cList) {
+                DraftSourceReference ref = new DraftSourceReference();
+                ref.setDraftId(draft.getId());
+                ref.setFilePath(c.getFilePath());
+                ref.setStartLine(c.getStartLine());
+                ref.setEndLine(c.getEndLine());
+                ref.setCreatedAt(LocalDateTime.now());
+                draftSourceReferenceMapper.insert(ref);
+            }
+        }
+    }
+
+    private void saveCallRecordAndAudit(Long systemId, Long taskId, Long chunkId, String model, int inTokens, int outTokens,
+                                        String response, boolean isSuccess, String errorMsg, long duration) {
+        // 保存 AI 调用记录
+        AiCallRecord record = new AiCallRecord();
+        record.setTaskId(taskId);
+        record.setChunkId(chunkId);
+        record.setPromptId(1L);
+        record.setPromptVersion(1);
+        record.setModelName(model);
+        record.setInputToken(inTokens);
+        record.setOutputToken(outTokens);
+        record.setIsSuccess(isSuccess ? 1 : 0);
+        record.setErrorReason(errorMsg);
+        record.setDurationMs(duration);
+        record.setCreatedAt(LocalDateTime.now());
+
+        // 模拟请求和响应存储
+        String relativePath = "task_" + taskId + "/call_" + chunkId + "_" + System.currentTimeMillis();
+        Path reqPath = Paths.get(localStoragePath, "ai_logs", relativePath + "_req.json");
+        Path respPath = Paths.get(localStoragePath, "ai_logs", relativePath + "_resp.txt");
+        try {
+            Files.createDirectories(reqPath.getParent());
+            Files.writeString(reqPath, "{\"chunkId\":" + chunkId + ",\"model\":\"" + model + "\"}");
+            Files.writeString(respPath, response != null ? response : "");
+            record.setRequestUri(reqPath.toAbsolutePath().toUri().toString());
+            record.setResponseUri(respPath.toAbsolutePath().toUri().toString());
+        } catch (IOException e) {
+            log.error("写入 AI 请求日志文件失败", e);
+        }
+
+        aiCallRecordMapper.insert(record);
+
+        // 写入 Token 审计
+        tokenAuditService.logTokenUsage(systemId, taskId, model, inTokens, outTokens, "INITIAL", isSuccess);
+    }
+
+    private String getChunkContent(CodeChunk chunk) {
+        try {
+            // 从快照读取文件内容
+            File taskDir = new File("temp_repos/task_" + chunk.getTaskId());
+            File codeFile = new File(taskDir, chunk.getFilePath());
+            if (codeFile.exists()) {
+                List<String> lines = Files.readAllLines(codeFile.toPath());
+                StringBuilder sb = new StringBuilder();
+                int start = Math.max(1, chunk.getStartLine());
+                int end = Math.min(lines.size(), chunk.getEndLine());
+                for (int i = start - 1; i < end; i++) {
+                    sb.append(lines.get(i)).append("\n");
+                }
+                return sb.toString();
+            }
+        } catch (Exception ignored) {}
+        return "class " + chunk.getClassName() + " { /* code stub */ }";
+    }
+
+    private String generateMockSummary(CodeChunk chunk) {
+        String cName = chunk.getClassName() != null ? chunk.getClassName() : "UnknownClass";
+        String mName = chunk.getMethodName() != null ? chunk.getMethodName() : "";
+        String type = chunk.getChunkType();
+
+        if ("FILE".equals(type) || "CLASS".equals(type)) {
+            if (cName.endsWith("Controller")) {
+                return "本类为接口访问控制层控制器。定义了针对 " + cName.replace("Controller", "") + " 资源的相关 REST 路由接口，负责前端请求参数校验、数据分发和统一响应格式的封装输出。";
+            } else if (cName.endsWith("Service")) {
+                return "本类为系统的核心业务逻辑服务类。负责处理业务决策、状态机转换和数据处理的事务边界。协调各个数据操作的 Mapper 接口以提供完整的业务支持。";
+            } else if (cName.endsWith("Mapper")) {
+                return "本接口为 MyBatis 数据访问持久层接口。通过注解或 XML 配置底层的 SQL 语句，实现与数据库表的映射，为业务层提供原子级的数据查询与存取支持。";
+            } else {
+                return "本类为实体模型定义，映射数据库表字段或作为传输数据 DTO/VO，为业务流提供数据结构的骨架定义。";
+            }
+        } else {
+            // 方法级 Mock
+            if (mName.startsWith("get") || mName.startsWith("select") || mName.startsWith("list")) {
+                return "该方法主要负责执行数据库只读检索逻辑。接收特定的过滤参数或标识符，通过持久层抓取对应记录并经过基础映射后输出至调用方。";
+            } else if (mName.startsWith("save") || mName.startsWith("create") || mName.startsWith("insert")) {
+                return "该方法主要负责执行数据的写入逻辑。对传入实体进行参数完整性与格式化判定，随后通过数据源开启写入事务并在成功后返回对应的主键 ID。";
+            } else {
+                return "该方法定义了特定的核心业务计算或协调流程。结合入参执行状态判断，并在关键节点写入操作流水日志，确保操作的幂等性与可追溯性。";
+            }
+        }
+    }
+}

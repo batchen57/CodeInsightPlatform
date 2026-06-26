@@ -1,0 +1,373 @@
+import React, { useCallback, useEffect, useState } from 'react';
+import { Badge, Card, Empty, List, Progress, Space, Tag, Typography } from 'antd';
+import {
+  CloudUploadOutlined,
+  DollarOutlined,
+  FileDoneOutlined,
+  PlayCircleOutlined,
+  ProjectOutlined,
+  RightOutlined,
+  ThunderboltOutlined,
+} from '@ant-design/icons';
+import { Link } from 'react-router-dom';
+import ReactECharts from 'echarts-for-react';
+import { listSystems } from '../../api/system';
+import { listTasks } from '../../api/task';
+import { getTokenStats } from '../../api/token';
+import type { TokenStats } from '../../api/token';
+import { listVersions } from '../../api/knowledge';
+import type { KnowledgeVersion } from '../../api/knowledge';
+import type { PageResult, System, Task } from '../../types';
+
+const { Text } = Typography;
+
+// 运行中状态定义：这些状态下的任务被视为活跃中的分析任务
+const runningStatuses = ['PENDING', 'PULLING_CODE', 'PARSING_CODE', 'SPLITTING_TASK', 'AI_ANALYZING', 'GENERATING_DOC'];
+
+// 分页查询空值兜底模板
+const emptyPage = <T,>(): PageResult<T> => ({
+  total: 0,
+  size: 0,
+  current: 1,
+  records: [],
+});
+
+// 审计统计指标空值兜底模板
+const emptyTokenStats: TokenStats = {
+  totalInputTokens: 0,
+  totalOutputTokens: 0,
+  totalTokens: 0,
+  totalCost: 0,
+  systemRanking: [],
+  modelRatio: [],
+  dailyTrends: [],
+};
+
+// 任务各阶段状态渲染元数据
+const statusMeta: Record<string, { color: string; label: string }> = {
+  DRAFT: { color: 'default', label: '草稿' },
+  PENDING: { color: 'blue', label: '排队中' },
+  PULLING_CODE: { color: 'blue', label: '拉取代码' },
+  PARSING_CODE: { color: 'cyan', label: '解析代码' },
+  SPLITTING_TASK: { color: 'purple', label: '任务切片' },
+  AI_ANALYZING: { color: 'gold', label: 'AI 分析中' },
+  GENERATING_DOC: { color: 'orange', label: '生成文档' },
+  PENDING_REVIEW: { color: 'magenta', label: '待复核' },
+  REVIEWING: { color: 'geekblue', label: '复核中' },
+  CONFIRMED: { color: 'green', label: '已确认' },
+  PUSHING: { color: 'purple', label: '推送中' },
+  PUSHED: { color: 'green', label: '已推送' },
+  FAILED: { color: 'red', label: '失败' },
+  CANCELLED: { color: 'default', label: '已取消' },
+};
+
+// 知识库推送版本状态说明映射
+const versionStatusLabel: Record<string, string> = {
+  DRAFT: '待推送',
+  PUSHING: '推送中',
+  PUSHED: '已推送',
+  FAILED: '失败',
+};
+
+const Dashboard: React.FC = () => {
+  // 看板核心 KPI 数据状态
+  const [stats, setStats] = useState({
+    systems: 0,
+    activeTasks: 0,
+    pendingReviews: 0,
+    todayTokens: 0,
+    cost: 0,
+  });
+  const [recentTasks, setRecentTasks] = useState<Task[]>([]);
+  const [recentPushes, setRecentPushes] = useState<KnowledgeVersion[]>([]);
+  const [chartData, setChartData] = useState<TokenStats | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  /**
+   * 异步加载工作台所需的所有业务数据
+   * 采用 Promise.allSettled 策略进行并发抓取，即使部分 API 发生网络异常，也能确保其他板块数据正常渲染。
+   */
+  const fetchDashboardData = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [systemResult, taskResult, pushResult, tokenResult] = await Promise.allSettled([
+        listSystems({ current: 1, size: 100 }),
+        listTasks({ current: 1, size: 6 }),
+        listVersions({ current: 1, size: 5 }),
+        getTokenStats(),
+      ]);
+      const systemPage = systemResult.status === 'fulfilled' ? systemResult.value : emptyPage<System>();
+      const taskPage = taskResult.status === 'fulfilled' ? taskResult.value : emptyPage<Task>();
+      const pushPage = pushResult.status === 'fulfilled' ? pushResult.value : emptyPage<KnowledgeVersion>();
+      const tokenStats = tokenResult.status === 'fulfilled' ? tokenResult.value : emptyTokenStats;
+
+      // 聚合及提炼卡片数值指标
+      setStats({
+        systems: systemPage.total,
+        activeTasks: taskPage.records.filter((task) => runningStatuses.includes(task.status)).length,
+        pendingReviews: taskPage.records.filter((task) => task.status === 'PENDING_REVIEW').length,
+        todayTokens: tokenStats.totalTokens,
+        cost: tokenStats.totalCost,
+      });
+      setRecentTasks(taskPage.records);
+      setRecentPushes(pushPage.records);
+      setChartData(tokenStats);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchDashboardData();
+  }, [fetchDashboardData]);
+
+  // ECharts 配置：Token 每日消耗趋势折线图
+  const lineOption = {
+    color: ['#2563eb'],
+    tooltip: { trigger: 'axis' },
+    grid: { top: 28, right: 22, bottom: 30, left: 48 },
+    xAxis: {
+      type: 'category',
+      boundaryGap: false,
+      data: chartData?.dailyTrends?.map((item) => item.date) ?? [],
+      axisLine: { lineStyle: { color: '#dbe4ef' } },
+      axisLabel: { color: '#667085' },
+    },
+    yAxis: {
+      type: 'value',
+      axisLabel: { color: '#667085' },
+      splitLine: { lineStyle: { color: '#edf2f7' } },
+    },
+    series: [
+      {
+        name: 'Token',
+        type: 'line',
+        data: chartData?.dailyTrends?.map((item) => item.tokens) ?? [],
+        smooth: true,
+        symbolSize: 7,
+        lineStyle: { width: 3 },
+        areaStyle: { color: 'rgba(37, 99, 235, 0.10)' },
+      },
+    ],
+  };
+
+  // ECharts 配置：各型号大模型 Token 占比环形图
+  const donutOption = {
+    color: ['#2563eb', '#0891b2', '#16a34a', '#d97706', '#dc2626'],
+    tooltip: { trigger: 'item' },
+    legend: { bottom: 0, icon: 'circle', textStyle: { color: '#667085' } },
+    series: [
+      {
+        name: '模型 Token',
+        type: 'pie',
+        radius: ['54%', '72%'],
+        center: ['50%', '43%'],
+        itemStyle: { borderColor: '#fff', borderWidth: 3 },
+        label: { show: false },
+        data: chartData?.modelRatio ?? [],
+      },
+    ],
+  };
+
+  const kpis = [
+    {
+      label: '已接入系统',
+      value: stats.systems,
+      meta: '已配置的业务系统',
+      icon: <ProjectOutlined />,
+      accent: '#2563eb',
+    },
+    {
+      label: '运行中任务',
+      value: stats.activeTasks,
+      meta: '正在拉取、解析或生成',
+      icon: <PlayCircleOutlined />,
+      accent: '#0891b2',
+    },
+    {
+      label: '复核队列',
+      value: stats.pendingReviews,
+      meta: '等待负责人复核的草稿',
+      icon: <FileDoneOutlined />,
+      accent: '#d97706',
+    },
+    {
+      label: 'Token 用量',
+      value: stats.todayTokens.toLocaleString(),
+      meta: `预计 $${Number(stats.cost || 0).toFixed(4)}`,
+      icon: <DollarOutlined />,
+      accent: '#16a34a',
+    },
+  ];
+
+  return (
+    <div className="ci-page ci-dashboard-page">
+      <section className="ci-hero-panel">
+        <div className="ci-hero-content">
+          <Space size={8} wrap>
+            <Tag style={{ background: 'rgba(37, 99, 235, 0.15)', border: '1px solid rgba(37, 99, 235, 0.3)', color: '#60a5fa' }}>MVP 流程</Tag>
+            <Tag style={{ background: 'rgba(22, 163, 74, 0.15)', border: '1px solid rgba(22, 163, 74, 0.3)', color: '#4ade80' }}>人工复核</Tag>
+            <Tag style={{ background: 'rgba(8, 145, 178, 0.15)', border: '1px solid rgba(8, 145, 178, 0.3)', color: '#22d3ee' }}>Token 审计</Tag>
+          </Space>
+          <h2>把代码库转化为可复核、可追溯的代码知识资产</h2>
+          <p>
+            代码洞察工作台覆盖系统接入、代码库扫描、AI 自动归类、Markdown 草稿复核、版本发布、推送 Git 仓库、Token 计量和操作审计等全流程。
+          </p>
+        </div>
+        <div className="ci-hero-actions-panel">
+          <div className="ci-hero-actions-title">
+            <ThunderboltOutlined style={{ color: '#38bdf8' }} /> 快捷操作
+          </div>
+          <Link to="/tasks" className="ci-hero-action-btn">
+            <span>新建反编译分析任务</span>
+            <RightOutlined />
+          </Link>
+          <Link to="/systems" className="ci-hero-action-btn">
+            <span>接入新系统与代码库</span>
+            <RightOutlined />
+          </Link>
+          <Link to="/drafts" className="ci-hero-action-btn">
+            <span>进入草稿区进行复核</span>
+            <RightOutlined />
+          </Link>
+        </div>
+      </section>
+
+      <div className="ci-kpi-grid">
+        {kpis.map((item) => (
+          <div className="ci-kpi-card" style={{ '--accent': item.accent } as React.CSSProperties} key={item.label}>
+            <div className="ci-kpi-card-header">
+              <span className="ci-kpi-label">{item.label}</span>
+              <span className="ci-kpi-icon-wrapper">{item.icon}</span>
+            </div>
+            <div className="ci-kpi-card-body">
+              <div className="ci-kpi-value">{item.value}</div>
+              <div className="ci-kpi-meta">{item.meta}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="ci-dashboard-layout">
+        {/* 左侧：Token 趋势 与 最近任务 */}
+        <div className="ci-dashboard-main">
+          <Card 
+            title={<span className="ci-card-title-gradient">Token 使用趋势</span>} 
+            extra={<Link to="/audit" className="ci-card-extra-link">审计详情 <RightOutlined style={{ fontSize: 10 }} /></Link>}
+            className="ci-dashboard-card"
+          >
+            {chartData ? <ReactECharts option={lineOption} style={{ height: 300 }} /> : <Empty />}
+          </Card>
+
+          <Card
+            title={<Space><ThunderboltOutlined className="ci-icon-primary" />最近反编译任务</Space>}
+            extra={<Link to="/tasks" className="ci-card-extra-link">查看全部 <RightOutlined style={{ fontSize: 10 }} /></Link>}
+            className="ci-dashboard-card"
+          >
+            <List
+              loading={loading}
+              dataSource={recentTasks}
+              locale={{ emptyText: <Empty description="暂无任务" /> }}
+              renderItem={(task) => {
+                const meta = statusMeta[task.status] ?? { color: 'default', label: task.status };
+                return (
+                  <List.Item
+                    className="ci-task-list-item"
+                    actions={[
+                      <Link to={`/tasks/${task.id}`} key="detail" className="ci-card-extra-link">
+                        详情 <RightOutlined style={{ fontSize: 10 }} />
+                      </Link>
+                    ]}
+                  >
+                    <div style={{ width: '100%' }}>
+                      <div className="ci-task-title-row">
+                        <Space wrap>
+                          <Text strong style={{ fontSize: 15 }}>任务 #{task.id}</Text>
+                          <Tag color={meta.color}>{meta.label}</Tag>
+                          <Tag color={task.type === 'INITIAL' ? 'blue' : 'cyan'}>
+                            {task.type === 'INITIAL' ? '全量' : '增量'}
+                          </Tag>
+                        </Space>
+                        <Text type="secondary" style={{ fontSize: 12 }}>
+                          耗时 {(task.durationMs / 1000 || 0).toFixed(1)} 秒
+                        </Text>
+                      </div>
+                      <div className="ci-task-meta-row">
+                        <div className="ci-task-progress-wrapper">
+                          <Progress
+                            percent={task.progress}
+                            size="small"
+                            status={task.status === 'FAILED' ? 'exception' : task.status === 'CONFIRMED' || task.status === 'PUSHED' ? 'success' : 'active'}
+                            strokeColor={task.status === 'FAILED' ? undefined : {
+                              '0%': '#2563eb',
+                              '100%': '#0891b2',
+                            }}
+                          />
+                        </div>
+                        <Text type="secondary" style={{ fontSize: 12 }}>
+                          进度: {task.progress}%
+                        </Text>
+                      </div>
+                    </div>
+                  </List.Item>
+                );
+              }}
+            />
+          </Card>
+        </div>
+
+        {/* 右侧：模型占比 与 最近推送 */}
+        <div className="ci-dashboard-side">
+          <Card 
+            title={<span className="ci-card-title-gradient">模型使用占比</span>}
+            className="ci-dashboard-card"
+          >
+            {chartData ? <ReactECharts option={donutOption} style={{ height: 300 }} /> : <Empty />}
+          </Card>
+
+          <Card
+            title={<Space><CloudUploadOutlined className="ci-icon-success" />最近知识推送</Space>}
+            extra={<Link to="/push" className="ci-card-extra-link">推送中心 <RightOutlined style={{ fontSize: 10 }} /></Link>}
+            className="ci-dashboard-card"
+          >
+            <List
+              loading={loading}
+              dataSource={recentPushes}
+              locale={{ emptyText: <Empty description="暂无推送记录" /> }}
+              renderItem={(version) => {
+                const statusColor = version.status === 'PUSHED' ? 'success' : version.status === 'FAILED' ? 'error' : 'processing';
+                const statusLabel = versionStatusLabel[version.status] ?? version.status;
+                return (
+                  <List.Item className="ci-push-list-item">
+                    <div style={{ width: '100%' }}>
+                      <div className="ci-push-title-row">
+                        <Space>
+                          <Text strong style={{ fontSize: 15, fontFamily: 'JetBrains Mono' }}>{version.versionNum}</Text>
+                          <Badge status={statusColor} text={statusLabel} />
+                        </Space>
+                        <Tag color="purple">{version.targetBranch}</Tag>
+                      </div>
+                      <div className="ci-push-detail-row">
+                        <Space size={16}>
+                          <Text type="secondary">
+                            Commit: <span style={{ fontFamily: 'JetBrains Mono' }}>{version.sourceCommit?.slice(0, 8) || '-'}</span>
+                          </Text>
+                          <Text type="secondary">负责人: {version.confirmedBy || '未分配'}</Text>
+                        </Space>
+                        <Text type="secondary" style={{ fontSize: 12 }}>
+                          {version.confirmedAt ? new Date(version.confirmedAt).toLocaleDateString() : version.createdAt ? new Date(version.createdAt).toLocaleDateString() : ''}
+                        </Text>
+                      </div>
+                    </div>
+                  </List.Item>
+                );
+              }}
+            />
+          </Card>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default Dashboard;

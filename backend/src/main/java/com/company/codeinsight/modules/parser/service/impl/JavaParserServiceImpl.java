@@ -1,0 +1,589 @@
+package com.company.codeinsight.modules.parser.service.impl;
+
+import com.company.codeinsight.modules.parser.model.ParsedClassInfo;
+import com.company.codeinsight.modules.parser.model.ParsedClassInfo.MethodCallInfo;
+import com.company.codeinsight.modules.parser.model.ParsedClassInfo.MethodInfo;
+import com.company.codeinsight.modules.parser.model.ParsedClassInfo.SqlReference;
+import com.company.codeinsight.modules.parser.service.JavaParserService;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
+
+import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+/**
+ * Java 静态解析服务实现类
+ * 使用轻量级正则表达式，对 Java 源文件进行词法与简单的语法扫描。
+ * 解析内容包括：包名、注解、类属性与依赖组件、HTTP 路由映射、方法签名、内部方法调用链及嵌入的 SQL 语句和数据表/字段依赖。
+ */
+@Slf4j
+@Service
+public class JavaParserServiceImpl implements JavaParserService {
+
+    // 正则表达式：解析包名定义
+    private static final Pattern PACKAGE_PATTERN = Pattern.compile("^\\s*package\\s+([\\w.]+);");
+    // 正则表达式：解析类/接口/枚举/注解的声明头结构
+    private static final Pattern CLASS_PATTERN = Pattern.compile("(?:public\\s+)?(?:abstract\\s+|final\\s+)?(@interface|class|interface|enum)\\s+(\\w+)");
+    // 正则表达式：提取代码中声明的注解
+    private static final Pattern ANNOTATION_PATTERN = Pattern.compile("@([A-Za-z][\\w.]*)");
+    // 正则表达式：匹配常见的 Spring REST 控制器 Mapping 注解路由及参数
+    private static final Pattern REQ_MAPPING_PATTERN = Pattern.compile("@RequestMapping\\s*\\(([^)]*)\\)");
+    private static final Pattern GET_MAPPING_PATTERN = Pattern.compile("@GetMapping\\s*\\(([^)]*)\\)");
+    private static final Pattern POST_MAPPING_PATTERN = Pattern.compile("@PostMapping\\s*\\(([^)]*)\\)");
+    private static final Pattern PUT_MAPPING_PATTERN = Pattern.compile("@PutMapping\\s*\\(([^)]*)\\)");
+    private static final Pattern DELETE_MAPPING_PATTERN = Pattern.compile("@DeleteMapping\\s*\\(([^)]*)\\)");
+    // 正则表达式：识别 MyBatis Plus 或 JPA 的 @Table 数据库表注解定义
+    private static final Pattern TABLE_PATTERN = Pattern.compile("@Table\\s*\\([^)]*?(?:name\\s*=\\s*)?\"([^\"]+)\"");
+    // 正则表达式：解析标准 Java 方法的修饰符、返回值类型、方法名和参数列表
+    private static final Pattern METHOD_PATTERN = Pattern.compile("(?:public|protected|private|static|final|synchronized|\\s)+\\s+([\\w<>\\[\\],.?\\s]+)\\s+(\\w+)\\s*\\(([^)]*)\\)");
+    // 正则表达式：匹配类内部的依赖字段注入（例如 private UserService userService;）
+    private static final Pattern FIELD_DEPENDENCY_PATTERN = Pattern.compile("(?:private|protected|public)\\s+(?:final\\s+)?([A-Z][\\w]*(?:<[^>]+>)?)\\s+(\\w+)\\s*(?:=|;)");
+    // 正则表达式：简单捕获方法体内部的成员对象方法调用（例如 service.doSomething(...)）
+    private static final Pattern METHOD_CALL_PATTERN = Pattern.compile("\\b(\\w+)\\.(\\w+)\\s*\\(");
+    // 正则表达式：SQL 语句中各种数据表关联词的提取 (FROM, JOIN, INTO, UPDATE)
+    private static final Pattern SQL_FROM_PATTERN = Pattern.compile("(?i)\\bFROM\\s+([`\"']?[\\w.]+[`\"']?)");
+    private static final Pattern SQL_JOIN_PATTERN = Pattern.compile("(?i)\\bJOIN\\s+([`\"']?[\\w.]+[`\"']?)");
+    private static final Pattern SQL_INTO_PATTERN = Pattern.compile("(?i)\\bINTO\\s+([`\"']?[\\w.]+[`\"']?)");
+    private static final Pattern SQL_UPDATE_PATTERN = Pattern.compile("(?i)\\bUPDATE\\s+([`\"']?[\\w.]+[`\"']?)");
+
+    /**
+     * 单个 Java 文件的静态解析核心逻辑
+     *
+     * @param file Java 源文件对象
+     * @return 解析后的结构化元数据 ParsedClassInfo
+     */
+    @Override
+    public ParsedClassInfo parseFile(File file) {
+        if (file == null || !file.exists() || !file.getName().endsWith(".java")) {
+            return null;
+        }
+
+        ParsedClassInfo classInfo = new ParsedClassInfo();
+        classInfo.setType("UNKNOWN");
+        // 缓存类内部依赖的变量名与对应的类类型映射 (用于判断方法调用来源)
+        Map<String, String> dependencyVariables = new LinkedHashMap<>();
+
+        try {
+            List<String> lines = Files.readAllLines(file.toPath());
+            String pendingMappingUrl = null;
+            String pendingMappingMethod = null;
+            String currentMethod = null;
+            int methodBraceDepth = 0;
+            boolean methodBraceStarted = false;
+
+            // 逐行进行词法解析
+            for (int i = 0; i < lines.size(); i++) {
+                String rawLine = lines.get(i);
+                String line = rawLine.trim();
+                // 忽略空行和常见的单行、多行注释行
+                if (line.isEmpty() || line.startsWith("//") || line.startsWith("/*") || line.startsWith("*")) {
+                    continue;
+                }
+
+                // 1. 匹配包名
+                Matcher pkgMatcher = PACKAGE_PATTERN.matcher(line);
+                if (pkgMatcher.find()) {
+                    classInfo.setPackageName(pkgMatcher.group(1));
+                    continue;
+                }
+
+                // 2. 收集类上和方法上的注解，并分析其可能的组件类别 (Controller/Service 等)
+                collectAnnotations(line, classInfo);
+                detectTypeFromAnnotations(line, classInfo);
+
+                // 3. 解析对应的数据库表注解
+                Matcher tableMatcher = TABLE_PATTERN.matcher(line);
+                if (tableMatcher.find()) {
+                    addUnique(cleanIdentifier(tableMatcher.group(1)), classInfo.getTables());
+                }
+
+                // 4. 解析控制器路由 Mapping。若在方法外部（类头上），直接设为 RequestMapping 基准路由
+                if (line.startsWith("@RequestMapping")) {
+                    String value = getMappingUrl(line, REQ_MAPPING_PATTERN);
+                    if (currentMethod == null && classInfo.getClassName() == null) {
+                        classInfo.setRequestMapping(value);
+                    } else {
+                        pendingMappingUrl = value;
+                        pendingMappingMethod = "ALL";
+                    }
+                    continue;
+                }
+                if (line.startsWith("@GetMapping")) {
+                    pendingMappingUrl = getMappingUrl(line, GET_MAPPING_PATTERN);
+                    pendingMappingMethod = "GET";
+                    continue;
+                }
+                if (line.startsWith("@PostMapping")) {
+                    pendingMappingUrl = getMappingUrl(line, POST_MAPPING_PATTERN);
+                    pendingMappingMethod = "POST";
+                    continue;
+                }
+                if (line.startsWith("@PutMapping")) {
+                    pendingMappingUrl = getMappingUrl(line, PUT_MAPPING_PATTERN);
+                    pendingMappingMethod = "PUT";
+                    continue;
+                }
+                if (line.startsWith("@DeleteMapping")) {
+                    pendingMappingUrl = getMappingUrl(line, DELETE_MAPPING_PATTERN);
+                    pendingMappingMethod = "DELETE";
+                    continue;
+                }
+
+                // 5. 匹配类声明头（Class / Interface / Enum / Annotation）
+                Matcher classMatcher = CLASS_PATTERN.matcher(line);
+                if (classMatcher.find() && classInfo.getClassName() == null) {
+                    String declarationKind = classMatcher.group(1);
+                    classInfo.setClassName(classMatcher.group(2));
+                    detectTypeFromDeclaration(classInfo, declarationKind);
+                    continue;
+                }
+
+                // 6. 收集类的依赖属性与成员变量
+                collectDependency(line, classInfo, dependencyVariables);
+                
+                // 7. 扫描行内可能存在的硬编码 SQL 语句特征
+                collectSql(line, classInfo);
+
+                // 8. 匹配类中的方法定义头
+                Matcher methodMatcher = METHOD_PATTERN.matcher(line);
+                // 过滤掉 if/for/while/switch 等结构控制关键字误匹配为方法
+                boolean methodStartedOnLine = methodMatcher.find() && !isControlFlow(methodMatcher.group(2));
+                if (methodStartedOnLine) {
+                    MethodInfo methodInfo = new MethodInfo();
+                    methodInfo.setReturnType(methodMatcher.group(1).trim());
+                    methodInfo.setName(methodMatcher.group(2).trim());
+                    methodInfo.setArguments(methodMatcher.group(3).trim());
+                    methodInfo.setRequestMapping(pendingMappingUrl);
+                    methodInfo.setHttpMethod(pendingMappingMethod);
+                    classInfo.getMethods().add(methodInfo);
+
+                    // 开启对当前方法内部大括号作用域的深度追踪，用于限制方法内调用的收集范围
+                    currentMethod = methodInfo.getName();
+                    methodBraceDepth = countChar(line, '{') - countChar(line, '}');
+                    methodBraceStarted = line.contains("{");
+                    pendingMappingUrl = null;
+                    pendingMappingMethod = null;
+                }
+
+                // 9. 追踪并分析方法体内的方法调用表达式，记录方法级的链路拓扑
+                if (currentMethod != null) {
+                    collectMethodCalls(line, i + 1, currentMethod, dependencyVariables, classInfo);
+                    if (!methodBraceStarted && line.contains("{")) {
+                        methodBraceStarted = true;
+                    } else if (!methodStartedOnLine) {
+                        methodBraceDepth += countChar(line, '{') - countChar(line, '}');
+                    }
+                    // 当括号深度归零，说明当前方法的作用域块已解析结束
+                    if (methodBraceStarted && methodBraceDepth <= 0) {
+                        currentMethod = null;
+                        methodBraceDepth = 0;
+                        methodBraceStarted = false;
+                    }
+                }
+            }
+        } catch (IOException e) {
+            log.error("Failed to read Java file: {}", file.getAbsolutePath(), e);
+        }
+
+        // 根据类名后缀规则，作为类型检测的兜底猜测
+        detectTypeFromName(classInfo);
+        return classInfo;
+    }
+
+    /**
+     * 递归遍历扫描文件夹下所有 Java 源文件并进行解析
+     *
+     * @param directory 目标目录
+     * @return 解析完成的类元数据集合
+     */
+    @Override
+    public List<ParsedClassInfo> parseDirectory(File directory) {
+        List<ParsedClassInfo> list = new ArrayList<>();
+        if (directory == null || !directory.exists()) {
+            return list;
+        }
+        scanAndParse(directory, list);
+        return list;
+    }
+
+    /**
+     * 递归扫描与深度分析的核心辅助方法
+     */
+    private void scanAndParse(File file, List<ParsedClassInfo> list) {
+        if (file.isDirectory()) {
+            File[] files = file.listFiles();
+            if (files != null) {
+                for (File f : files) {
+                    scanAndParse(f, list);
+                }
+            }
+        } else if (file.getName().endsWith(".java")) {
+            ParsedClassInfo info = parseFile(file);
+            if (info != null && info.getClassName() != null) {
+                list.add(info);
+            }
+        }
+    }
+
+    /**
+     * 正则匹配并去重收集代码中的所有注解
+     */
+    private void collectAnnotations(String line, ParsedClassInfo classInfo) {
+        Matcher matcher = ANNOTATION_PATTERN.matcher(line);
+        while (matcher.find()) {
+            addUnique(simpleName(matcher.group(1)), classInfo.getAnnotations());
+        }
+    }
+
+    /**
+     * 根据特有的 Spring/JPA 注解判定当前类的核心类型
+     */
+    private void detectTypeFromAnnotations(String line, ParsedClassInfo classInfo) {
+        if (line.contains("@RestController") || line.contains("@Controller")) {
+            classInfo.setType("CONTROLLER");
+        } else if (line.contains("@Service") && "UNKNOWN".equals(classInfo.getType())) {
+            classInfo.setType("SERVICE");
+        } else if (line.contains("@Mapper") && "UNKNOWN".equals(classInfo.getType())) {
+            classInfo.setType("MAPPER");
+        } else if ((line.contains("@Entity") || line.contains("@Table")) && "UNKNOWN".equals(classInfo.getType())) {
+            classInfo.setType("ENTITY");
+        } else if (line.contains("@Configuration") && "UNKNOWN".equals(classInfo.getType())) {
+            classInfo.setType("CONFIG");
+        } else if ((line.contains("@Scheduled") || line.contains("@EnableScheduling")) && "UNKNOWN".equals(classInfo.getType())) {
+            classInfo.setType("JOB");
+        }
+    }
+
+    /**
+     * 根据关键字声明提取特有类型 (枚举、注解定义)
+     */
+    private void detectTypeFromDeclaration(ParsedClassInfo classInfo, String declarationKind) {
+        if ("enum".equals(declarationKind)) {
+            classInfo.setType("ENUM");
+        } else if ("@interface".equals(declarationKind)) {
+            classInfo.setType("ANNOTATION");
+        }
+    }
+
+    /**
+     * 依据类名命名规范后缀进行类型猜测匹配 (在无注解时生效)
+     */
+    private void detectTypeFromName(ParsedClassInfo classInfo) {
+        if (!"UNKNOWN".equals(classInfo.getType()) || classInfo.getClassName() == null) {
+            return;
+        }
+        String className = classInfo.getClassName();
+        String lower = className.toLowerCase(Locale.ROOT);
+        if (lower.endsWith("controller")) {
+            classInfo.setType("CONTROLLER");
+        } else if (lower.endsWith("service") || lower.endsWith("serviceimpl")) {
+            classInfo.setType("SERVICE");
+        } else if (lower.endsWith("mapper") || lower.endsWith("dao")) {
+            classInfo.setType("MAPPER");
+        } else if (lower.endsWith("entity") || lower.endsWith("po")) {
+            classInfo.setType("ENTITY");
+        } else if (lower.endsWith("dto")) {
+            classInfo.setType("DTO");
+        } else if (lower.endsWith("vo")) {
+            classInfo.setType("VO");
+        } else if (lower.endsWith("config") || lower.endsWith("configuration")) {
+            classInfo.setType("CONFIG");
+        } else if (lower.endsWith("job") || lower.endsWith("task") || lower.endsWith("scheduler")) {
+            classInfo.setType("JOB");
+        }
+    }
+
+    /**
+     * 解析成员属性，提取非原生类型依赖，建立类级别的依赖依赖关系
+     */
+    private void collectDependency(String line, ParsedClassInfo classInfo, Map<String, String> dependencyVariables) {
+        Matcher matcher = FIELD_DEPENDENCY_PATTERN.matcher(line);
+        if (matcher.find()) {
+            String type = stripGeneric(matcher.group(1));
+            String variable = matcher.group(2);
+            // 过滤 String、Integer 等原生基础值类型依赖
+            if (!isSimpleValueType(type)) {
+                dependencyVariables.put(variable, type);
+                addUnique(variable + ":" + type, classInfo.getDependencies());
+            }
+        }
+    }
+
+    /**
+     * 分析方法体内部依赖的方法调用，建立调用关系元数据 MethodCallInfo
+     */
+    private void collectMethodCalls(String line, int lineNumber, String currentMethod, Map<String, String> dependencyVariables, ParsedClassInfo classInfo) {
+        Matcher matcher = METHOD_CALL_PATTERN.matcher(line);
+        while (matcher.find()) {
+            String variable = matcher.group(1);
+            String targetMethod = matcher.group(2);
+            // 若调用的成员变量属于类依赖组件，则进行记录
+            if (dependencyVariables.containsKey(variable)) {
+                MethodCallInfo callInfo = new MethodCallInfo();
+                callInfo.setCallerMethod(currentMethod);
+                callInfo.setDependencyName(dependencyVariables.get(variable));
+                callInfo.setTargetMethod(targetMethod);
+                callInfo.setExpression(variable + "." + targetMethod + "()");
+                callInfo.setLineNumber(lineNumber);
+                classInfo.getMethodCalls().add(callInfo);
+            }
+        }
+    }
+
+    /**
+     * 静态识别字符串中硬编码的 SQL 语句和操作，解析其引用的表与字段
+     */
+    private void collectSql(String line, ParsedClassInfo classInfo) {
+        String normalized = line.toUpperCase(Locale.ROOT);
+        // 判断行内是否含有四大 DML 数据库操作词
+        if (!normalized.contains("SELECT") && !normalized.contains("INSERT") && !normalized.contains("UPDATE") && !normalized.contains("DELETE")) {
+            return;
+        }
+
+        SqlReference sqlReference = new SqlReference();
+        sqlReference.setOperation(resolveSqlOperation(normalized));
+        extractTablesFromSql(line, classInfo.getTables(), sqlReference);
+        extractSqlFields(line, sqlReference);
+        // 如果成功提取到了操作类型或表引用，则计入列表
+        if (StringUtils.hasText(sqlReference.getOperation()) || !sqlReference.getTables().isEmpty()) {
+            classInfo.getSqlReferences().add(sqlReference);
+        }
+    }
+
+    /**
+     * 判断 SQL 主要操作类型
+     */
+    private String resolveSqlOperation(String normalizedSql) {
+        if (normalizedSql.contains("SELECT")) {
+            return "SELECT";
+        }
+        if (normalizedSql.contains("INSERT")) {
+            return "INSERT";
+        }
+        if (normalizedSql.contains("UPDATE")) {
+            return "UPDATE";
+        }
+        if (normalizedSql.contains("DELETE")) {
+            return "DELETE";
+        }
+        return "UNKNOWN";
+    }
+
+    /**
+     * 提取 SQL 语句中的数据表引用 (基于 FROM, JOIN, INTO, UPDATE 关键字后接结构)
+     */
+    private void extractTablesFromSql(String line, List<String> tables, SqlReference sqlReference) {
+        collectTableMatches(SQL_FROM_PATTERN, line, tables, sqlReference.getTables());
+        collectTableMatches(SQL_INTO_PATTERN, line, tables, sqlReference.getTables());
+        collectTableMatches(SQL_UPDATE_PATTERN, line, tables, sqlReference.getTables());
+
+        Matcher joinMatcher = SQL_JOIN_PATTERN.matcher(line);
+        while (joinMatcher.find()) {
+            String table = cleanIdentifier(joinMatcher.group(1));
+            addUnique(table, tables);
+            addUnique(table, sqlReference.getTables());
+            addUnique(table, sqlReference.getJoinedTables());
+        }
+    }
+
+    /**
+     * 数据表去重收集辅助方法
+     */
+    private void collectTableMatches(Pattern pattern, String line, List<String> allTables, List<String> sqlTables) {
+        Matcher matcher = pattern.matcher(line);
+        while (matcher.find()) {
+            String table = cleanIdentifier(matcher.group(1));
+            addUnique(table, allTables);
+            addUnique(table, sqlTables);
+        }
+    }
+
+    /**
+     * 字段级别解析 (对不同 DML 类型匹配相应的字段提取子范围)
+     */
+    private void extractSqlFields(String line, SqlReference sqlReference) {
+        String sql = unwrapSql(line);
+        String upper = sql.toUpperCase(Locale.ROOT);
+        if ("SELECT".equals(sqlReference.getOperation())) {
+            // 解析 SELECT 与 FROM 之间的查询字段
+            addFieldsBetween(sql, upper, "SELECT", "FROM", sqlReference.getSelectedFields());
+            collectConditionFields(sql, sqlReference.getConditionFields());
+        } else if ("INSERT".equals(sqlReference.getOperation())) {
+            // 解析 INSERT INTO table(...) 的插入字段
+            Matcher matcher = Pattern.compile("(?i)INSERT\\s+INTO\\s+[\\w.`\"']+\\s*\\(([^)]*)\\)").matcher(sql);
+            if (matcher.find()) {
+                addCsvFields(matcher.group(1), sqlReference.getInsertedFields());
+            }
+        } else if ("UPDATE".equals(sqlReference.getOperation())) {
+            // 解析 SET ... WHERE 的修改字段
+            Matcher matcher = Pattern.compile("(?i)\\bSET\\s+(.+?)(?:\\bWHERE\\b|$)").matcher(sql);
+            if (matcher.find()) {
+                for (String part : matcher.group(1).split(",")) {
+                    String[] fieldAndValue = part.split("=");
+                    if (fieldAndValue.length > 0) {
+                        addUnique(cleanIdentifier(fieldAndValue[0]), sqlReference.getUpdatedFields());
+                    }
+                }
+            }
+            collectConditionFields(sql, sqlReference.getConditionFields());
+        } else if ("DELETE".equals(sqlReference.getOperation())) {
+            collectConditionFields(sql, sqlReference.getConditionFields());
+        }
+    }
+
+    /**
+     * 范围提取 SQL 字段名
+     */
+    private void addFieldsBetween(String sql, String upper, String startToken, String endToken, List<String> fields) {
+        int start = upper.indexOf(startToken);
+        int end = upper.indexOf(endToken);
+        if (start >= 0 && end > start) {
+            addCsvFields(sql.substring(start + startToken.length(), end), fields);
+        }
+    }
+
+    /**
+     * 按逗号分割收集字段并剔除 AS 别名修饰
+     */
+    private void addCsvFields(String csv, List<String> fields) {
+        for (String part : csv.split(",")) {
+            String field = cleanIdentifier(part.replaceAll("(?i)\\s+AS\\s+\\w+", ""));
+            if (!"*".equals(field)) {
+                addUnique(field, fields);
+            }
+        }
+    }
+
+    /**
+     * 捕获 WHERE 子句中使用的条件字段 (支持各种逻辑操作符的前置识别)
+     */
+    private void collectConditionFields(String sql, List<String> fields) {
+        Matcher whereMatcher = Pattern.compile("(?i)\\bWHERE\\b\\s+(.+?)(?:\\bGROUP\\b|\\bORDER\\b|\\bLIMIT\\b|$)").matcher(sql);
+        if (!whereMatcher.find()) {
+            return;
+        }
+        Matcher fieldMatcher = Pattern.compile("([\\w.]+)\\s*(?:=|<>|!=|>=|<=|>|<|LIKE\\b|IN\\b|BETWEEN\\b)").matcher(whereMatcher.group(1));
+        while (fieldMatcher.find()) {
+            addUnique(cleanIdentifier(fieldMatcher.group(1)), fields);
+        }
+    }
+
+    /**
+     * 从注解行中提取出具体的 URL 映射路径字符串
+     */
+    private String getMappingUrl(String line, Pattern pattern) {
+        Matcher matcher = pattern.matcher(line);
+        if (matcher.find()) {
+            String params = matcher.group(1);
+            String value = extractSimpleValue(params);
+            if (StringUtils.hasText(value)) {
+                return value;
+            }
+        }
+        String value = extractSimpleValue(line);
+        return StringUtils.hasText(value) ? value : "/";
+    }
+
+    /**
+     * 单双引号内部属性文本值提取
+     */
+    private String extractSimpleValue(String line) {
+        int start = line.indexOf('"');
+        if (start != -1) {
+            int end = line.indexOf('"', start + 1);
+            if (end != -1) {
+                return line.substring(start + 1, end);
+            }
+        }
+        return "/";
+    }
+
+    /**
+     * 格式化整理 SQL 字符串以便于正则扫描
+     */
+    private String unwrapSql(String line) {
+        return line.replace("\\\"", "\"")
+                .replace("+", " ")
+                .replace(";", " ")
+                .replaceAll("\\s+", " ")
+                .trim();
+    }
+
+    /**
+     * 清理字段或表名标识符（移除非法字符，排除多级 Schema/别名命名干扰）
+     */
+    private String cleanIdentifier(String value) {
+        if (value == null) {
+            return "";
+        }
+        String cleaned = value.replaceAll("[`\"']", "")
+                .replaceAll("\\$\\{[^}]+}", "")
+                .trim();
+        int dot = cleaned.lastIndexOf('.');
+        if (dot >= 0) {
+            cleaned = cleaned.substring(dot + 1);
+        }
+        return cleaned.replaceAll("[^A-Za-z0-9_]", "");
+    }
+
+    /**
+     * 集合去重添加元素
+     */
+    private void addUnique(String value, List<String> values) {
+        if (StringUtils.hasText(value) && !values.contains(value)) {
+            values.add(value);
+        }
+    }
+
+    /**
+     * 提取注解简称（去除全限定类名包路径部分）
+     */
+    private String simpleName(String annotation) {
+        int dot = annotation.lastIndexOf('.');
+        return dot >= 0 ? annotation.substring(dot + 1) : annotation;
+    }
+
+    /**
+     * 去除泛型标识，获取基本类类型（例如 List<User> -> List）
+     */
+    private String stripGeneric(String type) {
+        int genericStart = type.indexOf('<');
+        return genericStart > 0 ? type.substring(0, genericStart) : type;
+    }
+
+    /**
+     * 判断是否是常见的基础数据类型
+     */
+    private boolean isSimpleValueType(String type) {
+        return List.of("String", "Integer", "Long", "Boolean", "Double", "Float", "BigDecimal", "LocalDate", "LocalDateTime").contains(type);
+    }
+
+    /**
+     * 判断方法名是否是保留的控制流关键字，防范误识别
+     */
+    private boolean isControlFlow(String methodName) {
+        return List.of("if", "for", "while", "switch", "catch", "new").contains(methodName);
+    }
+
+    /**
+     * 单个字符匹配计数统计
+     */
+    private int countChar(String value, char target) {
+        int count = 0;
+        for (char current : value.toCharArray()) {
+            if (current == target) {
+                count++;
+            }
+        }
+        return count;
+    }
+}
