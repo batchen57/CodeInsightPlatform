@@ -45,6 +45,10 @@ public class JavaParserServiceImpl implements JavaParserService {
     private static final Pattern TABLE_PATTERN = Pattern.compile("@Table\\s*\\([^)]*?(?:name\\s*=\\s*)?\"([^\"]+)\"");
     // 正则表达式：解析标准 Java 方法的修饰符、返回值类型、方法名和参数列表
     private static final Pattern METHOD_PATTERN = Pattern.compile("(?:public|protected|private|static|final|synchronized|\\s)+\\s+([\\w<>\\[\\],.?\\s]+)\\s+(\\w+)\\s*\\(([^)]*)\\)");
+    // 正则表达式：匹配 extends 子句中的父类 FQ
+    private static final Pattern EXTENDS_PATTERN = Pattern.compile("\\bextends\\s+([\\w.]+)");
+    // 正则表达式：匹配 implements 子句中的接口列表（支持 extends 后置或 { 结束）
+    private static final Pattern IMPLEMENTS_PATTERN = Pattern.compile("\\bimplements\\s+([\\w.,\\s]+?)(?:\\bextends\\b|\\{|\\n|$)");
     // 正则表达式：匹配类内部的依赖字段注入（例如 private UserService userService;）
     private static final Pattern FIELD_DEPENDENCY_PATTERN = Pattern.compile("(?:private|protected|public)\\s+(?:final\\s+)?([A-Z][\\w]*(?:<[^>]+>)?)\\s+(\\w+)\\s*(?:=|;)");
     // 正则表达式：简单捕获方法体内部的成员对象方法调用（例如 service.doSomething(...)）
@@ -144,6 +148,22 @@ public class JavaParserServiceImpl implements JavaParserService {
                     String declarationKind = classMatcher.group(1);
                     classInfo.setClassName(classMatcher.group(2));
                     detectTypeFromDeclaration(classInfo, declarationKind);
+
+                    // 5.1 提取 extends 子句（仅单行声明，多行场景后续接入真实 JavaParser 再升级）
+                    Matcher extendsMatcher = EXTENDS_PATTERN.matcher(line);
+                    if (extendsMatcher.find()) {
+                        classInfo.setExtendsClass(extendsMatcher.group(1));
+                    }
+                    // 5.2 提取 implements 子句（支持 extends 后置或 { 结束）
+                    Matcher implsMatcher = IMPLEMENTS_PATTERN.matcher(line);
+                    if (implsMatcher.find()) {
+                        for (String item : implsMatcher.group(1).split(",")) {
+                            String trimmed = item.trim();
+                            if (!trimmed.isEmpty()) {
+                                classInfo.getImplementsList().add(trimmed);
+                            }
+                        }
+                    }
                     continue;
                 }
 
@@ -196,7 +216,32 @@ public class JavaParserServiceImpl implements JavaParserService {
 
         // 根据类名后缀规则，作为类型检测的兜底猜测
         detectTypeFromName(classInfo);
+
+        // 识别 Java SE 标准入口方法 public static void main(String[] args)
+        detectMainMethod(classInfo);
+
         return classInfo;
+    }
+
+    /**
+     * 识别类是否包含 public static void main(String[] args) 标准入口方法。
+     * 命中时置 hasMainMethod=true，并在 type 仍为 UNKNOWN 时置为 APPLICATION。
+     */
+    private void detectMainMethod(ParsedClassInfo classInfo) {
+        if (classInfo == null || classInfo.getMethods() == null) {
+            return;
+        }
+        for (MethodInfo m : classInfo.getMethods()) {
+            if ("main".equals(m.getName())
+                    && "void".equalsIgnoreCase(m.getReturnType() == null ? "" : m.getReturnType().trim())
+                    && m.getArguments() != null && m.getArguments().contains("String")) {
+                classInfo.setHasMainMethod(true);
+                if ("UNKNOWN".equals(classInfo.getType())) {
+                    classInfo.setType("APPLICATION");
+                }
+                return;
+            }
+        }
     }
 
     /**
@@ -260,6 +305,12 @@ public class JavaParserServiceImpl implements JavaParserService {
             classInfo.setType("CONFIG");
         } else if ((line.contains("@Scheduled") || line.contains("@EnableScheduling")) && "UNKNOWN".equals(classInfo.getType())) {
             classInfo.setType("JOB");
+        } else if ((line.contains("@RabbitListener") || line.contains("@KafkaListener")
+                || line.contains("@JmsListener") || line.contains("@RocketMQMessageListener"))
+                && "UNKNOWN".equals(classInfo.getType())) {
+            classInfo.setType("MESSAGE_LISTENER");
+        } else if (line.contains("@Component") && "UNKNOWN".equals(classInfo.getType())) {
+            classInfo.setType("COMPONENT");
         }
     }
 

@@ -1,6 +1,8 @@
 package com.company.codeinsight.modules.ai.service;
 
 import com.company.codeinsight.modules.chunk.entity.CodeChunk;
+import lombok.Data;
+
 import java.util.List;
 
 /**
@@ -28,5 +30,29 @@ public interface AiSummaryService {
      * @param promptContent 提示词模版正文
      */
     void generateDraftDocument(Long taskId, List<CodeChunk> chunks, String promptContent);
+
+    /**
+     * 用任意已组装好的 prompt 字符串直接调用大模型
+     * 复用 summarizeChunk 的脱敏 / Token 流控 / HTTP / Mock 降级 / 模型热插拔基础设施，
+     * 但不再读取 chunk 行范围，prompt 整体由调用方组装（如 analyze_prompt.md 渲染结果）。
+     *
+     * @param taskId      关联任务 ID（用于 Token 流控和审计）
+     * @param promptInput 已渲染的完整 prompt
+     * @param modelName   所用模型标识
+     * @param callMeta    调用元数据（callStage / classPath），用于审计
+     * @return AI 响应文本；调用失败或 Mock 时返回 "{}"
+     */
+    String summarizeWithPrompt(Long taskId, String promptInput, String modelName, AiCallMeta callMeta);
+
+    /**
+     * 调用元数据
+     */
+    @Data
+    class AiCallMeta {
+        /** 调用阶段标签，如 "MODULE_HIERARCHY" / "CHUNK_SUMMARY" */
+        private String callStage;
+        /** 当前分析对象标识（如入口类全限定名） */
+        private String classPath;
+    }
 }
 

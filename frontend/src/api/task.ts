@@ -1,10 +1,19 @@
 import request from './request';
-import type { PageResult, Task } from '../types';
+import type { EntryScanConfig, PageResult, Task } from '../types';
 
 export interface TaskProgress {
   status: string;
   progress: number;
   errorReason?: string;
+}
+
+export interface CreateTaskPayload {
+  systemId: number;
+  repositoryId: number;
+  promptVersion?: number;
+  modelName?: string;
+  /** 入口扫描配置（可选；不传则走默认 Controller/JOB/MQ 兜底） */
+  entryScanConfig?: EntryScanConfig;
 }
 
 export const listTasks = (params: {
@@ -21,21 +30,11 @@ export const getTask = (id: number): Promise<Task> => {
   return request.get(`/tasks/${id}`);
 };
 
-export const createInitialTask = (data: {
-  systemId: number;
-  repositoryId: number;
-  promptVersion?: number;
-  modelName?: string;
-}): Promise<Task> => {
+export const createInitialTask = (data: CreateTaskPayload): Promise<Task> => {
   return request.post('/tasks/initial', data);
 };
 
-export const createIncrementalTask = (data: {
-  systemId: number;
-  repositoryId: number;
-  promptVersion?: number;
-  modelName?: string;
-}): Promise<Task> => {
+export const createIncrementalTask = (data: CreateTaskPayload): Promise<Task> => {
   return request.post('/tasks/incremental', data);
 };
 

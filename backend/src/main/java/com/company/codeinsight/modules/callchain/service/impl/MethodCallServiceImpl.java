@@ -1,0 +1,201 @@
+package com.company.codeinsight.modules.callchain.service.impl;
+
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.company.codeinsight.modules.callchain.entity.MethodCall;
+import com.company.codeinsight.modules.callchain.mapper.MethodCallMapper;
+import com.company.codeinsight.modules.callchain.service.MethodCallService;
+import com.company.codeinsight.modules.parser.model.ParsedClassInfo;
+import com.company.codeinsight.modules.parser.service.JavaParserService;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
+
+import java.io.File;
+import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+
+/**
+ * 方法调用链路服务实现类
+ * 递归遍历项目目录，复用 JavaParserService.parseFile 收集 methodCalls，按批次写入 ci_method_call 表。
+ * 单文件解析异常不中断整批；任务重试时通过 deleteByTaskId + 批量 insert 保证幂等。
+ */
+@Slf4j
+@Service
+public class MethodCallServiceImpl implements MethodCallService {
+
+    /** 单次批量入库的缓冲区大小 */
+    private static final int BATCH_SIZE = 500;
+
+    /** 调用表达式最大长度（防止超长表达式撑爆 VARCHAR(1000)） */
+    private static final int MAX_EXPR_LEN = 1000;
+
+    /** 递归遍历时跳过的目录（与 ci_file_snapshot 扫描口径保持一致） */
+    private static final Set<String> SKIP_DIRS = new HashSet<>(Arrays.asList(
+            "target", "build", "node_modules", ".git", ".idea", ".vscode", "dist", "out"
+    ));
+
+    @Autowired
+    private MethodCallMapper methodCallMapper;
+
+    @Autowired
+    private JavaParserService javaParserService;
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public int persistAstForTask(Long taskId, File projectDir) {
+        if (taskId == null || projectDir == null || !projectDir.exists() || !projectDir.isDirectory()) {
+            log.warn("persistAstForTask skipped: taskId={}, projectDir={}", taskId, projectDir);
+            return 0;
+        }
+
+        // 幂等清理：先清空该 task 历史记录
+        deleteByTaskId(taskId);
+
+        // counters[0]=已扫描文件数, [1]=解析失败文件数, [2]=已采集调用链总条数
+        int[] counters = new int[]{0, 0, 0};
+        List<MethodCall> buffer = new ArrayList<>(BATCH_SIZE);
+
+        walk(projectDir, projectDir, taskId, buffer, counters);
+
+        // 收尾：写入剩余不足一批的
+        if (!buffer.isEmpty()) {
+            insertBatch(buffer);
+        }
+
+        log.info("AST call-chain persistence done. taskId={}, filesScanned={}, filesFailed={}, callsInserted={}",
+                taskId, counters[0], counters[1], counters[2]);
+        return counters[2];
+    }
+
+    @Override
+    public List<MethodCall> listByTaskId(Long taskId) {
+        return methodCallMapper.selectList(
+                new LambdaQueryWrapper<MethodCall>()
+                        .eq(MethodCall::getTaskId, taskId)
+                        .orderByAsc(MethodCall::getId)
+        );
+    }
+
+    @Override
+    public List<MethodCall> listByClass(Long taskId, String className) {
+        if (!StringUtils.hasText(className)) {
+            return new ArrayList<>();
+        }
+        return methodCallMapper.selectList(
+                new LambdaQueryWrapper<MethodCall>()
+                        .eq(MethodCall::getTaskId, taskId)
+                        .eq(MethodCall::getClassName, className)
+                        .orderByAsc(MethodCall::getClassName, MethodCall::getCallerMethod, MethodCall::getLineNumber)
+        );
+    }
+
+    @Override
+    public void deleteByTaskId(Long taskId) {
+        methodCallMapper.delete(
+                new LambdaQueryWrapper<MethodCall>().eq(MethodCall::getTaskId, taskId)
+        );
+    }
+
+    // ============================ private helpers ============================
+
+    /**
+     * 递归遍历目录，识别 Java 文件后调用 JavaParserService.parseFile 并把 methodCalls 灌入 buffer。
+     */
+    private void walk(File baseDir, File current, Long taskId, List<MethodCall> buffer, int[] counters) {
+        if (current.isDirectory()) {
+            File[] children = current.listFiles();
+            if (children == null) {
+                return;
+            }
+            for (File child : children) {
+                if (child.isDirectory() && SKIP_DIRS.contains(child.getName())) {
+                    continue;
+                }
+                walk(baseDir, child, taskId, buffer, counters);
+            }
+            return;
+        }
+
+        if (!current.isFile() || !current.getName().endsWith(".java")) {
+            return;
+        }
+
+        counters[0]++;
+        try {
+            ParsedClassInfo info = javaParserService.parseFile(current);
+            if (info == null || info.getClassName() == null
+                    || info.getMethodCalls() == null || info.getMethodCalls().isEmpty()) {
+                return;
+            }
+
+            String relativePath = relativize(baseDir, current);
+            for (ParsedClassInfo.MethodCallInfo src : info.getMethodCalls()) {
+                MethodCall mc = new MethodCall();
+                mc.setTaskId(taskId);
+                mc.setFilePath(relativePath);
+                mc.setClassName(info.getClassName());
+                mc.setCallerMethod(src.getCallerMethod());
+                mc.setDependencyName(src.getDependencyName());
+                mc.setTargetMethod(src.getTargetMethod());
+                mc.setExpression(truncate(src.getExpression(), MAX_EXPR_LEN));
+                mc.setLineNumber(src.getLineNumber());
+                mc.setCreatedAt(LocalDateTime.now());
+                buffer.add(mc);
+                counters[2]++;
+
+                if (buffer.size() >= BATCH_SIZE) {
+                    insertBatch(buffer);
+                }
+            }
+        } catch (Exception e) {
+            counters[1]++;
+            log.error("AST parse failed for file: {}", current.getAbsolutePath(), e);
+        }
+    }
+
+    /**
+     * 把缓冲区里的全部记录插入 ci_method_call 表，然后清空缓冲区。
+     */
+    private void insertBatch(List<MethodCall> buffer) {
+        try {
+            for (MethodCall mc : buffer) {
+                methodCallMapper.insert(mc);
+            }
+        } finally {
+            buffer.clear();
+        }
+    }
+
+    /**
+     * 把绝对路径转成相对于项目根的 unix 风格相对路径（如 src/main/java/Foo.java）。
+     */
+    private String relativize(File baseDir, File file) {
+        try {
+            String abs = file.getAbsolutePath();
+            String base = baseDir.getAbsolutePath();
+            if (abs.startsWith(base)) {
+                String rel = abs.substring(base.length());
+                while (rel.startsWith(File.separator) || rel.startsWith("/")) {
+                    rel = rel.substring(1);
+                }
+                return rel.replace(File.separatorChar, '/');
+            }
+        } catch (Exception ignored) {
+            // fall through to file name
+        }
+        return file.getName();
+    }
+
+    private String truncate(String value, int max) {
+        if (value == null) {
+            return null;
+        }
+        return value.length() > max ? value.substring(0, max) : value;
+    }
+}

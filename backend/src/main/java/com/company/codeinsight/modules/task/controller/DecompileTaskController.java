@@ -35,7 +35,7 @@ public class DecompileTaskController {
     @Operation(summary = "创建全量初始化任务")
     @PostMapping("/initial")
     public ApiResponse<DecompileTask> createInitial(@RequestBody TaskCreateRequest request) {
-        DecompileTask task = decompileTaskService.createInitialTask(request.getSystemId(), request.getRepositoryId(), request.getPromptVersion(), request.getModelName());
+        DecompileTask task = decompileTaskService.createInitialTask(request.getSystemId(), request.getRepositoryId(), request.getPromptVersion(), request.getModelName(), request.getEntryScanConfig());
         operationLogService.logOperation(request.getSystemId(), task.getId(), "CREATE_TASK", "创建全量初始化反编译任务", null, true);
         return ApiResponse.success(task);
     }
@@ -46,7 +46,7 @@ public class DecompileTaskController {
     @Operation(summary = "创建增量分析任务")
     @PostMapping("/incremental")
     public ApiResponse<DecompileTask> createIncremental(@RequestBody TaskCreateRequest request) {
-        DecompileTask task = decompileTaskService.createIncrementalTask(request.getSystemId(), request.getRepositoryId(), request.getPromptVersion(), request.getModelName());
+        DecompileTask task = decompileTaskService.createIncrementalTask(request.getSystemId(), request.getRepositoryId(), request.getPromptVersion(), request.getModelName(), request.getEntryScanConfig());
         operationLogService.logOperation(request.getSystemId(), task.getId(), "CREATE_TASK", "创建增量分析反编译任务", null, true);
         return ApiResponse.success(task);
     }
@@ -133,6 +133,8 @@ public class DecompileTaskController {
         private Long repositoryId;
         private Integer promptVersion;
         private String modelName;
+        /** 入口扫描配置（仅前端策略步骤填写时传入，null 走默认 Controller/JOB/MQ 兜底） */
+        private com.company.codeinsight.modules.entrypoint.model.EntryPointConfig entryScanConfig;
     }
 
     /**

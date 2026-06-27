@@ -78,6 +78,7 @@ CREATE TABLE IF NOT EXISTS ci_task (
     duration_ms BIGINT DEFAULT 0 NOT NULL,
     started_at TIMESTAMP,
     ended_at TIMESTAMP,
+    entry_scan_config TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
 );
@@ -390,5 +391,59 @@ COMMENT ON COLUMN ci_model.sort_order IS '排序权重';
 
 -- 17. 迁移或兼容性字段维护
 ALTER TABLE ci_task ADD COLUMN IF NOT EXISTS model_name VARCHAR(100);
+
+-- 18. 方法调用链路表（AST 静态分析结果）
+CREATE TABLE IF NOT EXISTS ci_method_call (
+    id BIGSERIAL PRIMARY KEY,
+    task_id BIGINT NOT NULL,
+    file_path VARCHAR(500) NOT NULL,
+    class_name VARCHAR(255),
+    caller_method VARCHAR(255),
+    dependency_name VARCHAR(255),
+    target_method VARCHAR(255),
+    expression VARCHAR(1000),
+    line_number INT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_method_call_task_id ON ci_method_call (task_id);
+CREATE INDEX IF NOT EXISTS idx_method_call_class ON ci_method_call (task_id, class_name, caller_method);
+COMMENT ON TABLE ci_method_call IS '方法调用链路表（AST 静态分析）';
+COMMENT ON COLUMN ci_method_call.task_id IS '关联任务ID';
+COMMENT ON COLUMN ci_method_call.file_path IS '源文件相对路径';
+COMMENT ON COLUMN ci_method_call.class_name IS 'Java 类名';
+COMMENT ON COLUMN ci_method_call.caller_method IS '调用方方法名';
+COMMENT ON COLUMN ci_method_call.dependency_name IS '被调依赖的类型名';
+COMMENT ON COLUMN ci_method_call.target_method IS '被调用的目标方法名';
+COMMENT ON COLUMN ci_method_call.expression IS '调用表达式原始文本';
+COMMENT ON COLUMN ci_method_call.line_number IS '源文件行号';
+
+-- 19. 模块层级表（AI 提炼入口的业务归属，DTO 持久化）
+CREATE TABLE IF NOT EXISTS ci_module_hierarchy (
+    id BIGSERIAL PRIMARY KEY,
+    task_id BIGINT NOT NULL,
+    system_id BIGINT NOT NULL,
+    level VARCHAR(20) NOT NULL,
+    parent_id BIGINT,
+    node_id VARCHAR(10),
+    name VARCHAR(255) NOT NULL,
+    keywords TEXT,
+    class_paths TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_module_hierarchy_task ON ci_module_hierarchy (task_id);
+CREATE INDEX IF NOT EXISTS idx_module_hierarchy_parent ON ci_module_hierarchy (parent_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uk_module_hierarchy_task_node ON ci_module_hierarchy (task_id, node_id);
+COMMENT ON TABLE ci_module_hierarchy IS '模块层级表（AI 提炼的业务归属 DTO 落表）';
+COMMENT ON COLUMN ci_module_hierarchy.level IS '层级：MODULE / SUB_MODULE / FUNCTION';
+COMMENT ON COLUMN ci_module_hierarchy.parent_id IS '上级节点 ID（module.parent_id = NULL）';
+COMMENT ON COLUMN ci_module_hierarchy.node_id IS '5位 Base62 ID（m/s/f 前缀），同任务内唯一';
+COMMENT ON COLUMN ci_module_hierarchy.name IS '模块/子模块/功能名称';
+COMMENT ON COLUMN ci_module_hierarchy.keywords IS '关键词 JSON 数组字符串';
+COMMENT ON COLUMN ci_module_hierarchy.class_paths IS '入口类全限定名集合（仅 FUNCTION 级）JSON 数组';
+
+-- 20. 任务级入口扫描配置（每任务独立，配置只跟任务绑定）
+ALTER TABLE ci_task ADD COLUMN IF NOT EXISTS entry_scan_config TEXT;
+COMMENT ON COLUMN ci_task.entry_scan_config IS '入口扫描配置 JSON：含 includeAnnotations/includeClasspaths/includeExtends 三类入口规则与 excludeClasspaths/excludePackages/excludeAnnotations 三类排除规则，null 时走默认 Controller/JOB/MQ 兜底';
 
 

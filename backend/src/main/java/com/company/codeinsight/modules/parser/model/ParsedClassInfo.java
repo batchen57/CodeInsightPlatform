@@ -53,6 +53,24 @@ public class ParsedClassInfo {
     private List<MethodCallInfo> methodCalls = new ArrayList<>();
 
     /**
+     * 该类是否包含 Java SE 标准入口方法 public static void main(String[] args)
+     * 由 JavaParserServiceImpl.parseFile 在识别到时置为 true
+     */
+    private boolean hasMainMethod;
+
+    /**
+     * 该类直接继承的父类全限定名（extends 子句的第一个类型）
+     * 由 JavaParserServiceImpl.parseFile 提取；interface / enum / @interface 时该字段保持 null
+     */
+    private String extendsClass;
+
+    /**
+     * 该类实现的接口列表（implements 子句，按逗号分隔）
+     * 元素可能为 FQ 也可能为简单类名（依赖源码写法）
+     */
+    private List<String> implementsList = new ArrayList<>();
+
+    /**
      * 该类中涉及到的底层数据库表名称集合（如 ["ci_chunk", "ci_task"]）
      */
     private List<String> tables = new ArrayList<>();

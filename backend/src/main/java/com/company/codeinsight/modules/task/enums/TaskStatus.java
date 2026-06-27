@@ -30,6 +30,10 @@ public enum TaskStatus {
      */
     AI_ANALYZING,
     /**
+     * AI 模块层级提炼中（从每个入口提交 AI 提炼并维护 module_hierarchy DTO）
+     */
+    MODULE_HIERARCHY,
+    /**
      * 知识生成中（整合切片 Markdown 并写入 ci_knowledge_draft 进行版本归档）
      */
     GENERATING_DOC,

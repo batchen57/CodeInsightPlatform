@@ -49,8 +49,29 @@ export interface Task {
   durationMs: number;
   startedAt?: string;
   endedAt?: string;
+  entryScanConfig?: EntryScanConfig;
   createdAt: string;
   updatedAt: string;
+}
+
+/**
+ * 任务级入口扫描配置（仅在该任务创建时生效，不影响仓库）
+ * include 规则"或"逻辑：任一列表非空即视为启用配置驱动，全部为空走默认 Controller/JOB/MQ 兜底
+ * exclude 规则"或"逻辑：任一命中即从候选中排除
+ */
+export interface EntryScanConfig {
+  /** 入口识别 - 注解（类的 annotations 含任一即匹配） */
+  includeAnnotations?: string[];
+  /** 入口识别 - 类路径 Ant 模式（FQ 与任一模式匹配即识别） */
+  includeClasspaths?: string[];
+  /** 入口识别 - 继承/实现（extendsClass 或 implementsList 含任一即识别） */
+  includeExtends?: string[];
+  /** 排除 - 类路径 Ant 模式 */
+  excludeClasspaths?: string[];
+  /** 排除 - 包路径（FQ 点分隔前缀匹配） */
+  excludePackages?: string[];
+  /** 排除 - 注解 */
+  excludeAnnotations?: string[];
 }
 
 export interface KnowledgeDraft {

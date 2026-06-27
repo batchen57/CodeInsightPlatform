@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Button, Card, Col, Form, Modal, Progress, Row, Select, Space, Steps, Table, Tag, Typography, message } from 'antd';
+import { Button, Card, Col, Collapse, Form, Modal, Progress, Row, Select, Space, Steps, Table, Tag, Typography, message } from 'antd';
 import {
   CloseCircleOutlined,
   EyeOutlined,
@@ -176,6 +176,7 @@ const Tasks: React.FC = () => {
       repositoryId: values.repositoryId,
       promptVersion: values.promptVersion,
       modelName: values.modelName,
+      entryScanConfig: values.entryScanConfig,
     };
     if (values.taskType === 'INITIAL') {
       await createInitialTask(payload);
@@ -474,6 +475,73 @@ const Tasks: React.FC = () => {
                 }))}
               />
             </Form.Item>
+
+            {/* 入口扫描配置：仅在该任务生效，不配置时走默认 Controller/JOB/MQ 兜底 */}
+            <Form.Item label="扫描规则" tooltip="配置仅对该任务生效；任一入口列表为空即走默认 Controller/JOB/MQ 识别">
+              <Collapse
+                defaultActiveKey={['include']}
+                items={[
+                  {
+                    key: 'include',
+                    label: '入口识别规则（满足任一即视为入口）',
+                    children: (
+                      <>
+                        <Form.Item name={['entryScanConfig', 'includeAnnotations']} noStyle>
+                          <Select
+                            mode="tags"
+                            placeholder="注解（如 RestController / Service / 自定义注解）"
+                            style={{ width: '100%' }}
+                          />
+                        </Form.Item>
+                        <Form.Item name={['entryScanConfig', 'includeClasspaths']} noStyle style={{ marginTop: 8 }}>
+                          <Select
+                            mode="tags"
+                            placeholder="类路径 Ant 模式（如 com.demo.controller.*，建议 ** 匹配多级）"
+                            style={{ width: '100%' }}
+                          />
+                        </Form.Item>
+                        <Form.Item name={['entryScanConfig', 'includeExtends']} noStyle style={{ marginTop: 8 }}>
+                          <Select
+                            mode="tags"
+                            placeholder="继承/实现父类（如 BaseEntry / CommandLineRunner）"
+                            style={{ width: '100%' }}
+                          />
+                        </Form.Item>
+                      </>
+                    ),
+                  },
+                  {
+                    key: 'exclude',
+                    label: '排除规则（满足任一即从候选中排除）',
+                    children: (
+                      <>
+                        <Form.Item name={['entryScanConfig', 'excludeClasspaths']} noStyle>
+                          <Select
+                            mode="tags"
+                            placeholder="排除类路径 Ant 模式（如 *.test.*）"
+                            style={{ width: '100%' }}
+                          />
+                        </Form.Item>
+                        <Form.Item name={['entryScanConfig', 'excludePackages']} noStyle style={{ marginTop: 8 }}>
+                          <Select
+                            mode="tags"
+                            placeholder="排除包路径（如 com.legacy.config，点分隔前缀匹配）"
+                            style={{ width: '100%' }}
+                          />
+                        </Form.Item>
+                        <Form.Item name={['entryScanConfig', 'excludeAnnotations']} noStyle style={{ marginTop: 8 }}>
+                          <Select
+                            mode="tags"
+                            placeholder="排除注解（如 Internal / Deprecated）"
+                            style={{ width: '100%' }}
+                          />
+                        </Form.Item>
+                      </>
+                    ),
+                  },
+                ]}
+              />
+            </Form.Item>
           </div>
 
           {/* 第三步：核实并确认任务配置参数 */}
@@ -500,6 +568,24 @@ const Tasks: React.FC = () => {
                 <b>
                   {models.find((m) => m.identifier === form.getFieldValue('modelName'))?.name || form.getFieldValue('modelName')}
                 </b>
+              </p>
+              <p>
+                扫描规则：{' '}
+                <b>{(() => {
+                  const c = form.getFieldValue('entryScanConfig') || {};
+                  const labels: Array<[string, string[] | undefined]> = [
+                    ['入口注解', c.includeAnnotations],
+                    ['入口类路径', c.includeClasspaths],
+                    ['入口继承/实现', c.includeExtends],
+                    ['排除类路径', c.excludeClasspaths],
+                    ['排除包路径', c.excludePackages],
+                    ['排除注解', c.excludeAnnotations],
+                  ];
+                  const configured = labels.filter(([, v]) => Array.isArray(v) && v.length > 0);
+                  return configured.length === 0
+                    ? '使用默认（Controller/JOB/MQ 兜底）'
+                    : configured.map(([k, v]) => `${k} ${v!.length} 条`).join('，');
+                })()}</b>
               </p>
               <Text type="secondary">任务将以草稿状态创建，可在队列中手动启动。</Text>
             </div>

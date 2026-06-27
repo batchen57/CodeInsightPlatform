@@ -6,6 +6,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.company.codeinsight.common.exception.BusinessException;
 import com.company.codeinsight.modules.ai.entity.AiCallRecord;
 import com.company.codeinsight.modules.ai.mapper.AiCallRecordMapper;
+import com.company.codeinsight.modules.callchain.entity.MethodCall;
+import com.company.codeinsight.modules.callchain.mapper.MethodCallMapper;
 import com.company.codeinsight.modules.ai.service.AiSummaryService;
 import com.company.codeinsight.modules.chunk.entity.CodeChunk;
 import com.company.codeinsight.modules.chunk.mapper.CodeChunkMapper;
@@ -84,6 +86,21 @@ public class AiSummaryServiceImpl implements AiSummaryService {
     @Autowired
     private com.company.codeinsight.modules.model.mapper.AiModelMapper aiModelMapper;
 
+    @Autowired
+    private com.company.codeinsight.modules.prompt.mapper.DecompilePromptMapper promptMapper;
+
+    @Autowired
+    private com.company.codeinsight.modules.hierarchy.service.ModuleHierarchyService moduleHierarchyService;
+
+    @Autowired
+    private com.company.codeinsight.modules.entrypoint.service.EntryPointDiscoveryService entryPointDiscoveryService;
+
+    @Autowired
+    private com.company.codeinsight.common.util.PromptTemplateLoader promptTemplateLoader;
+
+    @Autowired
+    private MethodCallMapper methodCallMapper;
+
     // 是否启用 AI 本地 Mock 仿真
     @Value("${code-insight.ai.mock:false}")
     private boolean aiMock;
@@ -131,6 +148,8 @@ public class AiSummaryServiceImpl implements AiSummaryService {
 
         DecompileTask task = decompileTaskMapper.selectById(taskId);
         Long systemId = task != null ? task.getSystemId() : 0L;
+        Integer taskPromptVersion = task != null ? task.getPromptVersion() : null;
+        Long taskPromptId = resolvePromptId(taskPromptVersion);
 
         String modelToUse = StringUtils.hasText(modelNameSelected) ? modelNameSelected : this.modelName;
 
@@ -190,7 +209,8 @@ public class AiSummaryServiceImpl implements AiSummaryService {
             String mockResult = generateMockSummary(chunk);
             
             // 记录审计与调用报表
-            saveCallRecordAndAudit(systemId, taskId, chunkId, modelToUse, promptInput.length() / 3, mockResult.length() / 3, mockResult, true, null, 100);
+            saveCallRecordAndAudit(systemId, taskId, taskPromptId, taskPromptVersion, chunkId, modelToUse,
+                    promptInput.length() / 3, mockResult.length() / 3, mockResult, true, null, 100, "CHUNK_SUMMARY");
             return mockResult;
         }
 
@@ -240,7 +260,8 @@ public class AiSummaryServiceImpl implements AiSummaryService {
                 chunkMapper.updateById(chunk);
 
                 // 保存 AI 原始响应记录并提交至 Token 审计表
-                saveCallRecordAndAudit(systemId, taskId, chunkId, modelToUse, inTokens, outTokens, aiText, true, null, duration);
+                saveCallRecordAndAudit(systemId, taskId, taskPromptId, taskPromptVersion, chunkId, modelToUse,
+                        inTokens, outTokens, aiText, true, null, duration, "CHUNK_SUMMARY");
                 return aiText;
             } else {
                 String errMsg = "HTTP 错误码: " + response.statusCode() + ", 详情: " + response.body();
@@ -248,7 +269,8 @@ public class AiSummaryServiceImpl implements AiSummaryService {
                 
                 // 接口响应非 200 时，降级输出本地业务逻辑 Mock 内容，避免阻塞任务状态机流程
                 String mockResult = generateMockSummary(chunk);
-                saveCallRecordAndAudit(systemId, taskId, chunkId, modelToUse, promptInput.length() / 3, mockResult.length() / 3, mockResult, false, errMsg, duration);
+                saveCallRecordAndAudit(systemId, taskId, taskPromptId, taskPromptVersion, chunkId, modelToUse,
+                        promptInput.length() / 3, mockResult.length() / 3, mockResult, false, errMsg, duration, "CHUNK_SUMMARY");
                 return mockResult;
             }
         } catch (Exception e) {
@@ -256,7 +278,8 @@ public class AiSummaryServiceImpl implements AiSummaryService {
             log.error("调用大模型发生网络异常，启用 Mock 降级", e);
             // 物理网络超时/连接出错时，同样降级使用 Mock 本地生成
             String mockResult = generateMockSummary(chunk);
-            saveCallRecordAndAudit(systemId, taskId, chunkId, modelToUse, promptInput.length() / 3, mockResult.length() / 3, mockResult, false, e.getMessage(), duration);
+            saveCallRecordAndAudit(systemId, taskId, taskPromptId, taskPromptVersion, chunkId, modelToUse,
+                    promptInput.length() / 3, mockResult.length() / 3, mockResult, false, e.getMessage(), duration, "CHUNK_SUMMARY");
             return mockResult;
         }
     }
@@ -574,6 +597,300 @@ public class AiSummaryServiceImpl implements AiSummaryService {
             throw new BusinessException("未找到关联的任务");
         }
 
+        // 1. 加载 ModuleHierarchy DTO（项 2 产出）
+        com.company.codeinsight.modules.hierarchy.model.ModuleHierarchy hierarchy =
+                moduleHierarchyService.loadByTaskId(taskId);
+
+        // 2. DTO 为空 → 走旧 17 章节逻辑兜底
+        if (hierarchy.getModules().isEmpty()) {
+            log.warn("taskId={} 尚无模块层级，回退到旧 17 章节生成逻辑", taskId);
+            legacyGenerateDraftDocument(taskId, chunks, promptContent);
+            return;
+        }
+
+        // 3. 查找或为当前任务创建工作区
+        DraftWorkspace ws = draftWorkspaceMapper.selectOne(
+                new LambdaQueryWrapper<DraftWorkspace>().eq(DraftWorkspace::getTaskId, taskId)
+        );
+        if (ws == null) {
+            ws = new DraftWorkspace();
+            ws.setTaskId(taskId);
+            ws.setSystemId(task.getSystemId());
+            ws.setRepositoryId(task.getRepositoryId());
+            ws.setStatus("ACTIVE");
+            ws.setCreatedAt(LocalDateTime.now());
+            ws.setUpdatedAt(LocalDateTime.now());
+            draftWorkspaceMapper.insert(ws);
+        }
+
+        // 4. projectDir 通过 taskId 反查（pipeline 启动时 pullAndScan 已写入该目录）
+        File projectDir = new File("temp_repos/task_" + taskId);
+
+        // 5. 遍历每个 ModuleDto → 整模块喂 AI → 落库
+        for (com.company.codeinsight.modules.hierarchy.model.ModuleDto moduleDto : hierarchy.getModules().values()) {
+            try {
+                generateModuleDraft(task, ws, moduleDto, hierarchy, projectDir);
+            } catch (Exception e) {
+                log.error("generateModuleDraft failed for module {}: {}",
+                        moduleDto.getModuleName(), e.getMessage(), e);
+            }
+        }
+
+        log.info("generateDraftDocument done. taskId={} modules={}", taskId, hierarchy.getModules().size());
+    }
+
+    /**
+     * 项 3 新增：整模块喂 AI 生成 md 的核心流程
+     */
+    private void generateModuleDraft(DecompileTask task, DraftWorkspace ws,
+                                    com.company.codeinsight.modules.hierarchy.model.ModuleDto moduleDto,
+                                    com.company.codeinsight.modules.hierarchy.model.ModuleHierarchy hierarchy,
+                                    File projectDir) {
+        String moduleName = moduleDto.getModuleName();
+
+        // 1. 收集该模块涉及的所有源码（BFS 入口可达）
+        String moduleSource = collectModuleSourceCode(task.getId(), moduleDto, projectDir);
+        if (!StringUtils.hasText(moduleSource)) {
+            log.warn("模块 {} BFS 无可达源码，跳过（DTO 有 {} 个 Function）",
+                    moduleName, countFunctions(moduleDto));
+            return;
+        }
+
+        // 2. 渲染 prompt
+        String promptTemplate;
+        try {
+            promptTemplate = promptTemplateLoader.load("module_doc_prompt.md");
+        } catch (Exception e) {
+            log.error("加载 module_doc_prompt.md 失败，回退到占位文档", e);
+            upsertModuleDraft(task, ws, moduleDto, buildPlaceholderDoc(moduleDto), "PENDING_REVIEW");
+            return;
+        }
+
+        // 把整个 ModuleHierarchy DTO 序列化成 JSON 给 AI 作为 {module_hierarchy.json} 输入
+        String moduleHierarchyJson = serializeHierarchyToJson(hierarchy);
+
+        String promptInput = promptTemplateLoader.renderModuleDoc(
+                promptTemplate, moduleName, moduleHierarchyJson, moduleSource);
+        if (promptTemplateLoader.hasUnresolvedModuleDocPlaceholders(promptInput)) {
+            log.warn("模块 {} prompt 仍有未替换占位符，回退到占位文档", moduleName);
+            upsertModuleDraft(task, ws, moduleDto, buildPlaceholderDoc(moduleDto), "PENDING_REVIEW");
+            return;
+        }
+
+        // 3. 调 AI（复用 summarizeWithPrompt 全部基础设施）
+        AiSummaryService.AiCallMeta callMeta = new AiSummaryService.AiCallMeta();
+        callMeta.setCallStage("MODULE_DOC");
+        callMeta.setClassPath(moduleDto.getId());
+
+        String aiMarkdown = summarizeWithPrompt(task.getId(), promptInput, task.getModelName(), callMeta);
+
+        String finalMarkdown;
+        String initialStatus;
+        if (!StringUtils.hasText(aiMarkdown) || "{}".equals(aiMarkdown.trim())) {
+            log.warn("模块 {} AI 响应为空，写 PENDING_REVIEW 占位", moduleName);
+            finalMarkdown = buildPlaceholderDoc(moduleDto);
+            initialStatus = "PENDING_REVIEW";
+        } else {
+            finalMarkdown = aiMarkdown;
+            initialStatus = "AI_GENERATED";
+        }
+
+        // 4. 落库（写文件 + 写 KnowledgeDraft + 写 source references）
+        upsertModuleDraft(task, ws, moduleDto, finalMarkdown, initialStatus);
+    }
+
+    /**
+     * 收集模块所有入口类，并 BFS 出每个入口的可达源码，拼装成单字符串
+     */
+    private String collectModuleSourceCode(Long taskId,
+                                           com.company.codeinsight.modules.hierarchy.model.ModuleDto moduleDto,
+                                           File projectDir) {
+        Set<String> entryClassPaths = new LinkedHashSet<>();
+        for (com.company.codeinsight.modules.hierarchy.model.SubModuleDto sm : moduleDto.getSubModules().values()) {
+            for (com.company.codeinsight.modules.hierarchy.model.FunctionDto fn : sm.getFunctions().values()) {
+                entryClassPaths.addAll(fn.getClassPaths());
+            }
+        }
+        if (entryClassPaths.isEmpty()) {
+            return "";
+        }
+
+        // 从 task 还原 EntryPointConfig（与 ModuleHierarchyServiceImpl 行为一致）
+        DecompileTask task = decompileTaskMapper.selectById(taskId);
+        com.company.codeinsight.modules.entrypoint.model.EntryPointConfig config =
+                com.company.codeinsight.modules.entrypoint.model.EntryPointConfigCodec.decode(task.getEntryScanConfig());
+
+        StringBuilder sb = new StringBuilder();
+        for (String entryClass : entryClassPaths) {
+            String src = entryPointDiscoveryService.collectReachableSource(
+                    taskId, entryClass, projectDir, config);
+            if (!StringUtils.hasText(src)) continue;
+            sb.append("// ===== Entry: ").append(entryClass).append(" =====\n");
+            sb.append(src).append("\n\n");
+        }
+        return sb.toString();
+    }
+
+    /**
+     * AI 失败时的占位文档（保留子模块列表 + 入口类，便于人工补充）
+     */
+    private String buildPlaceholderDoc(com.company.codeinsight.modules.hierarchy.model.ModuleDto moduleDto) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("# ").append(moduleDto.getModuleName()).append(" 模块说明\n\n");
+        sb.append("> AI 生成失败，需人工补充。\n\n");
+        sb.append("## 子模块清单\n");
+        for (com.company.codeinsight.modules.hierarchy.model.SubModuleDto sm : moduleDto.getSubModules().values()) {
+            sb.append("- **").append(sm.getSubModuleName()).append("**\n");
+            for (com.company.codeinsight.modules.hierarchy.model.FunctionDto fn : sm.getFunctions().values()) {
+                sb.append("  - ").append(fn.getFunctionName())
+                        .append("（入口: ").append(String.join(", ", fn.getClassPaths())).append("）\n");
+            }
+        }
+        return sb.toString();
+    }
+
+    /**
+     * upsert 落库：写文件 → 写 KnowledgeDraft → 写 source references
+     */
+    private void upsertModuleDraft(DecompileTask task, DraftWorkspace ws,
+                                   com.company.codeinsight.modules.hierarchy.model.ModuleDto moduleDto,
+                                   String markdown, String initialStatus) {
+        Long taskId = task.getId();
+        String moduleName = moduleDto.getModuleName();
+        String safeModuleName = moduleName.replaceAll("[\\s/\\(\\)]", "_");
+        String relativeDocPath = "task_" + taskId + "/" + safeModuleName + ".md";
+        Path storePath = Paths.get(localStoragePath, "drafts", relativeDocPath);
+
+        // 写文件
+        try {
+            Files.createDirectories(storePath.getParent());
+            Files.writeString(storePath, markdown);
+        } catch (IOException e) {
+            log.error("保存 Markdown 知识草稿文件失败", e);
+        }
+
+        // 本地仓库副本
+        try {
+            CodeRepository repo = repositoryMapper.selectById(task.getRepositoryId());
+            if (repo != null && StringUtils.hasText(repo.getGitUrl())) {
+                File localRepoDir = new File(repo.getGitUrl());
+                if (localRepoDir.exists() && localRepoDir.isDirectory()) {
+                    File targetDraftDir = new File(localRepoDir, "docs/code-insight/drafts");
+                    if (!targetDraftDir.exists()) {
+                        targetDraftDir.mkdirs();
+                    }
+                    File targetDraftFile = new File(targetDraftDir, safeModuleName + ".md");
+                    Files.writeString(targetDraftFile.toPath(), markdown);
+                    log.info("本地模式：成功备份草稿文档至指定目录：{}", targetDraftFile.getAbsolutePath());
+                }
+            }
+        } catch (Exception e) {
+            log.error("备份草稿文档至本地代码库指定目录失败", e);
+        }
+
+        // upsert KnowledgeDraft
+        String hash = DigestUtils.md5DigestAsHex(markdown.getBytes());
+        KnowledgeDraft draft = knowledgeDraftMapper.selectOne(
+                new LambdaQueryWrapper<KnowledgeDraft>()
+                        .eq(KnowledgeDraft::getWorkspaceId, ws.getId())
+                        .eq(KnowledgeDraft::getFilePath, relativeDocPath)
+        );
+        if (draft == null) {
+            draft = new KnowledgeDraft();
+            draft.setWorkspaceId(ws.getId());
+            draft.setFilePath(relativeDocPath);
+            draft.setModuleName(moduleName);
+            draft.setContentUri(storePath.toAbsolutePath().toUri().toString());
+            draft.setStatus(initialStatus);
+            draft.setHash(hash);
+            draft.setCreatedAt(LocalDateTime.now());
+            draft.setUpdatedAt(LocalDateTime.now());
+            knowledgeDraftMapper.insert(draft);
+        } else {
+            draft.setHash(hash);
+            draft.setStatus(initialStatus);
+            draft.setModuleName(moduleName);
+            draft.setContentUri(storePath.toAbsolutePath().toUri().toString());
+            draft.setUpdatedAt(LocalDateTime.now());
+            knowledgeDraftMapper.updateById(draft);
+        }
+
+        // 清旧 source references
+        draftSourceReferenceMapper.delete(
+                new LambdaQueryWrapper<DraftSourceReference>().eq(DraftSourceReference::getDraftId, draft.getId())
+        );
+        // 每个 FunctionDto.classPaths 写一条 ref（start_line=1, end_line=0 表示整文件）
+        for (com.company.codeinsight.modules.hierarchy.model.SubModuleDto sm : moduleDto.getSubModules().values()) {
+            for (com.company.codeinsight.modules.hierarchy.model.FunctionDto fn : sm.getFunctions().values()) {
+                for (String entryClass : fn.getClassPaths()) {
+                    DraftSourceReference ref = new DraftSourceReference();
+                    ref.setDraftId(draft.getId());
+                    ref.setFilePath(entryClassToFilePath(taskId, entryClass));
+                    ref.setStartLine(1);
+                    ref.setEndLine(0);
+                    ref.setCreatedAt(LocalDateTime.now());
+                    draftSourceReferenceMapper.insert(ref);
+                }
+            }
+        }
+    }
+
+    /**
+     * 从 methodCall 表反查入口类的物理文件路径；兜底用包路径推断
+     */
+    private String entryClassToFilePath(Long taskId, String fqClassName) {
+        if (!StringUtils.hasText(fqClassName)) return null;
+        String shortName = fqClassName.contains(".")
+                ? fqClassName.substring(fqClassName.lastIndexOf('.') + 1)
+                : fqClassName;
+        try {
+            List<MethodCall> calls = methodCallMapper.selectList(
+                    new LambdaQueryWrapper<MethodCall>().eq(MethodCall::getTaskId, taskId)
+            );
+            for (MethodCall mc : calls) {
+                if (shortName.equals(mc.getClassName()) && StringUtils.hasText(mc.getFilePath())) {
+                    return mc.getFilePath();
+                }
+            }
+        } catch (Exception e) {
+            log.warn("entryClassToFilePath 反查调用链失败: {}", e.getMessage());
+        }
+        // 兜底：包路径推断
+        if (fqClassName.contains(".")) {
+            String pkgPath = fqClassName.substring(0, fqClassName.lastIndexOf('.')).replace('.', '/');
+            String simple = fqClassName.substring(fqClassName.lastIndexOf('.') + 1);
+            return "src/main/java/" + pkgPath + "/" + simple + ".java";
+        }
+        return fqClassName + ".java";
+    }
+
+    private int countFunctions(com.company.codeinsight.modules.hierarchy.model.ModuleDto moduleDto) {
+        int c = 0;
+        for (com.company.codeinsight.modules.hierarchy.model.SubModuleDto sm : moduleDto.getSubModules().values()) {
+            c += sm.getFunctions().size();
+        }
+        return c;
+    }
+
+    /**
+     * 将整个 ModuleHierarchy DTO 序列化为 JSON 字符串（注入 {module_hierarchy.json} 占位符）
+     */
+    private String serializeHierarchyToJson(com.company.codeinsight.modules.hierarchy.model.ModuleHierarchy hierarchy) {
+        if (hierarchy == null) return "{}";
+        try {
+            return objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(hierarchy);
+        } catch (Exception e) {
+            log.warn("serializeHierarchyToJson 失败，回退到空对象", e);
+            return "{}";
+        }
+    }
+
+    /**
+     * 旧 17 章节生成逻辑（DTO 为空时兜底调用，保留作为降级路径）
+     */
+    private void legacyGenerateDraftDocument(Long taskId, List<CodeChunk> chunks, String promptContent) {
+        DecompileTask task = decompileTaskMapper.selectById(taskId);
+
         // 根据路由分包算法对 Chunks 进行模块划分划分
         Map<String, List<CodeChunk>> moduleChunks = new HashMap<>();
         for (CodeChunk chunk : chunks) {
@@ -618,7 +935,7 @@ public class AiSummaryServiceImpl implements AiSummaryService {
 
             StringBuilder docBuilder = new StringBuilder();
             docBuilder.append("# ").append(moduleName).append(" 知识归纳\n\n");
-            
+
             docBuilder.append("## 一、 模块概述\n");
             docBuilder.append("本模块负责系统的 ").append(moduleName).append(" 核心功能。通过对相关代码的静态解析和 AI 归纳，梳理其主要职责和调用流向。\n\n");
 
@@ -697,7 +1014,7 @@ public class AiSummaryServiceImpl implements AiSummaryService {
                     docBuilder.append("### 方法: `").append(c.getMethodName()).append("`\n");
                     docBuilder.append("- **所属类**: `").append(c.getClassName()).append("`\n");
                     docBuilder.append("- **行范围**: 第 ").append(c.getStartLine()).append(" 行到第 ").append(c.getEndLine()).append(" 行\n");
-                    
+
                     // 为每一个方法级 Chunks 触发大模型归纳归纳
                     String chunkSummary = summarizeChunk(taskId, c.getId(), promptContent, task.getModelName());
                     docBuilder.append("\n**功能逻辑分析**:\n").append(chunkSummary).append("\n\n");
@@ -824,15 +1141,18 @@ public class AiSummaryServiceImpl implements AiSummaryService {
 
     /**
      * 保存 AI 原始响应记录并提交至 Token 审计表
+     * 已修复：promptId / promptVersion 不再写死 1，由调用方从 task.promptVersion 解析后传入
      */
-    private void saveCallRecordAndAudit(Long systemId, Long taskId, Long chunkId, String model, int inTokens, int outTokens,
-                                        String response, boolean isSuccess, String errorMsg, long duration) {
+    private void saveCallRecordAndAudit(Long systemId, Long taskId, Long promptId, Integer promptVersion,
+                                        Long chunkId, String model, int inTokens, int outTokens,
+                                        String response, boolean isSuccess, String errorMsg, long duration,
+                                        String callStage) {
         // 保存 AI 调用记录
         AiCallRecord record = new AiCallRecord();
         record.setTaskId(taskId);
         record.setChunkId(chunkId);
-        record.setPromptId(1L);
-        record.setPromptVersion(1);
+        record.setPromptId(promptId);
+        record.setPromptVersion(promptVersion);
         record.setModelName(model);
         record.setInputToken(inTokens);
         record.setOutputToken(outTokens);
@@ -842,12 +1162,13 @@ public class AiSummaryServiceImpl implements AiSummaryService {
         record.setCreatedAt(LocalDateTime.now());
 
         // 模拟请求和响应存储
-        String relativePath = "task_" + taskId + "/call_" + chunkId + "_" + System.currentTimeMillis();
+        String stageTag = callStage == null ? "call" : callStage.toLowerCase();
+        String relativePath = "task_" + taskId + "/" + stageTag + "_" + (chunkId == null ? "0" : chunkId) + "_" + System.currentTimeMillis();
         Path reqPath = Paths.get(localStoragePath, "ai_logs", relativePath + "_req.json");
         Path respPath = Paths.get(localStoragePath, "ai_logs", relativePath + "_resp.txt");
         try {
             Files.createDirectories(reqPath.getParent());
-            Files.writeString(reqPath, "{\"chunkId\":" + chunkId + ",\"model\":\"" + model + "\"}");
+            Files.writeString(reqPath, "{\"chunkId\":" + chunkId + ",\"model\":\"" + model + "\",\"stage\":\"" + callStage + "\"}");
             Files.writeString(respPath, response != null ? response : "");
             record.setRequestUri(reqPath.toAbsolutePath().toUri().toString());
             record.setResponseUri(respPath.toAbsolutePath().toUri().toString());
@@ -857,8 +1178,140 @@ public class AiSummaryServiceImpl implements AiSummaryService {
 
         aiCallRecordMapper.insert(record);
 
-        // 写入 Token 审计
-        tokenAuditService.logTokenUsage(systemId, taskId, model, inTokens, outTokens, "INITIAL", isSuccess);
+        // 写入 Token 审计（callStage 作为 type 维度）
+        tokenAuditService.logTokenUsage(systemId, taskId, model, inTokens, outTokens, callStage == null ? "INITIAL" : callStage, isSuccess);
+    }
+
+    /**
+     * 根据 prompt 版本号反查 ci_prompt 表的主键 id
+     */
+    private Long resolvePromptId(Integer version) {
+        if (version == null) {
+            return null;
+        }
+        try {
+            com.company.codeinsight.modules.prompt.entity.DecompilePrompt p = promptMapper.selectOne(
+                    new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<com.company.codeinsight.modules.prompt.entity.DecompilePrompt>()
+                            .eq(com.company.codeinsight.modules.prompt.entity.DecompilePrompt::getVersion, version)
+                            .last("LIMIT 1")
+            );
+            return p != null ? p.getId() : null;
+        } catch (Exception e) {
+            log.warn("resolvePromptId failed for version {}", version, e);
+            return null;
+        }
+    }
+
+    @Override
+    public String summarizeWithPrompt(Long taskId, String promptInput, String modelName, AiCallMeta callMeta) {
+        if (taskId == null || promptInput == null) {
+            return "{}";
+        }
+
+        DecompileTask task = decompileTaskMapper.selectById(taskId);
+        Long systemId = task != null ? task.getSystemId() : 0L;
+        Integer taskPromptVersion = task != null ? task.getPromptVersion() : null;
+        Long taskPromptId = resolvePromptId(taskPromptVersion);
+
+        String modelToUse = StringUtils.hasText(modelName) ? modelName : this.modelName;
+
+        // 模型热插拔：按 identifier 取 apiKey/baseUrl
+        String activeApiKey = this.apiKey;
+        String activeApiUrl = this.apiUrl;
+        if (StringUtils.hasText(modelToUse)) {
+            com.company.codeinsight.modules.model.entity.AiModel dbModel = aiModelMapper.selectOne(
+                    new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<com.company.codeinsight.modules.model.entity.AiModel>()
+                            .eq(com.company.codeinsight.modules.model.entity.AiModel::getIdentifier, modelToUse)
+                            .last("LIMIT 1")
+            );
+            if (dbModel != null) {
+                if (StringUtils.hasText(dbModel.getApiKey())) activeApiKey = dbModel.getApiKey();
+                if (StringUtils.hasText(dbModel.getBaseUrl())) activeApiUrl = dbModel.getBaseUrl();
+            }
+        }
+
+        String processedPrompt = filterSensitiveInfo(promptInput);
+
+        // Token 流控校验
+        int taskUsed = tokenAuditService.getTaskCumulativeTokens(taskId);
+        int systemUsed = tokenAuditService.getSystemMonthlyTokens(systemId);
+        int currentEstimate = processedPrompt.length() / 3;
+        if (taskUsed + currentEstimate > 100000) {
+            log.warn("Token 额度阻断：taskUsed={}, currentEstimate={}", taskUsed, currentEstimate);
+            return "{}";
+        }
+        if (systemUsed + currentEstimate > 1000000) {
+            log.warn("Token 额度阻断：systemUsed={}, currentEstimate={}", systemUsed, currentEstimate);
+            return "{}";
+        }
+
+        // Mock 降级
+        boolean shouldMock = this.aiMock
+                || !StringUtils.hasText(activeApiKey)
+                || activeApiKey.startsWith("test-key")
+                || "mock".equalsIgnoreCase(activeApiKey);
+
+        String callStage = callMeta != null && StringUtils.hasText(callMeta.getCallStage()) ? callMeta.getCallStage() : "PROMPT";
+
+        if (shouldMock) {
+            log.info("Mock 模式：对 task {} / stage {} 跳过 AI 调用", taskId, callStage);
+            saveCallRecordAndAudit(systemId, taskId, taskPromptId, taskPromptVersion,
+                    null, modelToUse, currentEstimate, 2, "{}", true, "mock-mode", 100, callStage);
+            return "{}";
+        }
+
+        long start = System.currentTimeMillis();
+        try {
+            Map<String, Object> reqBody = new HashMap<>();
+            reqBody.put("model", modelToUse);
+            reqBody.put("stream", false);
+            List<Map<String, String>> messages = new ArrayList<>();
+            Map<String, String> userMsg = new HashMap<>();
+            userMsg.put("role", "user");
+            userMsg.put("content", processedPrompt);
+            messages.add(userMsg);
+            reqBody.put("messages", messages);
+
+            String jsonPayload = objectMapper.writeValueAsString(reqBody);
+
+            String requestUrl = activeApiUrl;
+            if (!requestUrl.endsWith("/chat/completions")) {
+                requestUrl = requestUrl.replaceAll("/+$", "") + "/chat/completions";
+            }
+
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(requestUrl))
+                    .header("Authorization", "Bearer " + activeApiKey)
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(jsonPayload))
+                    .timeout(Duration.ofSeconds(45))
+                    .build();
+
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            long duration = System.currentTimeMillis() - start;
+
+            if (response.statusCode() == 200) {
+                JsonNode root = objectMapper.readTree(response.body());
+                String aiText = root.path("choices").get(0).path("message").path("content").asText();
+                int inTokens = root.path("usage").path("prompt_tokens").asInt(currentEstimate);
+                int outTokens = root.path("usage").path("completion_tokens").asInt(aiText.length() / 3);
+                saveCallRecordAndAudit(systemId, taskId, taskPromptId, taskPromptVersion,
+                        null, modelToUse, inTokens, outTokens, aiText, true, null, duration, callStage);
+                return aiText;
+            } else {
+                String errMsg = "HTTP " + response.statusCode() + ": " + response.body();
+                log.error("summarizeWithPrompt 调用失败: {}", errMsg);
+                saveCallRecordAndAudit(systemId, taskId, taskPromptId, taskPromptVersion,
+                        null, modelToUse, currentEstimate, 0, "{}", false, errMsg, duration, callStage);
+                return "{}";
+            }
+        } catch (Exception e) {
+            long duration = System.currentTimeMillis() - start;
+            log.error("summarizeWithPrompt 异常，降级返回空 JSON", e);
+            saveCallRecordAndAudit(systemId, taskId, taskPromptId, taskPromptVersion,
+                    null, modelToUse, currentEstimate, 0, "{}", false, e.getMessage(), duration, callStage);
+            return "{}";
+        }
     }
 
     /**

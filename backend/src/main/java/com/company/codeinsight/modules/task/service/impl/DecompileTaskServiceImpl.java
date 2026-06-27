@@ -60,6 +60,12 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
     @Autowired
     private CodeRepositoryService codeRepositoryService;
 
+    @Autowired
+    private com.company.codeinsight.modules.callchain.service.MethodCallService methodCallService;
+
+    @Autowired
+    private com.company.codeinsight.modules.hierarchy.service.ModuleHierarchyService moduleHierarchyService;
+
     /**
      * 分页获取任务列表
      */
@@ -85,10 +91,11 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
      */
     @Override
     @Transactional
-    public DecompileTask createInitialTask(Long systemId, Long repositoryId, Integer promptVersion, String modelName) {
+    public DecompileTask createInitialTask(Long systemId, Long repositoryId, Integer promptVersion, String modelName,
+                                           com.company.codeinsight.modules.entrypoint.model.EntryPointConfig entryScanConfig) {
         // 验证系统和仓库的从属合法性
         validateTaskSource(systemId, repositoryId);
-        
+
         DecompileTask task = new DecompileTask();
         task.setSystemId(systemId);
         task.setRepositoryId(repositoryId);
@@ -96,7 +103,7 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
         task.setStatus(TaskStatus.DRAFT.name());
         task.setType("INITIAL");
         task.setProgress(0);
-        
+
         // 若没有手动指定大模型，则拉取系统默认配置的模型
         if (!org.springframework.util.StringUtils.hasText(modelName)) {
             com.company.codeinsight.modules.model.entity.AiModel defaultModel = aiModelMapper.selectOne(
@@ -109,7 +116,8 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
             }
         }
         task.setModelName(modelName);
-        
+        task.setEntryScanConfig(com.company.codeinsight.modules.entrypoint.model.EntryPointConfigCodec.encode(entryScanConfig));
+
         this.save(task);
         return task;
     }
@@ -119,7 +127,8 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
      */
     @Override
     @Transactional
-    public DecompileTask createIncrementalTask(Long systemId, Long repositoryId, Integer promptVersion, String modelName) {
+    public DecompileTask createIncrementalTask(Long systemId, Long repositoryId, Integer promptVersion, String modelName,
+                                               com.company.codeinsight.modules.entrypoint.model.EntryPointConfig entryScanConfig) {
         validateTaskSource(systemId, repositoryId);
         DecompileTask task = new DecompileTask();
         task.setSystemId(systemId);
@@ -140,7 +149,8 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
             }
         }
         task.setModelName(modelName);
-        
+        task.setEntryScanConfig(com.company.codeinsight.modules.entrypoint.model.EntryPointConfigCodec.encode(entryScanConfig));
+
         this.save(task);
         return task;
     }
@@ -240,6 +250,9 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
                 stateMachineService.transitTo(taskId, TaskStatus.PARSING_CODE, null);
                 List<com.company.codeinsight.modules.scanner.entity.CodeFileSnapshot> snapshots = codeScannerService.getSnapshotsByTaskId(taskId);
 
+                // 2.5 AST 调用链落表维护（复用 JavaParserServiceImpl.parseFile，把解析产出的 methodCalls 持久化到 ci_method_call）
+                methodCallService.persistAstForTask(taskId, projectDir);
+
                 // 3. 进入分片切割提取阶段 (SPLITTING_TASK)
                 stateMachineService.transitTo(taskId, TaskStatus.SPLITTING_TASK, null);
                 codeChunkService.chunkAndEstimate(taskId, snapshots);
@@ -247,6 +260,10 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
                 // 4. 进入大模型 AI 归纳分析阶段 (AI_ANALYZING)
                 stateMachineService.transitTo(taskId, TaskStatus.AI_ANALYZING, null);
                 List<CodeChunk> chunks = codeChunkService.getChunksByTaskId(taskId);
+
+                // 4.5 进入模块层级提炼阶段 (MODULE_HIERARCHY)：基于 ci_method_call 反查入口，逐一提交 AI 提炼，维护 ModuleHierarchy DTO
+                stateMachineService.transitTo(taskId, TaskStatus.MODULE_HIERARCHY, null);
+                moduleHierarchyService.buildAndPersist(taskId, projectDir);
 
                 // 确定大模型分析时所用提示词的正文
                 String promptContent = "你是一个代码归纳助手，请对以下代码的业务功能进行高度归纳。";

@@ -1,6 +1,7 @@
 package com.company.codeinsight.modules.task.entity;
 
 import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
 import com.company.codeinsight.common.model.BaseEntity;
@@ -82,5 +83,12 @@ public class DecompileTask extends BaseEntity {
      * 任务结束时间（完成或失败）
      */
     private LocalDateTime endedAt;
+
+    /**
+     * 任务级入口扫描配置 JSON 字符串（整体序列化 EntryPointConfig）
+     * null 表示使用系统默认行为（注解驱动 Controller/JOB/MQ 等）
+     */
+    @TableField("entry_scan_config")
+    private String entryScanConfig;
 }
 

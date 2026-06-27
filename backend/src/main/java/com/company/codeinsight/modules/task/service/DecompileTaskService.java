@@ -2,6 +2,7 @@ package com.company.codeinsight.modules.task.service;
 
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.IService;
+import com.company.codeinsight.modules.entrypoint.model.EntryPointConfig;
 import com.company.codeinsight.modules.task.entity.DecompileTask;
 
 /**
@@ -18,24 +19,26 @@ public interface DecompileTaskService extends IService<DecompileTask> {
     /**
      * 创建一个全新的全量初始化分析任务，清空历史指纹快照
      *
-     * @param systemId      关联系统 ID
-     * @param repositoryId  关联代码库 ID
-     * @param promptVersion 提示词模板版本
-     * @param modelName     选定大模型标识
+     * @param systemId        关联系统 ID
+     * @param repositoryId    关联代码库 ID
+     * @param promptVersion   提示词模板版本
+     * @param modelName       选定大模型标识
+     * @param entryScanConfig 入口扫描配置（可为 null 表示走默认 Controller/JOB/MQ 兜底）
      * @return 刚创建的 DecompileTask 对象
      */
-    DecompileTask createInitialTask(Long systemId, Long repositoryId, Integer promptVersion, String modelName);
+    DecompileTask createInitialTask(Long systemId, Long repositoryId, Integer promptVersion, String modelName, EntryPointConfig entryScanConfig);
 
     /**
      * 创建一个全新的增量更新分析任务，根据 Git 变更选择性扫描分析
      *
-     * @param systemId      关联系统 ID
-     * @param repositoryId  关联代码库 ID
-     * @param promptVersion 提示词模板版本
-     * @param modelName     选定大模型标识
+     * @param systemId        关联系统 ID
+     * @param repositoryId    关联代码库 ID
+     * @param promptVersion   提示词模板版本
+     * @param modelName       选定大模型标识
+     * @param entryScanConfig 入口扫描配置（可为 null 表示走默认 Controller/JOB/MQ 兜底）
      * @return 刚创建的 DecompileTask 对象
      */
-    DecompileTask createIncrementalTask(Long systemId, Long repositoryId, Integer promptVersion, String modelName);
+    DecompileTask createIncrementalTask(Long systemId, Long repositoryId, Integer promptVersion, String modelName, EntryPointConfig entryScanConfig);
 
     /**
      * 触发异步执行引擎以启动该分析任务

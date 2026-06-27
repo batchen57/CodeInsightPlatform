@@ -60,7 +60,7 @@ public class DecompileTaskServiceTests {
 
     @Test
     public void testStateMachineTransitions() {
-        DecompileTask task = decompileTaskService.createInitialTask(systemId, repositoryId, 1, null);
+        DecompileTask task = decompileTaskService.createInitialTask(systemId, repositoryId, 1, null, null);
         Assertions.assertEquals(TaskStatus.DRAFT.name(), task.getStatus());
 
         // Valid transition
@@ -77,7 +77,7 @@ public class DecompileTaskServiceTests {
 
     @Test
     public void testTaskLifecycle() {
-        DecompileTask task = decompileTaskService.createIncrementalTask(systemId, repositoryId, 2, null);
+        DecompileTask task = decompileTaskService.createIncrementalTask(systemId, repositoryId, 2, null, null);
         Assertions.assertEquals("INCREMENTAL", task.getType());
         Assertions.assertEquals(TaskStatus.DRAFT.name(), task.getStatus());
 
@@ -106,7 +106,7 @@ public class DecompileTaskServiceTests {
 
         BusinessException exception = Assertions.assertThrows(
                 BusinessException.class,
-                () -> decompileTaskService.createInitialTask(otherSystem.getId(), repositoryId, 1, null)
+                () -> decompileTaskService.createInitialTask(otherSystem.getId(), repositoryId, 1, null, null)
         );
         Assertions.assertEquals("所选代码库不属于当前系统", exception.getMessage());
     }
