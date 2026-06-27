@@ -1,5 +1,6 @@
 import { createHashRouter } from 'react-router-dom';
 import BasicLayout from '../layouts/BasicLayout';
+import RequireAuth from './RequireAuth';
 import Dashboard from '../pages/dashboard';
 import Systems from '../pages/systems';
 import Prompts from '../pages/prompts';
@@ -10,6 +11,7 @@ import Push from '../pages/push';
 import TokenAudit from '../pages/token-audit';
 import Logs from '../pages/logs';
 import ModelConfig from '../pages/model/config';
+import Login from '../pages/login';
 
 /**
  * 全局 React 路由配置映射表
@@ -18,8 +20,16 @@ import ModelConfig from '../pages/model/config';
  */
 export const router = createHashRouter([
   {
+    path: '/login',
+    element: <Login />,
+  },
+  {
     path: '/',
-    element: <BasicLayout />, // 公共菜单及排版布局
+    element: (
+      <RequireAuth>
+        <BasicLayout />
+      </RequireAuth>
+    ), // 公共菜单及排版布局
     children: [
       {
         path: '', // 默认首页：工作台 Dashboard 看板

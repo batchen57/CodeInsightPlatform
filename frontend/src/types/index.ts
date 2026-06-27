@@ -108,6 +108,20 @@ export interface ApiResponse<T> {
   data: T;
 }
 
+export interface LoginRequest {
+  username: string;
+  password: string;
+  token: string;
+}
+
+export interface LoginResponse {
+  token: string;
+  username: string;
+  displayName: string;
+  role: string;
+  expiresInSeconds: number;
+}
+
 export interface AiModel {
   id: number;
   name: string;

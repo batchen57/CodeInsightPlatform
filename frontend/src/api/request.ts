@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { message } from 'antd';
+import { useAuthStore } from '../stores/auth';
 
 /**
  * 全局 Axios HTTP 客户端基础实例
@@ -10,6 +11,14 @@ const request = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL || '/api',
   // 设置 30 秒超时断开机制，防范因大模型分析接口响应迟缓导致的请求无限期挂起
   timeout: 30000,
+});
+
+request.interceptors.request.use((config) => {
+  const session = useAuthStore.getState().session;
+  if (session?.token) {
+    config.headers.Authorization = `Bearer ${session.token}`;
+  }
+  return config;
 });
 
 /**
