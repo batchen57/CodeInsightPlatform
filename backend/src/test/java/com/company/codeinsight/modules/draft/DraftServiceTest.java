@@ -16,9 +16,7 @@ import java.nio.file.Files;
 import java.time.LocalDateTime;
 import java.util.List;
 
-@SpringBootTest(properties = {
-    "spring.autoconfigure.exclude=org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration,org.springframework.boot.autoconfigure.data.redis.RedisRepositoriesAutoConfiguration"
-})
+@SpringBootTest
 @ActiveProfiles("test")
 @Transactional
 public class DraftServiceTest {

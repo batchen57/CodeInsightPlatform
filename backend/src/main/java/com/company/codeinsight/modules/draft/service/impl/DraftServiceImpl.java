@@ -7,7 +7,6 @@ import com.company.codeinsight.modules.draft.mapper.*;
 import com.company.codeinsight.modules.draft.service.DraftService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.DigestUtils;
@@ -25,11 +24,10 @@ import java.time.LocalDateTime;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.TimeUnit;
 
 /**
  * 知识草稿及评审工作区服务实现类
- * 负责平台草稿库的修改保存、自动缓存（基于 Redis + 本地 JVM 内存兜底）、修订版本行级差异计算、驳回/意见评审关联和确认归档。
+ * 负责平台草稿库的修改保存、自动缓存（基于本地 JVM 内存）、修订版本行级差异计算、驳回/意见评审关联和确认归档。
  */
 @Slf4j
 @Service
@@ -53,11 +51,7 @@ public class DraftServiceImpl implements DraftService {
     @Autowired
     private CodeRepositoryMapper repositoryMapper;
 
-    // 自动装配 Redis，若容器中未装配，则自动降级到本地内存缓存
-    @Autowired(required = false)
-    private StringRedisTemplate redisTemplate;
-
-    // 单元测试与无 Redis 环境下的 Fallback 内存缓存容器
+    // 本地 JVM 内存缓存容器（用于草稿自动保存）
     private static final ConcurrentHashMap<Long, String> memoryAutoSave = new ConcurrentHashMap<>();
 
     /**
@@ -90,7 +84,7 @@ public class DraftServiceImpl implements DraftService {
 
     /**
      * 获取草稿的最新的正文内容
-     * 优先从自动保存的临时缓存（Redis 或 JVM 内存）中提取尚未手动提交的修改，无临时缓存则读取物理存储正文。
+     * 优先从自动保存的临时缓存（JVM 内存）中提取尚未手动提交的修改，无临时缓存则读取物理存储正文。
      *
      * @param draftId 草稿 ID
      * @return Markdown 格式的文档内容
@@ -102,27 +96,15 @@ public class DraftServiceImpl implements DraftService {
             throw new BusinessException("草稿记录不存在");
         }
 
-        // 1. 尝试从 Redis 自动保存区拿
-        String autoSavedContent = null;
-        try {
-            if (redisTemplate != null) {
-                autoSavedContent = redisTemplate.opsForValue().get("draft:autosave:" + draftId);
-            }
-        } catch (Exception e) {
-            log.warn("从 Redis 读取自动保存失败，退回内存读取", e);
-        }
-        
-        // 2. 如果 Redis 没有或读取失败，退回到并发内存缓存中查找
-        if (autoSavedContent == null) {
-            autoSavedContent = memoryAutoSave.get(draftId);
-        }
+        // 1. 尝试从内存自动保存缓存中获取
+        String autoSavedContent = memoryAutoSave.get(draftId);
 
-        // 3. 如果找到了有效的自动保存缓存，直接返回该临时内容
+        // 2. 如果找到了有效的自动保存缓存，直接返回该临时内容
         if (StringUtils.hasText(autoSavedContent)) {
             return autoSavedContent;
         }
 
-        // 4. 若无自动保存痕迹，从原始 URI 地址读取磁盘上的正式草稿文件
+        // 3. 若无自动保存痕迹，从原始 URI 地址读取磁盘上的正式草稿文件
         try {
             File file = new File(URI.create(draft.getContentUri()));
             if (file.exists()) {
@@ -162,12 +144,7 @@ public class DraftServiceImpl implements DraftService {
             // 物理覆盖写入新正文
             Files.writeString(file.toPath(), content);
 
-            // 成功保存后，立即清理所有自动保存的临时缓存
-            try {
-                if (redisTemplate != null) {
-                    redisTemplate.delete("draft:autosave:" + draftId);
-                }
-            } catch (Exception ignored) {}
+            // 成功保存后，清理内存自动保存缓存
             memoryAutoSave.remove(draftId);
 
             // 计算 MD5 哈希校验和，状态流转为 REVISED (已修订)
@@ -220,18 +197,10 @@ public class DraftServiceImpl implements DraftService {
 
     /**
      * 临时自动保存草稿
-     * 避免网页崩溃导致数据丢失，缓存有效期设定为 7 天。
+     * 避免网页崩溃导致数据丢失，缓存至本地 JVM 内存。
      */
     @Override
     public void autoSaveDraft(Long draftId, String content, String author) {
-        try {
-            if (redisTemplate != null) {
-                // 以过期时间 7 天暂存至 Redis
-                redisTemplate.opsForValue().set("draft:autosave:" + draftId, content, 7, TimeUnit.DAYS);
-            }
-        } catch (Exception e) {
-            log.warn("保存到 Redis 自动保存区失败，降级到内存缓存", e);
-        }
         memoryAutoSave.put(draftId, content);
     }
 

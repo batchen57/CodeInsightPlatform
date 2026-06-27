@@ -173,7 +173,7 @@ public class KnowledgeServiceImpl implements KnowledgeService {
             // 5. 构建后端服务说明文档
             StringBuilder beBuilder = new StringBuilder();
             beBuilder.append("# 后端服务系统架构设计 (Java 17)\n\n");
-            beBuilder.append("## 核心框架\n- 基础框架: Spring Boot 3.x\n- 持久层: MyBatis-Plus / PostgreSQL\n- 缓存: Redis\n- 工作流: 任务状态机\n");
+            beBuilder.append("## 核心框架\n- 基础框架: Spring Boot 3.x\n- 持久层: MyBatis-Plus / PostgreSQL\n- 工作流: 任务状态机\n");
 
             // 6. 静态 AST 解析并自动合成系统路由接口说明（api-index.md）
             StringBuilder apiBuilder = new StringBuilder();
