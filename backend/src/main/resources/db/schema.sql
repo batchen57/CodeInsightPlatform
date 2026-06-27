@@ -8,13 +8,15 @@ CREATE TABLE IF NOT EXISTS ci_system (
     owner VARCHAR(50) NOT NULL,
     status SMALLINT DEFAULT 1 NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    deleted_at TIMESTAMP
 );
 COMMENT ON TABLE ci_system IS '系统管理表';
 COMMENT ON COLUMN ci_system.name IS '系统名称';
 COMMENT ON COLUMN ci_system.description IS '系统描述';
 COMMENT ON COLUMN ci_system.owner IS '系统负责人';
 COMMENT ON COLUMN ci_system.status IS '启用状态：0-停用，1-启用';
+COMMENT ON COLUMN ci_system.deleted_at IS '逻辑删除时间，NULL=未删除';
 
 -- 2. 代码库配置表
 CREATE TABLE IF NOT EXISTS ci_repository (
@@ -30,7 +32,8 @@ CREATE TABLE IF NOT EXISTS ci_repository (
     last_commit_id VARCHAR(100),
     last_decompile_at TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    deleted_at TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_repo_system_id ON ci_repository (system_id);
 COMMENT ON TABLE ci_repository IS '代码库配置表';
@@ -44,6 +47,10 @@ COMMENT ON COLUMN ci_repository.exclude_dirs IS '排除目录，逗号分隔';
 COMMENT ON COLUMN ci_repository.exclude_file_types IS '排除文件类型，逗号分隔';
 COMMENT ON COLUMN ci_repository.last_commit_id IS '最后确认 Commit ID';
 COMMENT ON COLUMN ci_repository.last_decompile_at IS '最后反编译时间';
+
+-- 2.1 代码库软删除字段
+ALTER TABLE ci_repository ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP;
+COMMENT ON COLUMN ci_repository.deleted_at IS '逻辑删除时间，NULL=未删除';
 
 -- 3. 提示词模板表
 CREATE TABLE IF NOT EXISTS ci_prompt (

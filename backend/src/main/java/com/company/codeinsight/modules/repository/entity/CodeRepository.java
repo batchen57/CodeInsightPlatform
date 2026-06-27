@@ -2,6 +2,7 @@ package com.company.codeinsight.modules.repository.entity;
 
 import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableId;
+import com.baomidou.mybatisplus.annotation.TableLogic;
 import com.baomidou.mybatisplus.annotation.TableName;
 import com.company.codeinsight.common.model.BaseEntity;
 import lombok.Data;
@@ -11,6 +12,7 @@ import java.time.LocalDateTime;
 /**
  * Git 代码仓库配置实体类
  * 对应数据库中的 ci_repository 表，存储 Git 仓库地址、克隆分支、访问帐密、扫描过滤规则及最近一次分析详情。
+ * 通过 deleted_at + @TableLogic 实现软删除。
  */
 @Data
 @EqualsAndHashCode(callSuper = true)
@@ -72,5 +74,11 @@ public class CodeRepository extends BaseEntity {
      * 最近一次触发反编译或分析任务的执行时间
      */
     private LocalDateTime lastDecompileAt;
+
+    /**
+     * 逻辑删除时间。NULL=未删除，非空=已删除时间。
+     */
+    @TableLogic
+    private LocalDateTime deletedAt;
 }
 

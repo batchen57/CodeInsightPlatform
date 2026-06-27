@@ -116,6 +116,17 @@ public class CodeRepositoryController {
     }
 
     /**
+     * 软删除代码库：存在活跃任务时拒绝。
+     */
+    @Operation(summary = "软删除代码库")
+    @DeleteMapping("/{id}")
+    public ApiResponse<Void> deleteRepository(@PathVariable Long id) {
+        codeRepositoryService.softDeleteRepository(id);
+        operationLogService.logOperation(null, null, "DELETE_REPO", "软删除代码库 ID=" + id, null, true);
+        return ApiResponse.success();
+    }
+
+    /**
      * 对关键认证凭证敏感字段进行统一的掩码星号脱敏安全处理
      */
     private void maskPassword(CodeRepository repo) {

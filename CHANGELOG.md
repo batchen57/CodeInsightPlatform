@@ -4,6 +4,28 @@
 
 ---
 
+## [v0.1.3] - 2026-06-27
+
+### 🔐 登录认证模块上线
+
+- **新增登录页 3 字段登录**：UM 账号 / UM 密码 / 平安令牌，平安令牌采用 6 位独立输入框，支持自动跳格、退格回退、粘贴自动拆分、满 6 位自动提交。
+- **登录页 UI 全面升级**：定制品牌 SVG 标识、点阵背景、玻璃卡片、内联错误反馈（替代开发期残留的"默认账号 / MVP 内存会话"提示）。
+- **后端 `AuthController / AuthService` 骨架**：[LoginRequest](backend/src/main/java/com/company/codeinsight/modules/auth/dto/LoginRequest.java) 加 `@Pattern` 校验 6 位数字令牌，当前为配置化账号占位实现，留待 UM/SSO 真实接入。
+- **前端新增 `useAuthStore`（Zustand）+ `RequireAuth` 路由守卫**：未登录访问受保护路由会重定向到 `/login`，登录态随组件树传播。
+
+### 🗃️ 系统与代码库管理升级
+
+- **软删除机制**：`ci_system` / `ci_repository` 加 `deleted_at` 字段（兼容旧库 `ALTER TABLE IF NOT EXISTS`），实体加 `@TableLogic`，所有查询自动过滤已删除记录；新增 `DELETE /systems/{id}` 与 `DELETE /repositories/{id}`，**强校验活跃任务**（PENDING / 拉取 / 解析 / 切片 / AI / 推送）存在时拒绝删除并明确报错；删除系统会**级联软删**其下所有未删除代码库。
+- **系统列表聚合指标**：`GET /systems` 一次性返回 3 个新字段——**代码库数 / 知识版本数 / 最近扫描时间**，单条 SQL 用 2 个 LEFT JOIN 子查询实现，避免 N+1。
+- **「立即扫描」入口**：代码库行加「扫描」按钮，跳转 `/tasks?systemId=X&repositoryId=Y&openCreate=1`，任务页自动预填并打开创建向导，把"配置"和"执行"在 UI 上打通。
+
+### 🐛 Bug 修复
+
+- **OtpInput 满 6 位提前自动提交**：`useMemoDigits` 之前用 `padEnd(length, '')`，由于 `padEnd` 在填充串为空时**不会补齐**，导致 digits 数组实际长度小于 6，输到第 2 位时 `next.every(d => d !== '')` 就提前返回 true 触发自动提交。改为 `Array.from({ length }, (_, i) => value[i] ?? '')` 始终返回正确长度。
+- **Form.Item 未自动注入 value/onChange 导致 OtpInput 运行时崩溃**：将 `OtpInputProps` 的 `value / onChange` 改为可选并加 `getValueProps` + `getValueFromEvent` 显式透传，避免初值 `undefined` 时 `value[0]` 报 TypeError。
+
+---
+
 ## [v0.1.2] - 2026-06-27
 
 ### 💡 核心代码注释与文档化优化

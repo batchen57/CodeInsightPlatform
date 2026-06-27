@@ -6,6 +6,10 @@ export interface System {
   status: number; // 0-停用, 1-启用
   createdAt: string;
   updatedAt: string;
+  // 以下字段由 /systems 聚合接口返回，list 才有
+  repositoryCount?: number;
+  knowledgeVersionCount?: number;
+  lastDecompileAt?: string;
 }
 
 export interface Repository {

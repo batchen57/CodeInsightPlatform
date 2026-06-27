@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.company.codeinsight.modules.system.mapper.SystemApplicationMapper">
+
+    <!-- 系统列表聚合查询：3 个子查询一次性返回所有运营指标 -->
+    <select id="listSystemsWithSummary" resultType="com.company.codeinsight.modules.system.vo.SystemSummaryVO">
+        SELECT
+            s.*,
+            COALESCE(repo.cnt, 0) AS repository_count,
+            COALESCE(kv.cnt, 0) AS knowledge_version_count,
+            repo.last_decompile_at AS last_decompile_at
+        FROM ci_system s
+        LEFT JOIN (
+            SELECT system_id,
+                   COUNT(*) AS cnt,
+                   MAX(last_decompile_at) AS last_decompile_at
+            FROM ci_repository
+            WHERE deleted_at IS NULL
+            GROUP BY system_id
+        ) repo ON repo.system_id = s.id
+        LEFT JOIN (
+            SELECT system_id, COUNT(*) AS cnt
+            FROM ci_knowledge_version
+            GROUP BY system_id
+        ) kv ON kv.system_id = s.id
+        <where>
+            s.deleted_at IS NULL
+            <if test="name != null and name != ''">
+                AND s.name LIKE CONCAT('%', #{name}, '%')
+            </if>
+            <if test="owner != null and owner != ''">
+                AND s.owner = #{owner}
+            </if>
+            <if test="status != null">
+                AND s.status = #{status}
+            </if>
+        </where>
+        ORDER BY s.created_at DESC
+    </select>
+
+</mapper>
