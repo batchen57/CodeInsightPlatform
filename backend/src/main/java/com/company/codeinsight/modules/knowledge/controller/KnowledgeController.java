@@ -13,6 +13,10 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+/**
+ * 知识推送与版本管理控制器
+ * 提供知识库新版本创建、Git 推送提交、ZIP 压缩包二进制流导出及版本记录的分页查询端点。
+ */
 @Tag(name = "知识推送与版本", description = "知识元数据版本生成、Git 推送提交、ZIP 数据导出接口")
 @RestController
 @RequestMapping("/knowledge")
@@ -21,6 +25,13 @@ public class KnowledgeController {
     @Autowired
     private KnowledgeService knowledgeService;
 
+    /**
+     * 根据复核通过的任务创建知识版本记录
+     *
+     * @param taskId      任务 ID
+     * @param versionNum  自定义版本号（如 v1.0.0）
+     * @param confirmedBy 操作确认负责人用户名
+     */
     @Operation(summary = "创建新知识版本")
     @PostMapping("/version")
     public ApiResponse<KnowledgeVersion> createVersion(
@@ -31,6 +42,9 @@ public class KnowledgeController {
         return ApiResponse.success(version);
     }
 
+    /**
+     * 提交推送当前版本到目标 Git 代码库
+     */
     @Operation(summary = "提交推送至 Git 代码库")
     @PostMapping("/{versionId}/push")
     public ApiResponse<Void> push(@PathVariable Long versionId) {
@@ -38,6 +52,9 @@ public class KnowledgeController {
         return ApiResponse.success();
     }
 
+    /**
+     * 导出当前版本的所有文档为 ZIP 格式的二进制数据流进行本地下载
+     */
     @Operation(summary = "导出为 ZIP 包二进制流")
     @GetMapping("/{versionId}/export")
     public ResponseEntity<byte[]> exportZip(@PathVariable Long versionId) {
@@ -48,6 +65,9 @@ public class KnowledgeController {
         return new ResponseEntity<>(bytes, headers, HttpStatus.OK);
     }
 
+    /**
+     * 知识发布版本的分页列表查询
+     */
     @Operation(summary = "知识版本分页查询")
     @GetMapping("/page")
     public ApiResponse<PageResult<KnowledgeVersion>> getPage(
@@ -59,3 +79,4 @@ public class KnowledgeController {
         return ApiResponse.success(result);
     }
 }
+

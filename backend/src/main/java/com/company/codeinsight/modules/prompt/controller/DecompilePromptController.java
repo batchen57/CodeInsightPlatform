@@ -16,6 +16,10 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 
+/**
+ * AI 提示词模板管理控制器
+ * 提供提示词配置的创建、版本编辑递增、克隆复制、启用状态切换、删除约束、以及基于样本代码的测试试跑 REST API 端点。
+ */
 @Tag(name = "提示词管理", description = "用于代码总结的 AI 提示词模板管理")
 @RestController
 @RequestMapping("/prompts")
@@ -28,6 +32,9 @@ public class DecompilePromptController {
     @Autowired
     private OperationLogService operationLogService;
 
+    /**
+     * 创建新的提示词模板，初始默认版本号为 1 且启用
+     */
     @Operation(summary = "创建提示词模板")
     @PostMapping
     public ApiResponse<DecompilePrompt> createPrompt(@Valid @RequestBody DecompilePrompt prompt) {
@@ -39,6 +46,9 @@ public class DecompilePromptController {
         return ApiResponse.success(prompt);
     }
 
+    /**
+     * 更新已存在的提示词模板内容，自动递增版本号做审计回溯
+     */
     @Operation(summary = "编辑提示词模板")
     @PutMapping("/{id}")
     public ApiResponse<DecompilePrompt> updatePrompt(@PathVariable Long id, @Valid @RequestBody DecompilePrompt prompt) {
@@ -53,6 +63,9 @@ public class DecompilePromptController {
         return ApiResponse.success(prompt);
     }
 
+    /**
+     * 克隆指定的提示词模板，生成一份副本作为基础模板
+     */
     @Operation(summary = "克隆/复制提示词模板")
     @PostMapping("/{id}/clone")
     public ApiResponse<DecompilePrompt> clonePrompt(@PathVariable Long id) {
@@ -61,6 +74,9 @@ public class DecompilePromptController {
         return ApiResponse.success(cloned);
     }
 
+    /**
+     * 修改提示词的使用启用状态（启用 / 禁用）
+     */
     @Operation(summary = "修改提示词启用状态")
     @PutMapping("/{id}/status")
     public ApiResponse<Void> changeStatus(@PathVariable Long id, @RequestParam Integer status) {
@@ -69,6 +85,9 @@ public class DecompilePromptController {
         return ApiResponse.success();
     }
 
+    /**
+     * 获取指定 ID 提示词模板详情
+     */
     @Operation(summary = "提示词模板详情")
     @GetMapping("/{id}")
     public ApiResponse<DecompilePrompt> getPrompt(@PathVariable Long id) {
@@ -76,6 +95,9 @@ public class DecompilePromptController {
         return ApiResponse.success(prompt);
     }
 
+    /**
+     * 分页多条件检索提示词模板
+     */
     @Operation(summary = "提示词模板分页查询")
     @GetMapping
     public ApiResponse<PageResult<DecompilePrompt>> listPrompts(
@@ -88,6 +110,9 @@ public class DecompilePromptController {
         return ApiResponse.success(result);
     }
 
+    /**
+     * 删除特定的提示词模板配置（防止误删默认首选项）
+     */
     @Operation(summary = "删除提示词模板")
     @DeleteMapping("/{id}")
     public ApiResponse<Void> deletePrompt(@PathVariable Long id) {
@@ -103,6 +128,9 @@ public class DecompilePromptController {
         return ApiResponse.success();
     }
 
+    /**
+     * 调试试跑提示词模板：提交测试源码片断，实时调度大模型分析返回归纳结果以辅助调试
+     */
     @Operation(summary = "试跑提示词模板")
     @PostMapping("/{id}/test-run")
     public ApiResponse<PromptTestResultDto> testRun(@PathVariable Long id, @RequestBody TestRunRequest request) {
@@ -111,9 +139,19 @@ public class DecompilePromptController {
         return ApiResponse.success(result);
     }
 
+    /**
+     * 试跑测试请求载荷类
+     */
     @Data
     public static class TestRunRequest {
+        /**
+         * 用于测试输入的一段样例源码（如 Java 方法代码）
+         */
         private String sampleCode;
+        /**
+         * 所需测试调用的 AI 大模型 ID
+         */
         private Long modelId;
     }
 }
+

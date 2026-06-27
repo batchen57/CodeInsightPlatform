@@ -14,6 +14,10 @@ import org.springframework.util.StringUtils;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 
+/**
+ * 代码仓库管理控制器
+ * 提供代码仓库连接的创建、编辑保存、Git 连接测试验证（包括未保存和已保存的连通性校验）以及密码参数脱敏的 API 访问端点。
+ */
 @Tag(name = "代码库管理", description = "代码库配置及连接测试接口")
 @RestController
 @RequestMapping("/repositories")
@@ -26,6 +30,9 @@ public class CodeRepositoryController {
     @Autowired
     private OperationLogService operationLogService;
 
+    /**
+     * 新增代码库配置，默认进行密码凭证脱敏
+     */
     @Operation(summary = "新增代码库")
     @PostMapping
     public ApiResponse<CodeRepository> createRepository(@Valid @RequestBody CodeRepository repository) {
@@ -36,6 +43,9 @@ public class CodeRepositoryController {
         return ApiResponse.success(repository);
     }
 
+    /**
+     * 编辑代码库配置。如果密码输入为星号“******”且未更改，则默认还原为旧凭证进行保存。
+     */
     @Operation(summary = "编辑代码库")
     @PutMapping("/{id}")
     public ApiResponse<CodeRepository> updateRepository(@PathVariable Long id, @Valid @RequestBody CodeRepository repository) {
@@ -52,6 +62,9 @@ public class CodeRepositoryController {
         return ApiResponse.success(repository);
     }
 
+    /**
+     * 获取指定 ID 的代码仓库元数据（进行密码脱敏）
+     */
     @Operation(summary = "代码库详情")
     @GetMapping("/{id}")
     public ApiResponse<CodeRepository> getRepository(@PathVariable Long id) {
@@ -60,6 +73,9 @@ public class CodeRepositoryController {
         return ApiResponse.success(repository);
     }
 
+    /**
+     * 分页查询已登记注册的 Git 仓库配置信息
+     */
     @Operation(summary = "代码库分页查询")
     @GetMapping
     public ApiResponse<PageResult<CodeRepository>> listRepositories(
@@ -73,6 +89,9 @@ public class CodeRepositoryController {
         return ApiResponse.success(result);
     }
 
+    /**
+     * 临时测试 Git 仓库网络连通性与认证凭证有效性（未保存配置前测试）
+     */
     @Operation(summary = "测试 Git 连接 (未保存)")
     @PostMapping("/test-connection")
     public ApiResponse<Boolean> testConnectionBeforeSave(@RequestBody CodeRepository repository) {
@@ -86,6 +105,9 @@ public class CodeRepositoryController {
         return ApiResponse.success(connected);
     }
 
+    /**
+     * 对已经持久化保存的代码仓库进行连通性连接测试
+     */
     @Operation(summary = "测试 Git 连接 (已保存)")
     @PostMapping("/{id}/test-connection")
     public ApiResponse<Boolean> testConnectionSaved(@PathVariable Long id) {
@@ -93,9 +115,13 @@ public class CodeRepositoryController {
         return ApiResponse.success(connected);
     }
 
+    /**
+     * 对关键认证凭证敏感字段进行统一的掩码星号脱敏安全处理
+     */
     private void maskPassword(CodeRepository repo) {
         if (repo != null && StringUtils.hasText(repo.getPassword())) {
             repo.setPassword("******");
         }
     }
 }
+

@@ -29,6 +29,10 @@ import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+/**
+ * AI 提示词模板管理服务实现类
+ * 负责模板的查询、克隆备份、启动状态切换、大括号占位符渲染以及在线模型试跑测试（包含防网络抖动的 Mock 归纳生成器降级机制）。
+ */
 @Slf4j
 @Service
 public class DecompilePromptServiceImpl extends ServiceImpl<DecompilePromptMapper, DecompilePrompt> implements DecompilePromptService {
@@ -56,6 +60,9 @@ public class DecompilePromptServiceImpl extends ServiceImpl<DecompilePromptMappe
 
     private final HttpClient httpClient = HttpClient.newBuilder().build();
 
+    /**
+     * 分页查询提示词模板，支持模糊搜索模板名称，按照创建时间倒序排列
+     */
     @Override
     public Page<DecompilePrompt> listPromptsPage(int current, int size, String name, Integer status) {
         Page<DecompilePrompt> page = new Page<>(current, size);
@@ -66,6 +73,10 @@ public class DecompilePromptServiceImpl extends ServiceImpl<DecompilePromptMappe
         return this.page(page, queryWrapper);
     }
 
+    /**
+     * 复制/克隆提示词模板
+     * 重新生成一份初始版本为 1、默认禁用的模板副本。
+     */
     @Override
     public DecompilePrompt clonePrompt(Long id) {
         DecompilePrompt original = this.getById(id);
@@ -77,11 +88,15 @@ public class DecompilePromptServiceImpl extends ServiceImpl<DecompilePromptMappe
         cloned.setContent(original.getContent());
         cloned.setVersion(1);
         cloned.setStatus(0); // 默认禁用
-        cloned.setIsDefault(0); // 默认非系统默认
+        cloned.setIsDefault(0); // 默认非默认
         this.save(cloned);
         return cloned;
     }
 
+    /**
+     * 修改提示词状态（0-禁用, 1-启用）
+     * 并且在此提示词是默认模板时，排他性地修改其它模板为非默认。
+     */
     @Override
     public void changeStatus(Long id, Integer status) {
         DecompilePrompt prompt = this.getById(id);
@@ -102,6 +117,9 @@ public class DecompilePromptServiceImpl extends ServiceImpl<DecompilePromptMappe
         }
     }
 
+    /**
+     * 对提示词模板中的 ${variable_name} 变量进行检索替换
+     */
     @Override
     public String replaceVariables(String template, Map<String, String> variables) {
         if (!StringUtils.hasText(template) || variables == null) {
@@ -116,6 +134,10 @@ public class DecompilePromptServiceImpl extends ServiceImpl<DecompilePromptMappe
         return result;
     }
 
+    /**
+     * 在线测试运行提示词模板
+     * 用一段示例代码和所选模型参数，调用大模型（或使用内置的高保真测试 MOCK 生成器降级流程）。
+     */
     @Override
     public PromptTestResultDto testRun(Long id, String sampleCode, Long modelId) {
         DecompilePrompt prompt = this.getById(id);
@@ -123,10 +145,11 @@ public class DecompilePromptServiceImpl extends ServiceImpl<DecompilePromptMappe
             throw new BusinessException("提示词模板不存在");
         }
 
-        // 动态从 Java 示例代码中解析出类名和核心方法名
+        // 1. 动态从 Java 示例代码中正则匹配出类名和核心方法名
         String parsedClass = parseClassName(sampleCode);
         String parsedMethod = parseMethodName(sampleCode);
 
+        // 2. 组装占位符映射
         Map<String, String> vars = new HashMap<>();
         vars.put("class_name", parsedClass);
         vars.put("method_name", parsedMethod);
@@ -134,12 +157,12 @@ public class DecompilePromptServiceImpl extends ServiceImpl<DecompilePromptMappe
 
         String filledPrompt = replaceVariables(prompt.getContent(), vars);
 
-        // 获取选中的模型配置
+        // 3. 获取大模型配置
         com.company.codeinsight.modules.model.entity.AiModel model = null;
         if (modelId != null) {
             model = aiModelMapper.selectById(modelId);
         } else {
-            // 获取系统默认的模型
+            // 获取系统设置的默认模型
             model = aiModelMapper.selectOne(
                     new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<com.company.codeinsight.modules.model.entity.AiModel>()
                             .eq(com.company.codeinsight.modules.model.entity.AiModel::getIsDefault, "true")
@@ -154,8 +177,7 @@ public class DecompilePromptServiceImpl extends ServiceImpl<DecompilePromptMappe
         long start = System.currentTimeMillis();
         PromptTestResultDto result = new PromptTestResultDto();
 
-        // 判定是否使用 Mock
-        // 如果开启了全局 Mock，或者 API Key 为空、测试 key、mock key，则使用 Mock；否则使用真实 AI
+        // 4. 判定是否满足使用 Mock 降级条件
         boolean shouldMock = this.isMockAi;
         if (!shouldMock) {
             if (!StringUtils.hasText(activeApiKey) || activeApiKey.startsWith("test-key") || "mock".equalsIgnoreCase(activeApiKey)) {
@@ -164,7 +186,7 @@ public class DecompilePromptServiceImpl extends ServiceImpl<DecompilePromptMappe
         }
 
         if (shouldMock) {
-            // Mock LLM Call - 仿真 Mock 生成器，根据类名、方法名以及解析出的属性依赖关系，生成高逼真的总结
+            // 4.1 Mock 降级 - 使用高保真仿真分析器模拟文档生成
             result.setInputTokens(filledPrompt.length() / 4);
             String mockReply = generateMockTestResult(parsedClass, parsedMethod, sampleCode, modelName);
             result.setOutputTokens(mockReply.length() / 4);
@@ -172,10 +194,10 @@ public class DecompilePromptServiceImpl extends ServiceImpl<DecompilePromptMappe
             result.setResult(mockReply);
             result.setErrorReason(null);
 
-            // 记录 Token 审计
+            // 记录审计日志
             tokenAuditService.logTokenUsage(null, null, modelName, result.getInputTokens(), result.getOutputTokens(), "TEST", true);
         } else {
-            // 调用真实 AI 服务
+            // 4.2 真实大模型调用，拼装标准 OpenAI 协议
             try {
                 Map<String, Object> reqBody = new HashMap<>();
                 reqBody.put("model", modelName);
@@ -244,6 +266,9 @@ public class DecompilePromptServiceImpl extends ServiceImpl<DecompilePromptMappe
         return result;
     }
 
+    /**
+     * 正则提取测试代码中的类名
+     */
     private String parseClassName(String sampleCode) {
         if (!StringUtils.hasText(sampleCode)) {
             return "MockTestClass";
@@ -256,6 +281,9 @@ public class DecompilePromptServiceImpl extends ServiceImpl<DecompilePromptMappe
         return "MockTestClass";
     }
 
+    /**
+     * 正则提取测试代码中的核心方法名
+     */
     private String parseMethodName(String sampleCode) {
         if (!StringUtils.hasText(sampleCode)) {
             return "mockExecute";
@@ -271,6 +299,9 @@ public class DecompilePromptServiceImpl extends ServiceImpl<DecompilePromptMappe
         return "mockExecute";
     }
 
+    /**
+     * 高逼真仿真测试结果生成器
+     */
     private String generateMockTestResult(String className, String methodName, String sampleCode, String modelName) {
         StringBuilder sb = new StringBuilder();
         
@@ -282,7 +313,7 @@ public class DecompilePromptServiceImpl extends ServiceImpl<DecompilePromptMappe
         } else if (className.endsWith("Mapper")) {
             sb.append("`").append(className).append("` 是 MyBatis 数据访问持久层接口。通过注解或 XML 配置底层的 SQL 语句，实现与数据库表的映射，为业务层提供原子级的数据查询与存取支持。\n\n");
         } else {
-            sb.append("`").append(className).append("` 是一个业务处理类，定义了核心业务流的骨架，负责组织和执行对应的数据处理逻辑。\n\n");
+            sb.append("`").append(className).append("` 是一个业务处理类，定义了核心业务流的骨架，负责组织 and 执行对应的数据处理逻辑。\n\n");
         }
         
         sb.append("## 2. 核心流程\n");

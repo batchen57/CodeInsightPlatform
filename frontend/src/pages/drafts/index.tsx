@@ -58,6 +58,7 @@ import type { System, Task } from '../../types';
 const { Text } = Typography;
 const { TextArea } = Input;
 
+// 统一的草稿状态颜色映射
 const statusColor: Record<string, string> = {
   AI_GENERATED: 'cyan',
   PENDING_REVIEW: 'magenta',
@@ -69,6 +70,7 @@ const statusColor: Record<string, string> = {
   ARCHIVED: 'default',
 };
 
+// 草稿状态文本映射说明
 const statusLabel: Record<string, string> = {
   AI_GENERATED: 'AI 已生成',
   PENDING_REVIEW: '待复核',
@@ -80,6 +82,7 @@ const statusLabel: Record<string, string> = {
   ARCHIVED: '已归档',
 };
 
+// 草稿状态对应 Antd Badge 微标类型的渲染配置
 const statusBadgeType: Record<string, "success" | "processing" | "error" | "warning" | "default"> = {
   AI_GENERATED: 'processing',
   PENDING_REVIEW: 'warning',
@@ -91,36 +94,56 @@ const statusBadgeType: Record<string, "success" | "processing" | "error" | "warn
   ARCHIVED: 'default',
 };
 
+/**
+ * 知识复核工作区组件 (Drafts)
+ * 支持左侧模块目录结构树状展现、中间集成式 Monaco Editor 编辑器实现实时修改、右侧多页签聚合呈现待确认指标列表、源文件代码关联、修改历史和审核意见。
+ * 包含 Redis 编辑锁仿真和 1.8 秒防抖自动暂存逻辑。
+ */
 const Drafts: React.FC = () => {
   const navigate = useNavigate();
+  
+  // 系统下拉数据及选中的系统 ID
   const [systems, setSystems] = useState<System[]>([]);
   const [selectedSystemId, setSelectedSystemId] = useState<number | undefined>();
+  // 当前系统关联的任务列表及选中的任务 ID
   const [tasks, setTasks] = useState<Task[]>([]);
   const [selectedTaskId, setSelectedTaskId] = useState<number | undefined>();
 
+  // 任务对应生成的草稿工作区和草稿模块列表
   const [workspace, setWorkspace] = useState<DraftWorkspace | null>(null);
   const [drafts, setDrafts] = useState<KnowledgeDraft[]>([]);
+  // 当前选中的模块草稿 ID 与具体草稿实体
   const [selectedDraftId, setSelectedDraftId] = useState<number | null>(null);
   const [selectedDraft, setSelectedDraft] = useState<KnowledgeDraft | null>(null);
 
+  // 编辑器状态：当前最新的编辑文本 and 最近一次保存的原始文本
   const [editorContent, setEditorContent] = useState('');
   const [originalContent, setOriginalContent] = useState('');
+  
+  // 编辑器自动保存状态字与防抖定时器引用
   const [autoSaveStatus, setAutoSaveStatus] = useState('已同步');
   const autoSaveTimer = useRef<number | null>(null);
 
+  // 当前草稿关联的历史版本记录、审核意见和涉及的源文件引用
   const [revisions, setRevisions] = useState<DraftRevision[]>([]);
   const [comments, setComments] = useState<DraftReviewComment[]>([]);
   const [references, setReferences] = useState<DraftSourceReference[]>([]);
 
+  // 驳回弹框控制、驳回意见文字
   const [rejectModalOpen, setRejectModalOpen] = useState(false);
   const [rejectComment, setRejectComment] = useState('');
+  // 重新触发后台任务的 loading 状态
   const [rerunLoading, setRerunLoading] = useState(false);
+  
+  // Monaco 编辑器底层引用
   const editorRef = useRef<any>(null);
 
+  // 计算属性：已通过、已确认或推送归档的文章设为只读模式以防止误写
   const isReadOnly = useMemo(() => {
     return selectedDraft ? ['CONFIRMED', 'PUSHED', 'ARCHIVED'].includes(selectedDraft.status) : false;
   }, [selectedDraft]);
 
+  // 初始化：获取已启用的全部业务系统列表
   useEffect(() => {
     listSystems({ current: 1, size: 100, status: 1 }).then((data) => {
       setSystems(data.records);
@@ -130,12 +153,14 @@ const Drafts: React.FC = () => {
     });
   }, []);
 
+  // 联动监听所选系统变更，重载关联的历史分析任务列表
   useEffect(() => {
     if (!selectedSystemId) {
       return;
     }
     listTasks({ current: 1, size: 100, systemId: selectedSystemId }).then((data) => {
       setTasks(data.records);
+      // 优先高亮高亮有待人工处理的任务（如待复核、复核中等）
       const reviewTask = data.records.find((task) => ['PENDING_REVIEW', 'REVIEWING'].includes(task.status));
       setSelectedTaskId(reviewTask?.id ?? data.records[0]?.id);
       if (data.records.length === 0) {
@@ -146,6 +171,7 @@ const Drafts: React.FC = () => {
     });
   }, [selectedSystemId]);
 
+  // 联动监听所选任务变更，拉取对应的工作区 (Workspace) 及包含的全部模块列表
   useEffect(() => {
     if (!selectedTaskId) {
       return;
@@ -178,7 +204,7 @@ const Drafts: React.FC = () => {
     const currentDraft = drafts.find((draft) => draft.id === selectedDraftId) ?? null;
     setSelectedDraft(currentDraft);
 
-    // 并发查询单篇草稿所需的多维度信息
+    // 并发查询单篇草稿所需的多维度信息，实现快速的页签切换联动
     Promise.all([
       getDraftContent(selectedDraftId),
       getRevisions(selectedDraftId),
@@ -198,6 +224,9 @@ const Drafts: React.FC = () => {
     editorRef.current = editor;
   };
 
+  /**
+   * 辅助定位跳转：在待确认页签下点击某项时，Monaco 编辑器自动滚动高亮到对应行号
+   */
   const scrollToLine = (lineNum: number) => {
     if (editorRef.current) {
       editorRef.current.revealLineInCenter(lineNum);
@@ -206,7 +235,7 @@ const Drafts: React.FC = () => {
     }
   };
 
-  // 实时从 Markdown 内容中解析出待确认的事项（以 `- [ ]` 开头的列表行）
+  // 实时从 Markdown 内容中动态提取待确认的事项（正则匹配格式如 `- [ ] 待确认描述`）
   const pendingConfirmations = useMemo(() => {
     if (!editorContent) return [];
     const lines = editorContent.split('\n');
@@ -319,6 +348,7 @@ const Drafts: React.FC = () => {
     navigate('/push', { state: { systemId: selectedSystemId } });
   };
 
+  // 左侧目录树节点构建
   const treeData = drafts.map((draft) => {
     const badgeStatus = statusBadgeType[draft.status] ?? 'default';
     const isSelected = selectedDraftId === draft.id;
@@ -348,6 +378,7 @@ const Drafts: React.FC = () => {
 
   return (
     <div className="ci-page ci-review-page ci-drafts-page">
+      {/* 顶部系统与关联任务选择器 */}
       <Card className="ci-filter-card" style={{ flexShrink: 0 }}>
         <Row gutter={[12, 12]} align="middle">
           <Col xs={24} md={8}>
@@ -380,8 +411,10 @@ const Drafts: React.FC = () => {
         </Row>
       </Card>
 
+      {/* 工作区详情部分 */}
       {workspace ? (
         <Row gutter={[16, 16]} className="ci-review-grid">
+          {/* 左侧：模块目录结构树 */}
           <Col xs={24} lg={5}>
             <Card title="模块目录" className="ci-review-panel">
               <div style={{ maxHeight: 'calc(100vh - 300px)', overflowY: 'auto', paddingRight: 4 }}>
@@ -404,6 +437,7 @@ const Drafts: React.FC = () => {
             </Card>
           </Col>
 
+          {/* 中间：Monaco 编辑器区域 */}
           <Col xs={24} lg={12}>
             <Card
               className="ci-review-panel"
@@ -435,6 +469,7 @@ const Drafts: React.FC = () => {
             >
               {selectedDraftId ? (
                 <div style={{ display: 'flex', flexDirection: 'column', height: '100%', gap: '12px' }}>
+                  {/* 编辑器操作工具栏 */}
                   <div className="ci-editor-actions" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 }}>
                     <Space size={8}>
                       {!isReadOnly && (
@@ -466,6 +501,7 @@ const Drafts: React.FC = () => {
                       </Button>
                     </Space>
                   </div>
+                  {/* 编辑器容器 */}
                   <div className="ci-editor-shell">
                     <Editor
                       height="100%"
@@ -496,6 +532,7 @@ const Drafts: React.FC = () => {
             </Card>
           </Col>
 
+          {/* 右侧：多维度关联属性页签（待确认、代码来源、修订历史、复核意见） */}
           <Col xs={24} lg={7}>
             <Card className="ci-review-panel">
               <Tabs
@@ -649,6 +686,7 @@ const Drafts: React.FC = () => {
         </Card>
       )}
 
+      {/* 驳回意见输入弹框 */}
       <Modal
         title="驳回草稿"
         open={rejectModalOpen}
@@ -659,7 +697,7 @@ const Drafts: React.FC = () => {
         }}
         okText="驳回"
         okButtonProps={{ danger: true }}
-        destroyOnHidden
+        destroyOnClose
       >
         <TextArea
           rows={4}
@@ -673,4 +711,3 @@ const Drafts: React.FC = () => {
 };
 
 export default Drafts;
-

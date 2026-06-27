@@ -136,6 +136,8 @@ public class AiSummaryServiceImpl implements AiSummaryService {
 
         String activeApiKey = this.apiKey;
         String activeApiUrl = this.apiUrl;
+        
+        // 1. 根据选用的模型名称，从数据库中动态载入最新的接口端点与密钥配置以支持多模型热插拔
         if (StringUtils.hasText(modelToUse)) {
             com.company.codeinsight.modules.model.entity.AiModel dbModel = aiModelMapper.selectOne(
                     new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<com.company.codeinsight.modules.model.entity.AiModel>()
@@ -152,17 +154,17 @@ public class AiSummaryServiceImpl implements AiSummaryService {
             }
         }
 
-        // 从对应的快照物理文件读取本切片对应的代码行集合
+        // 2. 从对应的快照物理文件读取本切片对应的代码行集合
         String codeContent = getChunkContent(chunk);
         
-        // 组装最终提交给模型的 Prompt 输入，嵌入上下文文件名
+        // 3. 组装最终提交给模型的 Prompt 输入，嵌入上下文文件名
         String systemPrompt = StringUtils.hasText(promptContent) ? promptContent : "你是一个资深架构师，请对以下代码进行详细的业务与功能归纳。";
         String promptInput = systemPrompt + "\n\n[代码源文件: " + chunk.getFilePath() + "]\n```java\n" + codeContent + "\n```";
         
-        // 正则过滤涉密资产数据（密码、私钥、内网IP等敏感项）
+        // 4. 正则过滤涉密资产数据（密码、私钥、内网IP等敏感项）防止敏感资产泄漏泄漏
         promptInput = filterSensitiveInfo(promptInput);
 
-        // 双层流控审计：单次任务 100K 限制，单系统月度 1M 限制
+        // 5. 双层流控审计机制：限制单次任务 Token 用量不超过 100K 限制，单系统月度累积不超过 1M 限制
         int taskUsed = tokenAuditService.getTaskCumulativeTokens(taskId);
         int systemUsed = tokenAuditService.getSystemMonthlyTokens(systemId);
         // 按字符数除以 3 大致估算本次请求的 Token 占位数
@@ -175,7 +177,7 @@ public class AiSummaryServiceImpl implements AiSummaryService {
             throw new BusinessException("Token 消耗额度超限阻断：单系统月度额度上限为 1,000,000，当前已消耗 " + systemUsed + "，预估当前消耗 " + currentEstimate);
         }
 
-        // 若开启 Mock 模式，直接进行 Mock 生成；否则在密钥为测试密钥、mock 或为空时也进行 Mock 生成
+        // 6. 若配置了 Mock 模式，或者无有效大模型密钥时，直接启用本地逻辑降级兜底生成
         boolean shouldMock = this.aiMock;
         if (!shouldMock) {
             if (!StringUtils.hasText(activeApiKey) || activeApiKey.startsWith("test-key") || "mock".equalsIgnoreCase(activeApiKey)) {
@@ -194,7 +196,7 @@ public class AiSummaryServiceImpl implements AiSummaryService {
 
         long start = System.currentTimeMillis();
         try {
-            // 构建符合 OpenAI / 兼容 of Chat 接口规范的 HTTP 请求载荷
+            // 7. 构建符合 OpenAI / MiniMax 协议兼容的 HTTP 请求载荷
             Map<String, Object> reqBody = new HashMap<>();
             reqBody.put("model", modelToUse);
             reqBody.put("stream", false);
@@ -226,6 +228,7 @@ public class AiSummaryServiceImpl implements AiSummaryService {
             HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
             long duration = System.currentTimeMillis() - start;
 
+            // 8. 处理响应成功的情况并记录真实的 Token 计数进行审计
             if (response.statusCode() == 200) {
                 JsonNode root = objectMapper.readTree(response.body());
                 String aiText = root.path("choices").get(0).path("message").path("content").asText();
@@ -258,6 +261,17 @@ public class AiSummaryServiceImpl implements AiSummaryService {
         }
     }
 
+    /**
+     * 多级模块路由规则匹配机制
+     * 用于决策某个 Java 代码源文件应该归入哪一个业务知识模块。
+     * 匹配优先级：
+     * 1. 尝试匹配 module-map.yaml 配置文件
+     * 2. 尝试匹配 module_hierarchy.json 树级配置文件
+     * 3. 尝试从业务知识库中查找以往已确认/推送的同路径草稿所对应的模块名
+     * 4. 尝试根据历史已保存草稿的对应记录
+     * 5. 按照文件夹和 Java 包结构命名规则命名
+     * 6. 按照 Spring REST 控制器的 RequestMapping 一级路由名称映射分包
+     */
     public String routeModuleForFile(Long taskId, Long systemId, String filePath, CodeChunk chunk) {
         // 1. 尝试匹配 module-map.yaml
         String module = matchModuleMap(taskId, filePath);
@@ -286,6 +300,9 @@ public class AiSummaryServiceImpl implements AiSummaryService {
         return null;
     }
 
+    /**
+     * 匹配项目代码中的 module-map.yaml 配置文件规则
+     */
     private String matchModuleMap(Long taskId, String filePath) {
         Path path1 = Paths.get("temp_repos", "task_" + taskId, "module-map.yaml");
         Path path2 = Paths.get("temp_repos", "task_" + taskId, "docs", "code-insight", "meta", "module-map.yaml");
@@ -309,6 +326,9 @@ public class AiSummaryServiceImpl implements AiSummaryService {
         return null;
     }
 
+    /**
+     * 轻量级简易 YAML 解析辅助（提取模块对应的路径特征特征）
+     */
     private Map<String, List<String>> parseYamlModuleMap(String content) {
         Map<String, List<String>> map = new LinkedHashMap<>();
         if (!StringUtils.hasText(content)) return map;
@@ -335,6 +355,9 @@ public class AiSummaryServiceImpl implements AiSummaryService {
         return map;
     }
 
+    /**
+     * 匹配 module_hierarchy.json 树级结构映射文件配置
+     */
     private String matchModuleHierarchy(Long taskId, String filePath) {
         Path path1 = Paths.get("temp_repos", "task_" + taskId, "module_hierarchy.json");
         Path path2 = Paths.get("temp_repos", "task_" + taskId, "docs", "code-insight", "meta", "module_hierarchy.json");
@@ -365,6 +388,9 @@ public class AiSummaryServiceImpl implements AiSummaryService {
         return null;
     }
 
+    /**
+     * 比对以往已在知识库中确认发布 (CONFIRMED/PUSHED) 状态的草稿来源映射
+     */
     private String matchConfirmedKnowledge(Long systemId, String filePath) {
         List<DraftWorkspace> workspaces = draftWorkspaceMapper.selectList(
                 new LambdaQueryWrapper<DraftWorkspace>().eq(DraftWorkspace::getSystemId, systemId)
@@ -396,6 +422,9 @@ public class AiSummaryServiceImpl implements AiSummaryService {
         return null;
     }
 
+    /**
+     * 比对历史生成的全部草稿，作为兜底匹配的特征索引
+     */
     private String matchHistoricalDrafts(Long systemId, String filePath) {
         List<DraftWorkspace> workspaces = draftWorkspaceMapper.selectList(
                 new LambdaQueryWrapper<DraftWorkspace>().eq(DraftWorkspace::getSystemId, systemId)
@@ -426,6 +455,11 @@ public class AiSummaryServiceImpl implements AiSummaryService {
         return null;
     }
 
+    /**
+     * 按照 package 结构命名规则进行分模块命名
+     * 如：src/main/java/com/company/modules/auth/service/UserService.java
+     * 自动检测 modules 关键字后的下一层目录为 "AuthModule" 模块。
+     */
     private String matchPackageRules(String filePath) {
         if (!filePath.endsWith(".java")) return null;
         String cleanPath = filePath.replace("\\", "/");
@@ -438,11 +472,13 @@ public class AiSummaryServiceImpl implements AiSummaryService {
         String[] segments = dirPath.split("/");
 
         if (segments.length == 0) return null;
+        // 查找包中包含 modules / module 的段，将下一层级作为模块名称命名
         for (int i = 0; i < segments.length - 1; i++) {
             if ("modules".equalsIgnoreCase(segments[i]) || "module".equalsIgnoreCase(segments[i])) {
                 return capitalize(segments[i + 1]) + "Module";
             }
         }
+        // 默认将倒数第二层级转换为模块名
         if (segments.length >= 3) {
             int startIdx = 0;
             if (List.of("com", "org", "net").contains(segments[0].toLowerCase())) {
@@ -455,6 +491,10 @@ public class AiSummaryServiceImpl implements AiSummaryService {
         return capitalize(segments[0]) + "Module";
     }
 
+    /**
+     * 根据 Spring REST 控制器的 RequestMapping 进行根节点路由分模块分包
+     * 比如路由是 @RequestMapping("/api/v1/auth/login")，提取 auth 转为 AuthModule
+     */
     private String matchControllerMapping(Long taskId, String filePath, CodeChunk chunk) {
         if (chunk == null || !"CLASS".equals(chunk.getChunkType())) return null;
         Path path = Paths.get("temp_repos", "task_" + taskId, filePath);
@@ -468,6 +508,7 @@ public class AiSummaryServiceImpl implements AiSummaryService {
                 String[] routeSegs = route.split("/");
                 if (routeSegs.length > 0 && StringUtils.hasText(routeSegs[0])) {
                     int idx = 0;
+                    // 跳过 api, v1, v2 等统一前缀前缀
                     if (List.of("api", "v1", "v2").contains(routeSegs[0].toLowerCase()) && routeSegs.length > 1) {
                         idx = 1;
                     }
@@ -515,6 +556,17 @@ public class AiSummaryServiceImpl implements AiSummaryService {
         return input;
     }
 
+    /**
+     * 聚合分片归纳分析结果并组装最终 Markdown 知识草稿文档
+     * 1. 扫描各个分片并划分业务模块。
+     * 2. 分层解析模块下的路由地址、涉及类名、依赖的数据表。
+     * 3. 异步调用大模型/或触发本地 Mock 分析分片，将生成的分析段落依次编排录入文档。
+     * 4. 物理持久化 Markdown 正文至 drafts 目录，并更新/新增草稿表（ci_knowledge_draft）及来源代码引用表。
+     *
+     * @param taskId        反编译分析任务 ID
+     * @param chunks        任务切出的代码片段
+     * @param promptContent 所使用的分析提示词模版内容
+     */
     @Override
     public void generateDraftDocument(Long taskId, List<CodeChunk> chunks, String promptContent) {
         DecompileTask task = decompileTaskMapper.selectById(taskId);
@@ -522,11 +574,13 @@ public class AiSummaryServiceImpl implements AiSummaryService {
             throw new BusinessException("未找到关联的任务");
         }
 
+        // 根据路由分包算法对 Chunks 进行模块划分划分
         Map<String, List<CodeChunk>> moduleChunks = new HashMap<>();
         for (CodeChunk chunk : chunks) {
             String path = chunk.getFilePath();
             String moduleName = routeModuleForFile(taskId, task.getSystemId(), path, chunk);
             if (moduleName == null) {
+                // 默认无法划归的兜底命名命名
                 moduleName = "CoreModule";
                 if (path.contains("controller")) {
                     moduleName = "接口访问层 (Controller)";
@@ -542,6 +596,7 @@ public class AiSummaryServiceImpl implements AiSummaryService {
             moduleChunks.computeIfAbsent(moduleName, k -> new ArrayList<>()).add(chunk);
         }
 
+        // 查找或为当前任务创建工作区
         DraftWorkspace ws = draftWorkspaceMapper.selectOne(
                 new LambdaQueryWrapper<DraftWorkspace>().eq(DraftWorkspace::getTaskId, taskId)
         );
@@ -556,6 +611,7 @@ public class AiSummaryServiceImpl implements AiSummaryService {
             draftWorkspaceMapper.insert(ws);
         }
 
+        // 对每一个业务模块依次构建 Markdown 架构文档
         for (Map.Entry<String, List<CodeChunk>> entry : moduleChunks.entrySet()) {
             String moduleName = entry.getKey();
             List<CodeChunk> cList = entry.getValue();
@@ -642,13 +698,14 @@ public class AiSummaryServiceImpl implements AiSummaryService {
                     docBuilder.append("- **所属类**: `").append(c.getClassName()).append("`\n");
                     docBuilder.append("- **行范围**: 第 ").append(c.getStartLine()).append(" 行到第 ").append(c.getEndLine()).append(" 行\n");
                     
+                    // 为每一个方法级 Chunks 触发大模型归纳归纳
                     String chunkSummary = summarizeChunk(taskId, c.getId(), promptContent, task.getModelName());
                     docBuilder.append("\n**功能逻辑分析**:\n").append(chunkSummary).append("\n\n");
                 }
             }
 
             docBuilder.append("## 十二、 调用链路说明\n");
-            docBuilder.append("- 通过 Controller 接收前端网络请求，交由 Service 模块执行核心逻辑，最终调用 Mapper 持久层写入数据库。\n\n");
+            docBuilder.append("- 通过 Controller 接收前端 network 请求，交由 Service 模块执行核心逻辑，最终调用 Mapper 持久层写入数据库。\n\n");
 
             docBuilder.append("## 十三、 数据表与数据流\n");
             boolean hasTables = false;
@@ -719,7 +776,7 @@ public class AiSummaryServiceImpl implements AiSummaryService {
                 log.error("备份草稿文档至本地代码库指定目录失败", e);
             }
 
-            // 依据置信度来决定初始状态：低于 0.75 设为 PENDING_REVIEW
+            // 依据置信度来决定初始状态：低于 0.75 设为 PENDING_REVIEW (人工待复核) 状态
             double confidence = 0.85;
             if (moduleName.contains("CoreModule") || moduleName.hashCode() % 3 == 0) {
                 confidence = 0.70;
@@ -765,6 +822,9 @@ public class AiSummaryServiceImpl implements AiSummaryService {
         }
     }
 
+    /**
+     * 保存 AI 原始响应记录并提交至 Token 审计表
+     */
     private void saveCallRecordAndAudit(Long systemId, Long taskId, Long chunkId, String model, int inTokens, int outTokens,
                                         String response, boolean isSuccess, String errorMsg, long duration) {
         // 保存 AI 调用记录
@@ -801,6 +861,9 @@ public class AiSummaryServiceImpl implements AiSummaryService {
         tokenAuditService.logTokenUsage(systemId, taskId, model, inTokens, outTokens, "INITIAL", isSuccess);
     }
 
+    /**
+     * 获取特定分片范围内的物理代码行集合
+     */
     private String getChunkContent(CodeChunk chunk) {
         try {
             // 从快照读取文件内容

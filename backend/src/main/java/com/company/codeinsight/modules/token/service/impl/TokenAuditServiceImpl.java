@@ -18,6 +18,10 @@ import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.stream.Collectors;
 
+/**
+ * Token 用量审计管理服务实现类
+ * 负责 Token 快捷账目写入、费用换算、图表大盘聚合（近 7 日耗量趋势、各模型占比、系统排行）和防超限超售熔断所需要的累计用量获取。
+ */
 @Service
 public class TokenAuditServiceImpl implements TokenAuditService {
 
@@ -27,6 +31,10 @@ public class TokenAuditServiceImpl implements TokenAuditService {
     @Autowired
     private SystemApplicationMapper systemMapper;
 
+    /**
+     * 实时记账审计记录一次 Token 消耗并折算费用
+     * 计费公式：输入每百万 Token 约 2.0 美元，输出每百万 Token 约 6.0 美元。
+     */
     @Override
     public void logTokenUsage(Long systemId, Long taskId, String modelName, int inputTokens, int outputTokens, String type, boolean isSuccess) {
         int total = inputTokens + outputTokens;
@@ -38,7 +46,7 @@ public class TokenAuditServiceImpl implements TokenAuditService {
         TokenUsageAudit audit = new TokenUsageAudit();
         audit.setSystemId(systemId != null ? systemId : 0L);
         audit.setTaskId(taskId != null ? taskId : 0L);
-        audit.setPromptVersion(1); // 默认
+        audit.setPromptVersion(1); // 默认提示词版本
         audit.setModelName(modelName != null ? modelName : "MiniMax-M3");
         audit.setInputTokens(inputTokens);
         audit.setOutputTokens(outputTokens);
@@ -51,6 +59,9 @@ public class TokenAuditServiceImpl implements TokenAuditService {
         auditMapper.insert(audit);
     }
 
+    /**
+     * 条件分页查询 Token 审计日志，按时间倒序排列
+     */
     @Override
     public Page<TokenUsageAudit> listAuditPage(int current, int size, Long systemId, String modelName, String type) {
         Page<TokenUsageAudit> page = new Page<>(current, size);
@@ -62,8 +73,12 @@ public class TokenAuditServiceImpl implements TokenAuditService {
         return auditMapper.selectPage(page, qw);
     }
 
+    /**
+     * 汇总 Token 用量统计指标以供前端大屏/工作台展示
+     */
     @Override
     public Map<String, Object> getAuditStats(Long systemId) {
+        // 1. 获取指定系统的所有用量记录
         List<TokenUsageAudit> all = auditMapper.selectList(
                 new LambdaQueryWrapper<TokenUsageAudit>()
                         .eq(systemId != null, TokenUsageAudit::getSystemId, systemId)
@@ -76,7 +91,7 @@ public class TokenAuditServiceImpl implements TokenAuditService {
                 .map(TokenUsageAudit::getCost)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
 
-        // 系统消耗排行
+        // 2. 统计各系统消耗排行
         List<SystemApplication> systems = systemMapper.selectList(null);
         Map<Long, String> sysNameMap = systems.stream()
                 .collect(Collectors.toMap(SystemApplication::getId, SystemApplication::getName, (a, b) -> a));
@@ -96,7 +111,7 @@ public class TokenAuditServiceImpl implements TokenAuditService {
                 .limit(10)
                 .collect(Collectors.toList());
 
-        // 模型占比
+        // 3. 统计各模型消耗占比占比
         Map<String, Integer> modelGroup = all.stream()
                 .collect(Collectors.groupingBy(TokenUsageAudit::getModelName, Collectors.summingInt(TokenUsageAudit::getTotalTokens)));
         List<Map<String, Object>> modelRatio = modelGroup.entrySet().stream()
@@ -108,7 +123,7 @@ public class TokenAuditServiceImpl implements TokenAuditService {
                 })
                 .collect(Collectors.toList());
 
-        // 近 7 天趋势
+        // 4. 构建近 7 天每日用量趋势
         DateTimeFormatter dtf = DateTimeFormatter.ofPattern("yyyy-MM-dd");
         Map<String, Integer> trendMap = new LinkedHashMap<>();
         for (int i = 6; i >= 0; i--) {
@@ -132,6 +147,7 @@ public class TokenAuditServiceImpl implements TokenAuditService {
                 })
                 .collect(Collectors.toList());
 
+        // 5. 组合并返回指标
         Map<String, Object> stats = new HashMap<>();
         stats.put("totalInputTokens", totalInput);
         stats.put("totalOutputTokens", totalOutput);
@@ -144,6 +160,9 @@ public class TokenAuditServiceImpl implements TokenAuditService {
         return stats;
     }
 
+    /**
+     * 计算特定扫描任务目前为止累计已消耗的 Token 数
+     */
     @Override
     public int getTaskCumulativeTokens(Long taskId) {
         if (taskId == null) return 0;
@@ -154,9 +173,13 @@ public class TokenAuditServiceImpl implements TokenAuditService {
         return list.stream().mapToInt(TokenUsageAudit::getTotalTokens).sum();
     }
 
+    /**
+     * 计算特定系统在当前自然月内已消耗的 Token 数，用于月度配额控制
+     */
     @Override
     public int getSystemMonthlyTokens(Long systemId) {
         if (systemId == null) return 0;
+        // 定位本月 1 号 00:00:00.000 作为起算时间
         LocalDateTime startOfMonth = LocalDateTime.now().withDayOfMonth(1).withHour(0).withMinute(0).withSecond(0).withNano(0);
         List<TokenUsageAudit> list = auditMapper.selectList(
                 new LambdaQueryWrapper<TokenUsageAudit>()

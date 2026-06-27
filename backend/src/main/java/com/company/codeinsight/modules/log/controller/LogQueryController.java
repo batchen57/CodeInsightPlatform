@@ -10,6 +10,10 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
 
+/**
+ * 系统操作审计日志控制器
+ * 提供用户操作日志分页查询、特定日志详情查询的 REST API 接口。
+ */
 @Tag(name = "操作日志", description = "系统及反编译操作审计日志接口")
 @RestController
 @RequestMapping("/logs")
@@ -18,6 +22,9 @@ public class LogQueryController {
     @Autowired
     private OperationLogService operationLogService;
 
+    /**
+     * 分页条件查询用户及系统动作的操作审计日志列表
+     */
     @Operation(summary = "日志分页查询")
     @GetMapping
     public ApiResponse<PageResult<OperationLog>> listLogs(
@@ -33,6 +40,9 @@ public class LogQueryController {
         return ApiResponse.success(result);
     }
 
+    /**
+     * 获取指定 ID 的单条操作审计日志明细记录
+     */
     @Operation(summary = "日志详情查询")
     @GetMapping("/{id}")
     public ApiResponse<OperationLog> getLogDetail(@PathVariable Long id) {
@@ -40,3 +50,4 @@ public class LogQueryController {
         return ApiResponse.success(log);
     }
 }
+

@@ -90,7 +90,8 @@ DRAFT → PENDING → PULLING_CODE → PARSING_CODE → SPLITTING_TASK
 ## 关键约定
 
 - **数据库 schema 启动时自动初始化**：`spring.sql.init.mode: always` + `backend/src/main/resources/db/schema.sql`。项目未引入 Flyway/Liquibase，修改表结构直接改 SQL 文件。
-- **数据源 URL 必须带 `stringtype=unspecified`**（PostgreSQL JDBC 兼容要求），改 `application-local.yml` 时不要删这个参数。
+- **数据源 URL 必须带 `stringtype=unspecified`**（PostgreSQL JDBC 兼容要求），改 `application-local.properties` 时不要删这个参数。
+- **本地环境特定配置**：PostgreSQL 数据库及 Redis 缓存连接配置独立存放于 `backend/src/main/resources/application-local.properties`。该文件仅供本地开发使用，且包含敏感连接凭证，切勿提交至 Git 仓库。
 - **前端用 Hash Router**（`createHashRouter`），不要改成 `BrowserRouter`。
 - **Ant Design 主题统一在 `App.tsx` 的 `ConfigProvider` 中配**，新增组件用主题 Token，禁止硬编码颜色值。
 - **`SecurityConfig` 当前放行所有请求**——MVP 联调专用，生产前必须替换为正式认证。

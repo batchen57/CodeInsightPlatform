@@ -10,14 +10,14 @@
 
 第一阶段 MVP 任务清单已完成，覆盖系统、仓库、提示词、任务、扫描解析、切片、AI/Mock AI、草稿、知识版本、推送、Token 与日志模块。最新前端视觉方案已完成桌面端、移动端、弹窗和导航状态对照验收。
 
-截至 2026-06-21 的可复现验证结果：
+截至 2026-06-27 的可复现验证结果：
 
 | 验证项 | 结果 | 说明 |
 | --- | --- | --- |
 | `npm.cmd run lint` | 通过 | ESLint 无错误 |
 | `npm.cmd run build` | 通过 | Vite 构建成功；存在主包超过 500 kB 的非阻断告警 |
 | `java -version` | 通过 | Java 17.0.17 |
-| `mvn.cmd test` | 通过 | 23 个测试，0 失败、0 错误、0 跳过 |
+| `mvn.cmd test` | 通过 | 26 个测试，0 失败、0 错误、0 跳过 |
 | `mvn.cmd clean package` | 本轮未复验 | 运行中的后端 JAR 被 Windows 锁定，`clean` 无法删除旧产物 |
 
 这里的“完成”指 MVP 功能和本地验收基线完成，并不等于生产环境开箱即用。生产部署前仍需补齐身份认证与授权、密钥托管、真实模型服务、远程 Git 权限、基础设施运维配置和前端代码分包。
@@ -96,7 +96,8 @@ npm run dev
 
 ## 配置
 
-环境变量示例见根目录 `.env.example`。不要把真实密码、Token 或模型密钥提交到配置文件。
+本地开发环境特定的 PostgreSQL 数据库和 Redis 缓存连接配置独立存放在 `backend/src/main/resources/application-local.properties` 文件中。
+AI 模型环境变量及本地文件存储路径等，仍通过 `application-local.yml` 并结合根目录的 `.env` 环境变量文件进行配置（示意见 `.env.example`）。请避免将真实的密钥和密码提交至版本控制系统。
 
 | 变量 | 默认值 | 用途 |
 | --- | --- | --- |
@@ -159,6 +160,7 @@ CodeInsight/
 |   +-- src/main/resources/
 |       +-- application.yml
 |       +-- application-local.yml
+|       +-- application-local.properties
 |       +-- db/schema.sql
 +-- frontend/
 |   +-- package.json

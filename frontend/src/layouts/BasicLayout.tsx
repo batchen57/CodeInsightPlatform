@@ -24,6 +24,10 @@ import {
 const { Header, Content, Sider } = Layout;
 const { Text, Title } = Typography;
 
+/**
+ * 侧边栏导航条数据源配置
+ * 定义左侧菜单各个模块的路由路径、图标、标题文本以及详细的功能解释说明说明。
+ */
 const navigation = [
   {
     key: '/',
@@ -50,7 +54,6 @@ const navigation = [
     key: '/prompts',
     icon: <FileTextOutlined />,
     label: <Link to="/prompts">提示词</Link>,
-
     title: '提示词配置',
     description: '管理 AI 归纳模板、版本、启停、复制和试跑。',
   },
@@ -91,6 +94,9 @@ const navigation = [
   },
 ];
 
+/**
+ * 辅助定位匹配当前选中的侧边栏高亮菜单项 Key 值
+ */
 const getSelectedKey = (pathname: string) => {
   if (pathname === '/') {
     return '/';
@@ -99,11 +105,20 @@ const getSelectedKey = (pathname: string) => {
   return match?.key ?? '/';
 };
 
+/**
+ * 平台通用骨架布局组件 (BasicLayout)
+ * 包含左侧侧边栏导航、顶部页头操作栏、实时动态变化的面包屑标题以及核心内容呈现区（Outlet 组件）。
+ */
 const BasicLayout: React.FC = () => {
+  // 控制左侧侧边栏折叠/展开的状态
   const [collapsed, setCollapsed] = useState(false);
+  // 控制移动端小屏幕自适应的状态
   const [isMobile, setIsMobile] = useState(false);
+  
   const location = useLocation();
   const selectedKey = getSelectedKey(location.pathname);
+  
+  // 实时估算当前页面配置数据以更新页头标题解释
   const currentPage = useMemo(
     () => navigation.find((item) => item.key === selectedKey) ?? navigation[0],
     [selectedKey],
@@ -111,6 +126,7 @@ const BasicLayout: React.FC = () => {
 
   return (
     <Layout className="ci-shell">
+      {/* 响应式侧边栏配置 */}
       <Sider
         width={236}
         collapsedWidth={isMobile ? 0 : 72}
@@ -123,6 +139,7 @@ const BasicLayout: React.FC = () => {
         }}
         className="ci-sider"
       >
+        {/* 系统 LOGO 标识栏 */}
         <div className="ci-brand">
           <div className="ci-brand-mark">
             <CodeOutlined />
@@ -135,6 +152,7 @@ const BasicLayout: React.FC = () => {
           )}
         </div>
 
+        {/* 侧边栏菜单列表 */}
         <div className="ci-sider-section">
           {!collapsed && <span className="ci-sider-label">核心流程</span>}
           <Menu
@@ -145,10 +163,9 @@ const BasicLayout: React.FC = () => {
             className="ci-menu"
           />
         </div>
-
-
       </Sider>
 
+      {/* 移动端菜单展开时的背景遮罩 */}
       {isMobile && !collapsed && (
         <button
           type="button"
@@ -157,8 +174,12 @@ const BasicLayout: React.FC = () => {
           onClick={() => setCollapsed(true)}
         />
       )}
+      
+      {/* 右侧核心渲染主体区域 */}
       <Layout className="ci-main">
+        {/* 顶部操作页头 */}
         <Header className="ci-header">
+          {/* 折叠切换按钮 */}
           <Space size={12} className="ci-header-context">
             <Tooltip title={collapsed ? '展开导航' : '收起导航'}>
               <Button
@@ -170,6 +191,7 @@ const BasicLayout: React.FC = () => {
             </Tooltip>
           </Space>
 
+          {/* 顶部右侧快捷标签与用户属性 */}
           <Space size={16} className="ci-header-actions">
             <div className="ci-pipeline">
               <Tag icon={<BranchesOutlined />} color="blue">
@@ -197,7 +219,9 @@ const BasicLayout: React.FC = () => {
           </Space>
         </Header>
 
+        {/* 页面正文内容渲染 */}
         <Content className="ci-content">
+          {/* 统一的面包屑及描述页头 */}
           <section className="ci-page-heading">
             <div className="ci-page-heading-copy">
               <Text className="ci-page-kicker">WORKSPACE</Text>
@@ -209,6 +233,8 @@ const BasicLayout: React.FC = () => {
               <span>Live workspace</span>
             </div>
           </section>
+          
+          {/* 嵌套子组件渲染 Outlet */}
           <Outlet />
         </Content>
       </Layout>

@@ -22,12 +22,22 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 
+/**
+ * 代码切片管理服务实现类
+ * 负责将扫描到的文件，按“文件级别”、“类级别”和“方法级别”切分成更细粒度的逻辑代码片段（Chunks），
+ * 评估每个片段的 Token 占用，并在片段超限时自动拆分子分片，以适配大模型上下文窗口的大小限制。
+ */
 @Slf4j
 @Service
 public class CodeChunkServiceImpl implements CodeChunkService {
 
+    // 单个切片的最大物理行数限制，防止单个请求文本过长
     private static final int MAX_CHUNK_LINES = 80;
+    
+    // 单个切片的最大预估 Token 限制（以防注释较多，字符量大）
     private static final int MAX_CHUNK_TOKENS = 1200;
+    
+    // 每一个切片的最低 Token 估算占位
     private static final int MIN_TOKEN_ESTIMATE = 5;
 
     @Autowired
@@ -36,12 +46,23 @@ public class CodeChunkServiceImpl implements CodeChunkService {
     @Autowired
     private JavaParserService javaParserService;
 
+    /**
+     * 对拉取的代码进行切片并估算 Token
+     * 1. 物理清空当前任务关联的所有旧切片
+     * 2. 遍历每个快照文件，生成 "FILE" 文件级别切片
+     * 3. 针对 Java 文件，提取类元数据生成 "CLASS" 切片
+     * 4. 解析 Java 文件中所有的方法，准确定位行区间生成 "METHOD" 切片
+     *
+     * @param taskId    任务 ID
+     * @param snapshots 本次任务拉取并扫描生成的文件快照集
+     */
     @Override
     public void chunkAndEstimate(Long taskId, List<CodeFileSnapshot> snapshots) {
         if (snapshots == null || snapshots.isEmpty()) {
             return;
         }
 
+        // 清理当前任务的历史切片记录
         chunkMapper.delete(new LambdaQueryWrapper<CodeChunk>().eq(CodeChunk::getTaskId, taskId));
 
         for (CodeFileSnapshot snapshot : snapshots) {
@@ -55,21 +76,27 @@ public class CodeChunkServiceImpl implements CodeChunkService {
                 List<String> lines = Files.readAllLines(file.toPath());
                 String fullContent = String.join("\n", lines);
 
+                // 保存文件级切片 (FILE)
                 saveChunk(taskId, snapshot.getFilePath(), null, null, "FILE",
                         fullContent, 1, lines.size());
 
+                // 如果是 Java 源文件，则做更精细的 AST 解析以提取类与方法
                 if ("java".equalsIgnoreCase(snapshot.getFileType())) {
                     ParsedClassInfo classInfo = javaParserService.parseFile(file);
                     if (classInfo != null && classInfo.getClassName() != null) {
+                        // 保存类级切片 (CLASS)
                         saveChunk(taskId, snapshot.getFilePath(), classInfo.getClassName(), null, "CLASS",
                                 fullContent, 1, lines.size());
 
+                        // 循环解析各个方法
                         for (ParsedClassInfo.MethodInfo method : classInfo.getMethods()) {
+                            // 定位方法在 Java 文件中的起始行和结束行
                             int[] range = locateMethodRange(lines, method.getName());
                             int start = range[0];
                             int end = Math.min(range[1], lines.size());
                             String methodCode = joinLines(lines, start, end);
 
+                            // 保存方法级切片 (METHOD)
                             saveChunk(taskId, snapshot.getFilePath(), classInfo.getClassName(), method.getName(), "METHOD",
                                     methodCode, start, end);
                         }
@@ -82,6 +109,9 @@ public class CodeChunkServiceImpl implements CodeChunkService {
         }
     }
 
+    /**
+     * 获取指定任务的切片集合
+     */
     @Override
     public List<CodeChunk> getChunksByTaskId(Long taskId) {
         return chunkMapper.selectList(new LambdaQueryWrapper<CodeChunk>()
@@ -89,6 +119,9 @@ public class CodeChunkServiceImpl implements CodeChunkService {
                 .orderByAsc(CodeChunk::getId));
     }
 
+    /**
+     * 将特定分片标记为失败状态
+     */
     @Override
     public void markChunkFailed(Long chunkId, String reason) {
         CodeChunk chunk = chunkMapper.selectById(chunkId);
@@ -100,6 +133,9 @@ public class CodeChunkServiceImpl implements CodeChunkService {
         chunkMapper.updateById(chunk);
     }
 
+    /**
+     * 重试特定分片（将其状态置回 PENDING，清除错误原因）
+     */
     @Override
     public void retryChunk(Long chunkId) {
         CodeChunk chunk = chunkMapper.selectById(chunkId);
@@ -114,12 +150,16 @@ public class CodeChunkServiceImpl implements CodeChunkService {
                 .set(CodeChunk::getErrorReason, null));
     }
 
+    /**
+     * 保存切片。若切片过大（超过行数或 Token 上限），则调用 saveSplitChunks 将其自动拆分存放。
+     */
     private void saveChunk(Long taskId, String filePath, String className, String methodName, String type,
                            String content, int startLine, int endLine) {
         String normalizedContent = StringUtils.hasText(content) ? content : "";
         int tokenEstimate = estimateTokens(normalizedContent);
         int lineCount = Math.max(1, endLine - startLine + 1);
 
+        // 如果单段代码超出 80 行，或者预估 Token 超过 1200，触发自动分页逻辑
         if (lineCount > MAX_CHUNK_LINES || tokenEstimate > MAX_CHUNK_TOKENS) {
             saveSplitChunks(taskId, filePath, className, methodName, type, normalizedContent, startLine);
             return;
@@ -128,6 +168,10 @@ public class CodeChunkServiceImpl implements CodeChunkService {
         insertChunk(taskId, filePath, className, methodName, type, normalizedContent, startLine, endLine, "PENDING", null);
     }
 
+    /**
+     * 自动拆分切片方法
+     * 逐行读取大代码段，通过动态滚动容器保存子片段，一旦加入新的一行导致子片段越界，立即切出子片段，并标注后缀如 #part1, #part2 录入数据库。
+     */
     private void saveSplitChunks(Long taskId, String filePath, String className, String methodName, String type,
                                  String content, int startLine) {
         List<String> lines = List.of(content.split("\\R", -1));
@@ -137,18 +181,23 @@ public class CodeChunkServiceImpl implements CodeChunkService {
 
         for (int i = 0; i < lines.size(); i++) {
             String nextLine = lines.get(i);
+            // 拼装临时候选段
             String candidate = partLines.isEmpty()
                     ? nextLine
                     : String.join("\n", partLines) + "\n" + nextLine;
+            // 判断如果加入当前行是否会触发超限越界
             boolean candidateTooLarge = !partLines.isEmpty()
                     && (partLines.size() + 1 > MAX_CHUNK_LINES || estimateTokens(candidate) > MAX_CHUNK_TOKENS);
 
             if (candidateTooLarge) {
+                // 如果越界，先将当前已累积的 partLines 写入数据库作为一个 Part 分片
                 String partContent = String.join("\n", partLines);
                 int partEndLine = partStartLine + partLines.size() - 1;
                 String partMethodName = methodName == null ? null : methodName + "#part" + partIndex;
                 insertChunk(taskId, filePath, className, partMethodName, type + "_PART", partContent,
                         partStartLine, partEndLine, "PENDING", null);
+                
+                // 重置容器，开启下一个 Part 的扫描
                 partLines.clear();
                 partStartLine = partEndLine + 1;
                 partIndex++;
@@ -156,6 +205,7 @@ public class CodeChunkServiceImpl implements CodeChunkService {
 
             partLines.add(nextLine);
 
+            // 如果是最后一行，强制将当前积累的剩余代码行作为一个 Part 录入
             boolean lastLine = i == lines.size() - 1;
             if (lastLine) {
                 String partContent = String.join("\n", partLines);
@@ -167,11 +217,17 @@ public class CodeChunkServiceImpl implements CodeChunkService {
         }
     }
 
+    /**
+     * 写入一个已彻底解析失败的文件分片标志
+     */
     private void saveFailedChunk(Long taskId, String filePath, String reason) {
         insertChunk(taskId, filePath, null, null, "FILE", "FAILED:" + reason,
                 1, 1, "FAILED", StringUtils.hasText(reason) ? reason : "Unknown chunk failure");
     }
 
+    /**
+     * 执行底层数据库 Insert 写入，并自动统计 Content MD5 签名和预估 Token
+     */
     private void insertChunk(Long taskId, String filePath, String className, String methodName, String type,
                              String content, int startLine, int endLine, String status, String errorReason) {
         String normalizedContent = StringUtils.hasText(content) ? content : "";
@@ -191,6 +247,9 @@ public class CodeChunkServiceImpl implements CodeChunkService {
         chunkMapper.insert(chunk);
     }
 
+    /**
+     * 辅助拼接指定行范围内的代码文本
+     */
     private String joinLines(List<String> lines, int start, int end) {
         StringBuilder builder = new StringBuilder();
         for (int i = start - 1; i < end && i < lines.size(); i++) {
@@ -199,23 +258,37 @@ public class CodeChunkServiceImpl implements CodeChunkService {
         return builder.toString();
     }
 
+    /**
+     * 轻量级 Token 数量估算公式
+     * 核心计算规则：按平均每 3 个英文字符（含标点与空格）折算为 1 个大模型 Token，设定最低占位。
+     */
     private int estimateTokens(String content) {
         int tokenEstimate = (int) Math.ceil((StringUtils.hasText(content) ? content.length() : 0) / 3.0);
         return Math.max(MIN_TOKEN_ESTIMATE, tokenEstimate);
     }
 
+    /**
+     * AST 辅助：通过文本行扫描，基于大括号平衡定位 Java 方法的起止行范围
+     *
+     * @param lines      Java 源文件的所有行文本
+     * @param methodName 方法名称
+     * @return 返回包含起始行（1-indexed）和结束行（1-indexed）的 int 数组 [start, end]
+     */
     private int[] locateMethodRange(List<String> lines, String methodName) {
         int start = 1;
         int end = 1;
 
         for (int i = 0; i < lines.size(); i++) {
             String line = lines.get(i).trim();
+            // 匹配包含方法名与括号的行 (排除了控制流等干扰项后)
             if (line.contains(methodName) && line.contains("(")) {
+                // 如果是接口中的抽象方法声明（直接分号结尾），直接定位为当前行
                 if (line.endsWith(";")) {
                     return new int[]{i + 1, i + 1};
                 }
                 start = i + 1;
 
+                // 基于大括号深度匹配查找方法结尾
                 int braceCount = 0;
                 boolean foundFirstBrace = false;
                 for (int j = i; j < lines.size(); j++) {
@@ -228,6 +301,7 @@ public class CodeChunkServiceImpl implements CodeChunkService {
                             braceCount--;
                         }
                     }
+                    // 当括号完全闭合（braceCount 重归 0），定位到方法的右大括号所在行
                     if (foundFirstBrace && braceCount <= 0) {
                         end = j + 1;
                         break;
@@ -242,3 +316,4 @@ public class CodeChunkServiceImpl implements CodeChunkService {
         return new int[]{start, end};
     }
 }
+

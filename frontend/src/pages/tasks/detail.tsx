@@ -16,9 +16,10 @@ import type { System, Task } from '../../types';
 
 const { Text, Title } = Typography;
 
+// 运行中的核心状态列表
 const runningStatuses = ['PENDING', 'PULLING_CODE', 'PARSING_CODE', 'SPLITTING_TASK', 'AI_ANALYZING', 'GENERATING_DOC', 'PUSHING'];
 
-// 任务执行管道阶段步骤索引与展示元数据配置
+// 任务执行管道阶段步骤索引与展示元数据配置说明
 const statusMeta: Record<string, { color: string; label: string; step: number }> = {
   DRAFT: { color: 'default', label: '草稿', step: -1 },
   PENDING: { color: 'blue', label: '排队中', step: 0 },
@@ -36,13 +37,21 @@ const statusMeta: Record<string, { color: string; label: string; step: number }>
   CANCELLED: { color: 'default', label: '已取消', step: -1 },
 };
 
+/**
+ * 任务执行详情监控组件 (TaskDetail)
+ * 展示任务的静态配置（负责人、代码库 ID、模型、耗时及日志存储路径）、
+ * 串联 Steps 指引任务当前流转到哪一步骤，并在底部提供流式模拟终端日志呈现和 Token 预估分析栏。
+ */
 const TaskDetail: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const taskId = Number(id);
 
+  // 任务实体数据及所属系统实体
   const [task, setTask] = useState<Task | null>(null);
   const [system, setSystem] = useState<System | null>(null);
+  
+  // 数据加载 loading 与操作按钮的 actionLoading 状态
   const [loading, setLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
 
@@ -60,7 +69,8 @@ const TaskDetail: React.FC = () => {
         setTask(taskData);
         const systemData = await getSystem(taskData.systemId);
         setSystem(systemData);
-      } finally {
+      } // 忽略捕获以依靠全局 Axios 异常拦截
+      finally {
         if (showLoading) {
           setLoading(false);
         }
@@ -147,6 +157,7 @@ const TaskDetail: React.FC = () => {
 
   return (
     <div className="ci-page ci-task-detail-page">
+      {/* 头部面板与快捷动作操作条 */}
       <Card>
         <div className="ci-detail-header">
           <Space wrap>
@@ -201,6 +212,7 @@ const TaskDetail: React.FC = () => {
         </div>
       </Card>
 
+      {/* 任务管道当前阶段可视化 Steps 指引 */}
       <Card title="执行流程状态">
         <Steps
           size="small"
@@ -218,6 +230,7 @@ const TaskDetail: React.FC = () => {
         />
       </Card>
 
+      {/* 草稿就绪提示横幅 */}
       {['PENDING_REVIEW', 'REVIEWING', 'CONFIRMED'].includes(task.status) && (
         <Alert
           type="success"
@@ -232,9 +245,11 @@ const TaskDetail: React.FC = () => {
         />
       )}
 
+      {/* 任务失败错误提示框 */}
       {task.errorReason && <Alert type="error" showIcon message="执行错误" description={task.errorReason} />}
 
       <Row gutter={[16, 16]}>
+        {/* 左侧：任务静态指标表格 */}
         <Col xs={24} xl={12}>
           <Card title="任务配置" style={{ height: '100%' }}>
             <Descriptions bordered column={1} size="small">
@@ -256,6 +271,7 @@ const TaskDetail: React.FC = () => {
           </Card>
         </Col>
 
+        {/* 右侧：模拟终端控制台日志输出 */}
         <Col xs={24} xl={12}>
           <Card title="执行日志" extra={<CodeOutlined />} style={{ height: '100%' }}>
             <pre className="ci-terminal">{logLines.join('\n')}</pre>
@@ -263,6 +279,7 @@ const TaskDetail: React.FC = () => {
         </Col>
       </Row>
 
+      {/* 底部统计及预估栏目 */}
       {['PENDING_REVIEW', 'REVIEWING', 'CONFIRMED', 'PUSHED'].includes(task.status) && (
         <div className="ci-kpi-grid">
           <Card size="small">

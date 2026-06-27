@@ -10,9 +10,16 @@ import com.company.codeinsight.modules.system.service.SystemApplicationService;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
+/**
+ * 业务系统应用管理服务实现类
+ * 负责系统配置的多条件模糊分页排序查询，以及系统启用与停用的状态管理。
+ */
 @Service
 public class SystemApplicationServiceImpl extends ServiceImpl<SystemApplicationMapper, SystemApplication> implements SystemApplicationService {
 
+    /**
+     * 条件分页查询接入的业务系统列表，按创建时间倒序展示
+     */
     @Override
     public Page<SystemApplication> listSystemsPage(int current, int size, String name, String owner, Integer status) {
         Page<SystemApplication> page = new Page<>(current, size);
@@ -24,6 +31,9 @@ public class SystemApplicationServiceImpl extends ServiceImpl<SystemApplicationM
         return this.page(page, queryWrapper);
     }
 
+    /**
+     * 变更系统应用状态，校验状态只能为 0 或 1
+     */
     @Override
     public void changeStatus(Long id, Integer status) {
         SystemApplication system = this.getById(id);
@@ -37,3 +47,4 @@ public class SystemApplicationServiceImpl extends ServiceImpl<SystemApplicationM
         this.updateById(system);
     }
 }
+

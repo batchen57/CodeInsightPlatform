@@ -5,55 +5,150 @@ import lombok.Data;
 import java.util.ArrayList;
 import java.util.List;
 
+/**
+ * 静态语法解析提取的类信息载体
+ * 包含类名、包结构、所属组件类型、接口映射、依赖其它类、含有的方法以及 SQL 数据表引用信息。
+ */
 @Data
 public class ParsedClassInfo {
 
+    /**
+     * Java 类名称（如 DecompileTaskController）
+     */
     private String className;
 
+    /**
+     * Java 类所在的包路径（如 com.company.codeinsight.modules.task.controller）
+     */
     private String packageName;
 
-    private String type; // CONTROLLER, SERVICE, MAPPER, ENTITY, DTO, VO, ENUM, CONFIG, JOB, ANNOTATION, UNKNOWN
+    /**
+     * 类的组件归属角色类型（如 CONTROLLER, SERVICE, MAPPER, ENTITY 等）
+     */
+    private String type;
 
+    /**
+     * 类级别的 HTTP 路由 RequestMapping 映射路径（如 /tasks）
+     */
     private String requestMapping;
 
+    /**
+     * 声明在类头部的所有注解全称列表（如 ["RestController", "RequestMapping", "Validated"]）
+     */
     private List<String> annotations = new ArrayList<>();
 
+    /**
+     * 该类所依赖/引用的其它类名称集合，用于分析系统依赖关系图
+     */
     private List<String> dependencies = new ArrayList<>();
 
+    /**
+     * 该类声明的所有成员方法摘要信息列表
+     */
     private List<MethodInfo> methods = new ArrayList<>();
 
+    /**
+     * 类中存在的方法与方法调用级链条的明细列表
+     */
     private List<MethodCallInfo> methodCalls = new ArrayList<>();
 
+    /**
+     * 该类中涉及到的底层数据库表名称集合（如 ["ci_chunk", "ci_task"]）
+     */
     private List<String> tables = new ArrayList<>();
 
+    /**
+     * 提取出的 SQL 常规操作引用详情列表
+     */
     private List<SqlReference> sqlReferences = new ArrayList<>();
 
+    /**
+     * 静态成员方法元数据类
+     */
     @Data
     public static class MethodInfo {
+        /**
+         * 方法名
+         */
         private String name;
+        /**
+         * 方法返回值类型
+         */
         private String returnType;
+        /**
+         * 方法入参签名定义列表
+         */
         private String arguments;
+        /**
+         * 方法级别的接口路由 RequestMapping 映射（如 /{id}/autosave）
+         */
         private String requestMapping;
+        /**
+         * HTTP 请求方法类型（GET/POST/PUT/DELETE 等）
+         */
         private String httpMethod;
     }
 
+    /**
+     * 方法内部调用依赖的明细信息类
+     */
     @Data
     public static class MethodCallInfo {
+        /**
+         * 调用者的方法名
+         */
         private String callerMethod;
+        /**
+         * 所调用依赖的引用类/字段名称
+         */
         private String dependencyName;
+        /**
+         * 被调用的目标方法名称
+         */
         private String targetMethod;
+        /**
+         * 完整的调用代码行表达式
+         */
         private String expression;
+        /**
+         * 在源文件中的第几行
+         */
         private Integer lineNumber;
     }
 
+    /**
+     * SQL 语句与数据表依赖操作描述类
+     */
     @Data
     public static class SqlReference {
+        /**
+         * SQL 操作类型（如 SELECT, INSERT, UPDATE, DELETE）
+         */
         private String operation;
+        /**
+         * 涉及的数据表名列表
+         */
         private List<String> tables = new ArrayList<>();
+        /**
+         * SELECT 查询的字段字段列表
+         */
         private List<String> selectedFields = new ArrayList<>();
+        /**
+         * WHERE 语句的过滤条件字段列表
+         */
         private List<String> conditionFields = new ArrayList<>();
+        /**
+         * INSERT 插入的表字段列表
+         */
         private List<String> insertedFields = new ArrayList<>();
+        /**
+         * UPDATE 修改的表字段列表
+         */
         private List<String> updatedFields = new ArrayList<>();
+        /**
+         * SQL JOIN 操作联接到的其它数据表
+         */
         private List<String> joinedTables = new ArrayList<>();
     }
 }
+

@@ -40,6 +40,11 @@ import java.util.List;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
+/**
+ * 知识推送与版本管理服务实现类
+ * 负责抓取已确认通过的草稿文档，自动在本地代码目录中构建并生成 Markdown 文档目录树结构
+ * （如：整体架构、模块索引、API路由、数据库依赖和待确认事项等），并协调 JGit 进行版本提交和推送。
+ */
 @Slf4j
 @Service
 public class KnowledgeServiceImpl implements KnowledgeService {
@@ -67,6 +72,10 @@ public class KnowledgeServiceImpl implements KnowledgeService {
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
+    /**
+     * 生成知识发布版本
+     * 自动提取工作区内所有 CONFIRMED、REVISED 或已生成的草稿，在本地临时 Git 库下生成结构化文档索引并提交版本。
+     */
     @Override
     @Transactional
     public KnowledgeVersion createVersion(Long taskId, String versionNum, String confirmedBy) {
@@ -87,6 +96,7 @@ public class KnowledgeServiceImpl implements KnowledgeService {
             throw new BusinessException("草稿工作区不存在");
         }
 
+        // 提取该工作区下所有有效的草稿文件（已确认或待确认）
         List<KnowledgeDraft> drafts = draftMapper.selectList(
                 new LambdaQueryWrapper<KnowledgeDraft>()
                         .eq(KnowledgeDraft::getWorkspaceId, ws.getId())
@@ -97,6 +107,7 @@ public class KnowledgeServiceImpl implements KnowledgeService {
             throw new BusinessException("没有可导出的确认草稿");
         }
 
+        // 定位并创建临时 Git 克隆工程目录中的 docs 文件夹
         File taskRepoDir = new File("temp_repos/task_" + taskId);
         if (!taskRepoDir.exists()) {
             taskRepoDir.mkdirs(); 
@@ -110,6 +121,7 @@ public class KnowledgeServiceImpl implements KnowledgeService {
             Files.createDirectories(modulesPath);
             Files.createDirectories(metaPath);
 
+            // 1. 构建主索引（index.md）
             StringBuilder indexBuilder = new StringBuilder();
             indexBuilder.append("# 代码洞察平台知识索引\n\n");
             indexBuilder.append("本目录包含系统代码解析生成的完整架构和模块说明文档。\n\n");
@@ -121,6 +133,7 @@ public class KnowledgeServiceImpl implements KnowledgeService {
             indexBuilder.append("- [依赖与调用链路](dependency-index.md)\n");
             indexBuilder.append("- [待确认事项清单](pending-confirmation.md)\n");
 
+            // 2. 构建模块目录索引（module-index.md）
             StringBuilder moduleIndexBuilder = new StringBuilder();
             moduleIndexBuilder.append("# 模块知识归纳索引\n\n");
             moduleIndexBuilder.append("本知识库由代码洞察平台基于大模型及静态解析自动归纳生成。\n\n");
@@ -129,6 +142,7 @@ public class KnowledgeServiceImpl implements KnowledgeService {
             StringBuilder yamlBuilder = new StringBuilder();
             yamlBuilder.append("modules:\n");
 
+            // 拷贝各个草稿的物理 Markdown 到发布目录下
             for (KnowledgeDraft draft : drafts) {
                 File draftFile = new File(URI.create(draft.getContentUri()));
                 String content = draftFile.exists() ? Files.readString(draftFile.toPath()) : "# " + draft.getModuleName();
@@ -141,6 +155,7 @@ public class KnowledgeServiceImpl implements KnowledgeService {
                 yamlBuilder.append("    path: \"docs/code-insight/modules/").append(cleanFileName).append("\"\n");
             }
 
+            // 3. 构建架构整体设计大纲（architecture-overview.md）
             StringBuilder archBuilder = new StringBuilder();
             archBuilder.append("# 系统整体架构设计说明\n\n");
             archBuilder.append("## 系统划分\n");
@@ -150,14 +165,17 @@ public class KnowledgeServiceImpl implements KnowledgeService {
             }
             archBuilder.append("\n## 技术决策与原则\n1. 前后端分离设计\n2. 引入 Token 审计拦截与操作追踪日志\n");
 
+            // 4. 构建前端子系统说明文档
             StringBuilder feBuilder = new StringBuilder();
             feBuilder.append("# 前端子系统架构设计 (React)\n\n");
             feBuilder.append("## 核心组件与库\n- 核心框架: React 18\n- 构建工具: Vite\n- 状态库: Zustand\n- 组件库: Ant Design 5\n");
 
+            // 5. 构建后端服务说明文档
             StringBuilder beBuilder = new StringBuilder();
             beBuilder.append("# 后端服务系统架构设计 (Java 17)\n\n");
             beBuilder.append("## 核心框架\n- 基础框架: Spring Boot 3.x\n- 持久层: MyBatis-Plus / PostgreSQL\n- 缓存: Redis\n- 工作流: 任务状态机\n");
 
+            // 6. 静态 AST 解析并自动合成系统路由接口说明（api-index.md）
             StringBuilder apiBuilder = new StringBuilder();
             apiBuilder.append("# 系统接口路由索引 (API Index)\n\n");
             apiBuilder.append("| 模块名称 | 接口 URL | HTTP 方法 | 实现方法 |\n");
@@ -193,6 +211,7 @@ public class KnowledgeServiceImpl implements KnowledgeService {
                 apiBuilder.append("| 暂无 | 暂无 | 暂无 | 暂无 |\n");
             }
 
+            // 7. 静态 AST 解析并自动合成数据库表操作说明（database-index.md）
             StringBuilder dbBuilder = new StringBuilder();
             dbBuilder.append("# 数据库操作与表关联索引 (Database Index)\n\n");
             dbBuilder.append("| 涉及数据表 | 模块名称 | 操作方法 |\n");
@@ -225,6 +244,7 @@ public class KnowledgeServiceImpl implements KnowledgeService {
                 dbBuilder.append("| 暂无 | 暂无 | 暂无 |\n");
             }
 
+            // 8. 静态 AST 解析并自动合成模块类依赖关系表（dependency-index.md）
             StringBuilder depBuilder = new StringBuilder();
             depBuilder.append("# 模块调用与类依赖链路 (Dependency Index)\n\n");
             depBuilder.append("| 涉及类名 | 模块名称 | 依赖的其他类 |\n");
@@ -255,6 +275,7 @@ public class KnowledgeServiceImpl implements KnowledgeService {
                 depBuilder.append("| 暂无 | 暂无 | 暂无 |\n");
             }
 
+            // 9. 扫描提取未处理的待确认事项汇总（pending-confirmation.md）
             StringBuilder pcBuilder = new StringBuilder();
             pcBuilder.append("# 待确认事项汇总清单\n\n");
             boolean hasPc = false;
@@ -274,6 +295,7 @@ public class KnowledgeServiceImpl implements KnowledgeService {
                 pcBuilder.append("恭喜，目前系统内无待确认的阻断事项！\n");
             }
 
+            // 执行本地磁盘写入落盘
             Files.writeString(docsPath.resolve("index.md"), indexBuilder.toString());
             Files.writeString(docsPath.resolve("module-index.md"), moduleIndexBuilder.toString());
             Files.writeString(docsPath.resolve("architecture-overview.md"), archBuilder.toString());
@@ -286,6 +308,7 @@ public class KnowledgeServiceImpl implements KnowledgeService {
 
             Files.writeString(metaPath.resolve("module-map.yaml"), yamlBuilder.toString());
 
+            // 10. 保存发布版本控制及提示词使用历史数据至 meta 文件夹下做离线审计
             ObjectNode versionJson = objectMapper.createObjectNode();
             versionJson.put("version", versionNum);
             versionJson.put("systemId", task.getSystemId());
@@ -307,6 +330,7 @@ public class KnowledgeServiceImpl implements KnowledgeService {
             throw new BusinessException("本地知识文件生成失败: " + e.getMessage());
         }
 
+        // 保存知识发布版本实体记录，初始状态为 DRAFT (待推送)
         KnowledgeVersion version = new KnowledgeVersion();
         version.setSystemId(task.getSystemId());
         version.setRepositoryId(task.getRepositoryId());
@@ -327,6 +351,10 @@ public class KnowledgeServiceImpl implements KnowledgeService {
         return version;
     }
 
+    /**
+     * 推送知识库到 Git
+     * 使用 JGit 操作，若没有克隆的 .git 目录，则自动降级为 Mock 提交推送成功状态以保障 MVP 顺畅流转。
+     */
     @Override
     @Transactional
     public void pushToGit(Long versionId) {
@@ -353,12 +381,14 @@ public class KnowledgeServiceImpl implements KnowledgeService {
             throw new BusinessException("没有草稿需要推送");
         }
 
+        // 强校验一：必须所有模块都复核并确认为 CONFIRMED 状态才能推送
         for (KnowledgeDraft draft : drafts) {
             if (!"CONFIRMED".equals(draft.getStatus())) {
                 throw new BusinessException("模块 " + draft.getModuleName() + " 的状态是 " + draft.getStatus() + "，必须确认为已确认(CONFIRMED)状态才能推送！");
             }
         }
 
+        // 强校验二：模块草稿内容中不能残留任何 `- [ ]` 待确认标记
         for (KnowledgeDraft draft : drafts) {
             File draftFile = new File(URI.create(draft.getContentUri()));
             if (draftFile.exists()) {
@@ -373,6 +403,7 @@ public class KnowledgeServiceImpl implements KnowledgeService {
             }
         }
 
+        // 强校验三：模块名称不能包含非法的特殊路径字符
         String illegalChars = ".*[\\\\/:*?\"<>|].*";
         for (KnowledgeDraft draft : drafts) {
             if (draft.getModuleName().matches(illegalChars)) {
@@ -385,7 +416,7 @@ public class KnowledgeServiceImpl implements KnowledgeService {
 
         File taskRepoDir = new File("temp_repos/task_" + task.getId());
         if (!taskRepoDir.exists() || !new File(taskRepoDir, ".git").exists()) {
-            // 如果本地没有 Git 目录，则说明是 Fallback 离线测试
+            // 本地离线开发降级处理
             log.warn("未检测到本地 .git 目录，直接启用 Git 推送 Mock 降级");
             version.setStatus("PUSHED");
             version.setTargetCommit("MOCK_PUSH_COMMIT_" + System.currentTimeMillis());
@@ -397,9 +428,12 @@ public class KnowledgeServiceImpl implements KnowledgeService {
         try {
             log.info("开始使用 JGit 提交并推送至 Git 仓库...");
             try (Git git = Git.open(taskRepoDir)) {
+                // git add docs/
                 git.add().addFilepattern("docs").call();
+                // git commit -m "docs: add code-insight knowledge version ..."
                 git.commit().setMessage("docs: add code-insight knowledge version " + version.getVersionNum()).call();
                 
+                // 执行 Git Push
                 if (StringUtils.hasText(repo.getUsername()) && StringUtils.hasText(repo.getPassword())) {
                     git.push()
                             .setCredentialsProvider(new UsernamePasswordCredentialsProvider(repo.getUsername(), repo.getPassword()))
@@ -424,6 +458,9 @@ public class KnowledgeServiceImpl implements KnowledgeService {
         }
     }
 
+    /**
+     * 导出为 ZIP 压缩包二进制流
+     */
     @Override
     public byte[] exportZip(Long versionId) {
         KnowledgeVersion version = versionMapper.selectById(versionId);
@@ -447,6 +484,9 @@ public class KnowledgeServiceImpl implements KnowledgeService {
         return baos.toByteArray();
     }
 
+    /**
+     * 分页多条件查询已发布的版本记录
+     */
     @Override
     public Page<KnowledgeVersion> listVersionsPage(int current, int size, Long systemId) {
         Page<KnowledgeVersion> page = new Page<>(current, size);
@@ -456,6 +496,9 @@ public class KnowledgeServiceImpl implements KnowledgeService {
         return versionMapper.selectPage(page, qw);
     }
 
+    /**
+     * 递归遍历打包压缩目录辅助方法
+     */
     private void zipDirectory(File baseDir, File currentDir, ZipOutputStream zos) throws IOException {
         File[] files = currentDir.listFiles();
         if (files == null) return;

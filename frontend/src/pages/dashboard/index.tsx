@@ -69,6 +69,11 @@ const versionStatusLabel: Record<string, string> = {
   FAILED: '失败',
 };
 
+/**
+ * 仪表盘看板页面组件 (Dashboard)
+ * 呈现整个系统的全局 KPI 指标卡片（系统数、运行中任务数、待复核队列、Token总开销），
+ * 并配置折线图展现 Token 每日消耗趋势、环形图呈现大模型占比，以及呈现最近的任务和推送状态。
+ */
 const Dashboard: React.FC = () => {
   // 看板核心 KPI 数据状态
   const [stats, setStats] = useState({
@@ -78,9 +83,14 @@ const Dashboard: React.FC = () => {
     todayTokens: 0,
     cost: 0,
   });
+  
+  // 最近反编译任务列表
   const [recentTasks, setRecentTasks] = useState<Task[]>([]);
+  // 最近推送记录列表
   const [recentPushes, setRecentPushes] = useState<KnowledgeVersion[]>([]);
+  // Token 审计图表数据载荷
   const [chartData, setChartData] = useState<TokenStats | null>(null);
+  // 全局加载状态
   const [loading, setLoading] = useState(false);
 
   /**
@@ -96,15 +106,19 @@ const Dashboard: React.FC = () => {
         listVersions({ current: 1, size: 5 }),
         getTokenStats(),
       ]);
+      
+      // 提取成功或返回兜底的空实体
       const systemPage = systemResult.status === 'fulfilled' ? systemResult.value : emptyPage<System>();
       const taskPage = taskResult.status === 'fulfilled' ? taskResult.value : emptyPage<Task>();
       const pushPage = pushResult.status === 'fulfilled' ? pushResult.value : emptyPage<KnowledgeVersion>();
       const tokenStats = tokenResult.status === 'fulfilled' ? tokenResult.value : emptyTokenStats;
 
-      // 聚合及提炼卡片数值指标
+      // 聚合及提炼看板顶部的 KPI 数值指标
       setStats({
         systems: systemPage.total,
+        // 过滤正在执行管道任务的条数
         activeTasks: taskPage.records.filter((task) => runningStatuses.includes(task.status)).length,
+        // 过滤处于待复核状态的任务
         pendingReviews: taskPage.records.filter((task) => task.status === 'PENDING_REVIEW').length,
         todayTokens: tokenStats.totalTokens,
         cost: tokenStats.totalCost,
@@ -121,7 +135,7 @@ const Dashboard: React.FC = () => {
     fetchDashboardData();
   }, [fetchDashboardData]);
 
-  // ECharts 配置：Token 每日消耗趋势折线图
+  // ECharts 配置：Token 每日消耗趋势折线图参数对象
   const lineOption = {
     color: ['#2563eb'],
     tooltip: { trigger: 'axis' },
@@ -151,7 +165,7 @@ const Dashboard: React.FC = () => {
     ],
   };
 
-  // ECharts 配置：各型号大模型 Token 占比环形图
+  // ECharts 配置：各型号大模型 Token 占比环形图参数对象
   const donutOption = {
     color: ['#2563eb', '#0891b2', '#16a34a', '#d97706', '#dc2626'],
     tooltip: { trigger: 'item' },
@@ -169,6 +183,7 @@ const Dashboard: React.FC = () => {
     ],
   };
 
+  // KPI 顶部卡片元配置数组
   const kpis = [
     {
       label: '已接入系统',
@@ -202,6 +217,7 @@ const Dashboard: React.FC = () => {
 
   return (
     <div className="ci-page ci-dashboard-page">
+      {/* 头部介绍横幅 banner 区域 */}
       <section className="ci-hero-panel">
         <div className="ci-hero-content">
           <Space size={8} wrap>
@@ -214,6 +230,8 @@ const Dashboard: React.FC = () => {
             代码洞察工作台覆盖系统接入、代码库扫描、AI 自动归类、Markdown 草稿复核、版本发布、推送 Git 仓库、Token 计量和操作审计等全流程。
           </p>
         </div>
+        
+        {/* 快捷菜单入口操作板 */}
         <div className="ci-hero-actions-panel">
           <div className="ci-hero-actions-title">
             <ThunderboltOutlined style={{ color: '#38bdf8' }} /> 快捷操作
@@ -233,6 +251,7 @@ const Dashboard: React.FC = () => {
         </div>
       </section>
 
+      {/* KPI 卡片栏网格 */}
       <div className="ci-kpi-grid">
         {kpis.map((item) => (
           <div className="ci-kpi-card" style={{ '--accent': item.accent } as React.CSSProperties} key={item.label}>
@@ -248,6 +267,7 @@ const Dashboard: React.FC = () => {
         ))}
       </div>
 
+      {/* 核心仪表盘图表与最近记录布局 */}
       <div className="ci-dashboard-layout">
         {/* 左侧：Token 趋势 与 最近任务 */}
         <div className="ci-dashboard-main">
@@ -371,3 +391,4 @@ const Dashboard: React.FC = () => {
 };
 
 export default Dashboard;
+

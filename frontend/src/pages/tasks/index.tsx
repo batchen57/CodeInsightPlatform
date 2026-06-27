@@ -18,8 +18,10 @@ import type { AiModel, Prompt, Repository, System, Task } from '../../types';
 
 const { Text } = Typography;
 
+// 运行中的阶段状态集：这些状态下的任务属于活跃状态，页面需要发起自动轮询
 const runningStatuses = ['PENDING', 'PULLING_CODE', 'PARSING_CODE', 'SPLITTING_TASK', 'AI_ANALYZING', 'GENERATING_DOC', 'PUSHING'];
 
+// 各个状态下的标签显示及微标配置
 const statusMeta: Record<string, { color: string; label: string; loading?: boolean }> = {
   DRAFT: { color: 'default', label: '草稿' },
   PENDING: { color: 'blue', label: '排队中', loading: true },
@@ -37,29 +39,42 @@ const statusMeta: Record<string, { color: string; label: string; loading?: boole
   CANCELLED: { color: 'default', label: '已取消' },
 };
 
+/**
+ * 扫描分析任务列表页面组件 (Tasks)
+ * 包含分页任务列表展示、基于 React state-driven 的 2.5 秒高频动态轮询更新状态机机制、
+ * 以及三步向导 Modal 弹框用于创建全量/增量任务。
+ */
 const Tasks: React.FC = () => {
   const navigate = useNavigate();
+  
+  // 任务表格状态数据
   const [tasks, setTasks] = useState<Task[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [current, setCurrent] = useState(1);
   const [size, setSize] = useState(10);
 
+  // 下拉筛选条件状态
   const [filterSystemId, setFilterSystemId] = useState<number | undefined>();
   const [filterStatus, setFilterStatus] = useState<string | undefined>();
   const [filterType, setFilterType] = useState<string | undefined>();
 
+  // 初始化加载的下拉选项数据
   const [systems, setSystems] = useState<System[]>([]);
   const [taskSourceSystems, setTaskSourceSystems] = useState<System[]>([]);
   const [repositories, setRepositories] = useState<Repository[]>([]);
   const [prompts, setPrompts] = useState<Prompt[]>([]);
   const [models, setModels] = useState<AiModel[]>([]);
 
+  // 新建任务向导弹框的步骤控制器、表单组件引用
   const [modalOpen, setModalOpen] = useState(false);
   const [currentStep, setCurrentStep] = useState(0);
   const [form] = Form.useForm();
+  
+  // 观察并在表单选择系统改变时，级联过滤出该系统下的可用 Git 仓库
   const selectedSystemId = Form.useWatch('systemId', form);
 
+  // 获取并刷新任务分页列表数据
   const fetchTasks = useCallback(
     async (page = current, pageSize = size) => {
       setLoading(true);
@@ -80,6 +95,7 @@ const Tasks: React.FC = () => {
     [current, filterStatus, filterSystemId, filterType, size],
   );
 
+  // 初始化：获取已配置了代码库的系统列表、提示词模板及可用 AI 模型数据
   const loadOptions = useCallback(async () => {
     const [sysData, repositoryData, promptData, modelData] = await Promise.all([
       listSystems({ current: 1, size: 100, status: 1 }),
@@ -94,14 +110,17 @@ const Tasks: React.FC = () => {
     setModels(modelData);
   }, []);
 
+  // 监听条件和分页加载表格
   useEffect(() => {
     fetchTasks();
   }, [fetchTasks]);
 
+  // 加载选项数据
   useEffect(() => {
     loadOptions();
   }, [loadOptions]);
 
+  // 级联拉取已选择系统名下的所有 Git 代码仓库记录
   useEffect(() => {
     if (!selectedSystemId) {
       setRepositories([]);
@@ -113,6 +132,10 @@ const Tasks: React.FC = () => {
     });
   }, [form, selectedSystemId]);
 
+  /**
+   * 自动轮询机制 (2.5 秒刷新一次)
+   * 只有当当前列表页面存在处理“运行中 (runningStatuses)”状态的任务时，才激活定时轮询，避免无意义的背景网络开销。
+   */
   useEffect(() => {
     const hasRunningTasks = tasks.some((task) => runningStatuses.includes(task.status));
     if (!hasRunningTasks) {
@@ -124,24 +147,28 @@ const Tasks: React.FC = () => {
     return () => window.clearInterval(timer);
   }, [current, fetchTasks, size, tasks]);
 
+  // 动作：触发启动反编译任务
   const handleStart = async (id: number) => {
     await startTask(id);
     message.success('任务已启动');
     fetchTasks();
   };
 
+  // 动作：强制终止反编译任务
   const handleTerminate = async (id: number) => {
     await terminateTask(id);
     message.success('终止请求已发送');
     fetchTasks();
   };
 
+  // 动作：重试失败的任务
   const handleRetry = async (id: number) => {
     await retryTask(id);
     message.success('任务已重新启动');
     fetchTasks();
   };
 
+  // 向导最终步骤：执行新建任务表单落盘
   const handleCreateTask = async () => {
     const values = form.getFieldsValue();
     const payload = {
@@ -162,6 +189,7 @@ const Tasks: React.FC = () => {
     fetchTasks();
   };
 
+  // 获取状态标签组件
   const getStatusTag = (status: string) => {
     const meta = statusMeta[status] ?? { color: 'default', label: status };
     return (
@@ -171,6 +199,7 @@ const Tasks: React.FC = () => {
     );
   };
 
+  // 表头列配置
   const columns = [
     {
       title: '任务',
@@ -265,6 +294,7 @@ const Tasks: React.FC = () => {
 
   return (
     <div className="ci-page ci-tasks-page">
+      {/* 顶部多条件联合过滤器 */}
       <Card className="ci-filter-card">
         <Row gutter={[12, 12]} align="middle">
           <Col xs={24} md={6}>
@@ -321,6 +351,7 @@ const Tasks: React.FC = () => {
         </Row>
       </Card>
 
+      {/* 任务队列主数据表 */}
       <Card title="任务执行队列">
         <Table
           dataSource={tasks}
@@ -341,6 +372,7 @@ const Tasks: React.FC = () => {
         />
       </Card>
 
+      {/* 创建任务向导 Modal 弹框 */}
       <Modal
         title="创建反编译任务"
         open={modalOpen}
@@ -385,6 +417,7 @@ const Tasks: React.FC = () => {
         </div>
 
         <Form form={form} layout="vertical" preserve={true}>
+          {/* 第一步：选择目标系统与待扫描仓库 */}
           <div style={{ display: currentStep === 0 ? 'block' : 'none' }}>
             <Form.Item name="systemId" label="系统" rules={[{ required: true, message: '请选择系统' }]}>
               <Select
@@ -408,6 +441,7 @@ const Tasks: React.FC = () => {
             </Form.Item>
           </div>
 
+          {/* 第二步：配置扫描类型、使用的 AI 模型与提示词版本 */}
           <div style={{ display: currentStep === 1 ? 'block' : 'none' }}>
             <Form.Item name="taskType" label="任务类型" initialValue="INITIAL" rules={[{ required: true }]}>
               <Select
@@ -442,6 +476,7 @@ const Tasks: React.FC = () => {
             </Form.Item>
           </div>
 
+          {/* 第三步：核实并确认任务配置参数 */}
           {currentStep === 2 && (
             <div className="ci-confirm-box">
               <p>
