@@ -8,6 +8,10 @@ spring:
     init:
       mode: always
       schema-locations: classpath:db/schema.sql
+  data:
+    redis:
+      repositories:
+        enabled: false
   mvc:
     pathmatch:
       matching-strategy: ant_path_matcher

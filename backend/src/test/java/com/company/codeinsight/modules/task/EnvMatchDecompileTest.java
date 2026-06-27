@@ -27,7 +27,9 @@ import org.springframework.test.context.ActiveProfiles;
 
 import java.util.List;
 
-@SpringBootTest
+@SpringBootTest(properties = {
+    "spring.autoconfigure.exclude=org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration,org.springframework.boot.autoconfigure.data.redis.RedisRepositoriesAutoConfiguration"
+})
 @ActiveProfiles("test")
 public class EnvMatchDecompileTest {
 

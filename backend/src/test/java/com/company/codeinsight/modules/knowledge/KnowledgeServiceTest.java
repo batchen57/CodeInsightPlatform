@@ -22,7 +22,9 @@ import java.io.File;
 import java.nio.file.Files;
 import java.time.LocalDateTime;
 
-@SpringBootTest
+@SpringBootTest(properties = {
+    "spring.autoconfigure.exclude=org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration,org.springframework.boot.autoconfigure.data.redis.RedisRepositoriesAutoConfiguration"
+})
 @ActiveProfiles("test")
 @Transactional
 public class KnowledgeServiceTest {
