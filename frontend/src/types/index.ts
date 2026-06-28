@@ -53,6 +53,21 @@ export interface Task {
   updatedAt: string;
 }
 
+export interface PushTask {
+  id: number;
+  versionId: number;
+  pushMethod: string;
+  status: string;
+  retryCount: number;
+  maxRetries: number;
+  targetInfo: string;
+  errorMessage?: string;
+  enqueuedAt: string;
+  startedAt?: string;
+  completedAt?: string;
+  createdAt: string;
+}
+
 export interface KnowledgeDraft {
   id: number;
   workspaceId: number;

@@ -29,6 +29,11 @@ CREATE TABLE IF NOT EXISTS ci_repository (
     exclude_file_types VARCHAR(200),
     last_commit_id VARCHAR(100),
     last_decompile_at TIMESTAMP,
+    push_git_url VARCHAR(500),
+    push_branch VARCHAR(100),
+    push_username VARCHAR(100),
+    push_password VARCHAR(255),
+    push_target_folder VARCHAR(255) DEFAULT 'docs/code-insight',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
 );
@@ -44,6 +49,11 @@ COMMENT ON COLUMN ci_repository.exclude_dirs IS '排除目录，逗号分隔';
 COMMENT ON COLUMN ci_repository.exclude_file_types IS '排除文件类型，逗号分隔';
 COMMENT ON COLUMN ci_repository.last_commit_id IS '最后确认 Commit ID';
 COMMENT ON COLUMN ci_repository.last_decompile_at IS '最后反编译时间';
+COMMENT ON COLUMN ci_repository.push_git_url IS '推送目标 Git 仓库地址（为空则使用 git_url）';
+COMMENT ON COLUMN ci_repository.push_branch IS '推送目标分支（为空则默认 docs-code-insight）';
+COMMENT ON COLUMN ci_repository.push_username IS '推送 Git 凭证用户名';
+COMMENT ON COLUMN ci_repository.push_password IS '推送 Git 凭证密码/Token';
+COMMENT ON COLUMN ci_repository.push_target_folder IS '文档在仓库中的目标文件夹路径';
 
 -- 3. 提示词模板表
 CREATE TABLE IF NOT EXISTS ci_prompt (
@@ -201,22 +211,30 @@ COMMENT ON COLUMN ci_draft_workspace.status IS '状态：ACTIVE, COMPLETED, ARCH
 CREATE TABLE IF NOT EXISTS ci_knowledge_draft (
     id BIGSERIAL PRIMARY KEY,
     workspace_id BIGINT NOT NULL,
+    parent_id BIGINT,
     file_path VARCHAR(255) NOT NULL,
     module_name VARCHAR(100) NOT NULL,
     content_uri VARCHAR(255) NOT NULL,
-    status VARCHAR(50) NOT NULL,
+    status VARCHAR(50) DEFAULT 'DRAFT' NOT NULL,
+    sort_order INT DEFAULT 0 NOT NULL,
     hash VARCHAR(100) NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
 );
+-- 在线追加列（兼容已有数据库）
+ALTER TABLE ci_knowledge_draft ADD COLUMN IF NOT EXISTS parent_id BIGINT;
+ALTER TABLE ci_knowledge_draft ADD COLUMN IF NOT EXISTS sort_order INT DEFAULT 0 NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_draft_workspace_id ON ci_knowledge_draft (workspace_id);
 CREATE INDEX IF NOT EXISTS idx_draft_status ON ci_knowledge_draft (status);
+CREATE INDEX IF NOT EXISTS idx_draft_parent_id ON ci_knowledge_draft (parent_id);
 COMMENT ON TABLE ci_knowledge_draft IS 'Markdown知识草稿表';
 COMMENT ON COLUMN ci_knowledge_draft.workspace_id IS '关联草稿工作区ID';
+COMMENT ON COLUMN ci_knowledge_draft.parent_id IS '父级草稿ID（自引用，用于构建模块目录树）';
 COMMENT ON COLUMN ci_knowledge_draft.file_path IS '模块/文件 Markdown 路径';
 COMMENT ON COLUMN ci_knowledge_draft.module_name IS '模块名称';
 COMMENT ON COLUMN ci_knowledge_draft.content_uri IS '草稿内容在存储中的地址';
-COMMENT ON COLUMN ci_knowledge_draft.status IS '草稿状态';
+COMMENT ON COLUMN ci_knowledge_draft.status IS '草稿状态：DRAFT / EDITING / CONFIRMED / REJECTED / PUSHED / ARCHIVED（与 ci_task.status 解耦）';
+COMMENT ON COLUMN ci_knowledge_draft.sort_order IS '同级排序权重（升序）';
 COMMENT ON COLUMN ci_knowledge_draft.hash IS '草稿内容的 MD5 Hash';
 
 -- 10. 草稿修订历史表
@@ -241,13 +259,17 @@ CREATE TABLE IF NOT EXISTS ci_draft_review_comment (
     draft_id BIGINT NOT NULL,
     author VARCHAR(50) NOT NULL,
     comment TEXT NOT NULL,
+    type VARCHAR(20) DEFAULT 'NORMAL' NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
 );
+-- 在线追加列（兼容已有数据库）
+ALTER TABLE ci_draft_review_comment ADD COLUMN IF NOT EXISTS type VARCHAR(20) DEFAULT 'NORMAL' NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_comment_draft_id ON ci_draft_review_comment (draft_id);
 COMMENT ON TABLE ci_draft_review_comment IS '草稿评审意见表';
 COMMENT ON COLUMN ci_draft_review_comment.draft_id IS '关联草稿ID';
 COMMENT ON COLUMN ci_draft_review_comment.author IS '评审人';
 COMMENT ON COLUMN ci_draft_review_comment.comment IS '评审意见';
+COMMENT ON COLUMN ci_draft_review_comment.type IS '意见类型：NORMAL=通用意见 / PASS=通过意见 / REJECT=驳回意见';
 
 -- 12. 草稿代码来源引用表
 CREATE TABLE IF NOT EXISTS ci_draft_source_reference (
@@ -279,6 +301,7 @@ CREATE TABLE IF NOT EXISTS ci_knowledge_version (
     prompt_version INT,
     model_name VARCHAR(100),
     status VARCHAR(50) NOT NULL,
+    push_method VARCHAR(20) DEFAULT 'GIT',
     confirmed_by VARCHAR(50) NOT NULL,
     confirmed_at TIMESTAMP NOT NULL,
     pushed_at TIMESTAMP,
@@ -298,9 +321,39 @@ COMMENT ON COLUMN ci_knowledge_version.target_commit IS '推送后的提交 Comm
 COMMENT ON COLUMN ci_knowledge_version.prompt_version IS '所用提示词版本';
 COMMENT ON COLUMN ci_knowledge_version.model_name IS '所用 AI 模型名称';
 COMMENT ON COLUMN ci_knowledge_version.status IS '状态：DRAFT, PUSHING, PUSHED, FAILED';
+COMMENT ON COLUMN ci_knowledge_version.push_method IS '推送方式: GIT=Git推送, S3=对象存储';
 COMMENT ON COLUMN ci_knowledge_version.confirmed_by IS '确认人';
 COMMENT ON COLUMN ci_knowledge_version.confirmed_at IS '确认时间';
 COMMENT ON COLUMN ci_knowledge_version.pushed_at IS '推送时间';
+
+-- 13.5. 推送任务审计表
+CREATE TABLE IF NOT EXISTS ci_push_task (
+    id BIGSERIAL PRIMARY KEY,
+    version_id BIGINT NOT NULL,
+    push_method VARCHAR(20) NOT NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+    retry_count INT DEFAULT 0 NOT NULL,
+    max_retries INT DEFAULT 3 NOT NULL,
+    target_info TEXT,
+    error_message TEXT,
+    enqueued_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    started_at TIMESTAMP,
+    completed_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_push_task_version_id ON ci_push_task (version_id);
+CREATE INDEX IF NOT EXISTS idx_push_task_status ON ci_push_task (status);
+COMMENT ON TABLE ci_push_task IS '知识推送任务审计表';
+COMMENT ON COLUMN ci_push_task.version_id IS '关联的知识版本ID';
+COMMENT ON COLUMN ci_push_task.push_method IS '推送方式: GIT 或 S3';
+COMMENT ON COLUMN ci_push_task.status IS '推送状态: PENDING, PROCESSING, SUCCESS, FAILED';
+COMMENT ON COLUMN ci_push_task.retry_count IS '重试次数';
+COMMENT ON COLUMN ci_push_task.max_retries IS '最大重试次数';
+COMMENT ON COLUMN ci_push_task.target_info IS '推送目标摘要信息(JSON)';
+COMMENT ON COLUMN ci_push_task.error_message IS '失败原因';
+COMMENT ON COLUMN ci_push_task.enqueued_at IS '入队时间';
+COMMENT ON COLUMN ci_push_task.started_at IS '开始执行时间';
+COMMENT ON COLUMN ci_push_task.completed_at IS '完成时间';
 
 -- 14. Token使用审计表
 CREATE TABLE IF NOT EXISTS ci_token_usage_audit (
@@ -390,5 +443,26 @@ COMMENT ON COLUMN ci_model.sort_order IS '排序权重';
 
 -- 17. 迁移或兼容性字段维护
 ALTER TABLE ci_task ADD COLUMN IF NOT EXISTS model_name VARCHAR(100);
+
+-- === 草稿状态词汇迁移（兼容历史数据） ===
+-- 历史草稿曾使用与 ci_task 共享的字面值（AI_GENERATED / PENDING_REVIEW / REVIEWING / REVISED），
+-- 自 v0.2 起统一收敛到 DraftStatus 枚举（DRAFT / EDITING / CONFIRMED / REJECTED / PUSHED / ARCHIVED）。
+-- 以下 UPDATE 在每次启动时幂等执行：第二次起所有命中行已为新值，0 行受影响。
+UPDATE ci_knowledge_draft
+   SET status = 'DRAFT'
+ WHERE status IN ('AI_GENERATED', 'PENDING_REVIEW');
+
+UPDATE ci_knowledge_draft
+   SET status = 'EDITING'
+ WHERE status IN ('REVIEWING', 'REVISED');
+
+-- CONFIRMED / PUSHED / ARCHIVED 字面值不变。
+
+-- === v0.3 移除 REJECTED 状态 ===
+-- 复核流程不再使用驳回机制，复核人通过直接编辑修改草稿。
+-- 历史 REJECTED 草稿视同 DRAFT（待复核），下次启动后端时由本 UPDATE 幂等迁移。
+UPDATE ci_knowledge_draft
+   SET status = 'DRAFT'
+ WHERE status = 'REJECTED';
 
 

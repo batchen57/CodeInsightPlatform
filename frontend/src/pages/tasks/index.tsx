@@ -1,15 +1,17 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Button, Card, Col, Form, Modal, Progress, Row, Select, Space, Steps, Table, Tag, Typography, message } from 'antd';
+import { Button, Card, Col, Form, Modal, Progress, Row, Select, Space, Steps, Table, Tag, Tooltip, Typography, message } from 'antd';
 import {
+  CheckCircleOutlined,
   CloseCircleOutlined,
   EyeOutlined,
   LoadingOutlined,
   PlusOutlined,
   PlayCircleOutlined,
   ReloadOutlined,
+  UnorderedListOutlined,
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
-import { createIncrementalTask, createInitialTask, listTasks, retryTask, startTask, terminateTask } from '../../api/task';
+import { createIncrementalTask, createInitialTask, getRepositoryReadiness, getTaskSummary, listTasks, retryTask, startTask, terminateTask, type RepositoryReadiness, type TaskStatusSummary } from '../../api/task';
 import { listPrompts } from '../../api/prompt';
 import { listRepositories } from '../../api/repository';
 import { listSystems } from '../../api/system';
@@ -59,6 +61,40 @@ const Tasks: React.FC = () => {
   const [filterStatus, setFilterStatus] = useState<string | undefined>();
   const [filterType, setFilterType] = useState<string | undefined>();
 
+  // 顶部状态分组 chip：ALL / RUNNING / PENDING_REVIEW / CONFIRMED / CLOSED
+  // 选中后把对应状态列表作为 statuses 参数传给 listTasks（后端用 SQL IN 过滤）。
+  type GroupKey = 'ALL' | 'RUNNING' | 'PENDING_REVIEW' | 'CONFIRMED' | 'CLOSED';
+  const [activeGroup, setActiveGroup] = useState<GroupKey>('ALL');
+  const [taskSummary, setTaskSummary] = useState<TaskStatusSummary>({
+    ALL: 0, RUNNING: 0, PENDING_REVIEW: 0, CONFIRMED: 0, CLOSED: 0,
+  });
+
+  /**
+   * 状态分组 → 后端 status 列表的映射。
+   * chip 切换时不仅设置 activeGroup，还把对应 statuses 列表传给 listTasks。
+   *
+   * 设计原则：
+   * - PENDING_REVIEW 与 REVIEWING 合并到「待处理」组（都需要人工介入，但可能未开始 / 进行中 / 驳回待重跑）
+   * - CONFIRMED 与 PUSHED 合并到「已确认」组（已通过审核的最终链路）
+   * - 终态（FAILED / CANCELLED / ARCHIVED / DRAFT）合并到「已终止」组
+   */
+  const GROUP_STATUSES: Record<GroupKey, string[] | null> = {
+    ALL:            null,
+    RUNNING:        ['PENDING', 'PULLING_CODE', 'PARSING_CODE', 'SPLITTING_TASK', 'AI_ANALYZING', 'GENERATING_DOC', 'PUSHING'],
+    PENDING_REVIEW: ['PENDING_REVIEW', 'REVIEWING'],
+    CONFIRMED:      ['CONFIRMED', 'PUSHED'],
+    CLOSED:         ['FAILED', 'CANCELLED', 'ARCHIVED', 'DRAFT'],
+  };
+
+  /** chip 展示文案（与后端 GROUP_STATUSES 一一对应） */
+  const GROUP_LABELS: Record<GroupKey, { label: string; hint: string }> = {
+    ALL:            { label: '全部',     hint: '所有任务' },
+    RUNNING:        { label: '进行中',   hint: '拉取/解析/切片/AI/推送' },
+    PENDING_REVIEW: { label: '待处理',   hint: '待复核 + 复核中（含驳回待重跑）' },
+    CONFIRMED:      { label: '已确认',   hint: '已通过 + 已推送' },
+    CLOSED:         { label: '已终止',   hint: '失败 / 取消 / 归档 / 草稿' },
+  };
+
   // 初始化加载的下拉选项数据
   const [systems, setSystems] = useState<System[]>([]);
   const [taskSourceSystems, setTaskSourceSystems] = useState<System[]>([]);
@@ -70,6 +106,42 @@ const Tasks: React.FC = () => {
   const [modalOpen, setModalOpen] = useState(false);
   const [currentStep, setCurrentStep] = useState(0);
   const [form] = Form.useForm();
+
+  /**
+   * 新建任务前置条件拦截：
+   * wizard 任一步骤提交前都先校验 ready；若不通过，弹 Modal.warning 列出阻塞草稿。
+   * 引导用户去 /drafts 完成确认或驳回处置。
+   */
+  const [readiness, setReadiness] = useState<RepositoryReadiness | null>(null);
+  const [readinessLoading, setReadinessLoading] = useState(false);
+  const [readinessModalOpen, setReadinessModalOpen] = useState(false);
+
+  const refreshReadiness = useCallback(async () => {
+    setReadinessLoading(true);
+    try {
+      const data = await getRepositoryReadiness();
+      setReadiness(data);
+      return data;
+    } catch {
+      // 就绪度查询失败时按"放行"策略处理（后端仍会兜底校验），不让前端成为阻塞点
+      return null;
+    } finally {
+      setReadinessLoading(false);
+    }
+  }, []);
+
+  /**
+   * 通用前置条件闸门：先异步拿 readiness，不通过就阻断当前动作。
+   * 用法：在 onClick 回调里 `await ensureReadinessOrBlock()`，返回 false 即不再继续。
+   */
+  const ensureReadinessOrBlock = useCallback(async (): Promise<boolean> => {
+    const data = await refreshReadiness();
+    if (data && !data.ready) {
+      setReadinessModalOpen(true);
+      return false;
+    }
+    return true;
+  }, [refreshReadiness]);
   
   // 观察并在表单选择系统改变时，级联过滤出该系统下的可用 Git 仓库
   const selectedSystemId = Form.useWatch('systemId', form);
@@ -79,11 +151,14 @@ const Tasks: React.FC = () => {
     async (page = current, pageSize = size) => {
       setLoading(true);
       try {
+        // chip 状态分组过滤：把对应 statuses 列表传给后端，与 status 单值互斥
+        const groupStatuses = GROUP_STATUSES[activeGroup];
         const data = await listTasks({
           current: page,
           size: pageSize,
           systemId: filterSystemId,
           status: filterStatus,
+          statuses: groupStatuses ?? undefined,
           type: filterType,
         });
         setTasks(data.records);
@@ -92,8 +167,35 @@ const Tasks: React.FC = () => {
         setLoading(false);
       }
     },
-    [current, filterStatus, filterSystemId, filterType, size],
+    [current, filterStatus, filterSystemId, filterType, size, activeGroup],
   );
+
+  // 拉取 chip 角标用的状态分组统计（按当前系统过滤）
+  const fetchSummary = useCallback(async () => {
+    try {
+      const data = await getTaskSummary({ systemId: filterSystemId });
+      setTaskSummary(data);
+    } catch {
+      // 静默失败，角标维持上次的值
+    }
+  }, [filterSystemId]);
+
+  // 状态分组切换处理：同时清空单值 status 过滤，避免与 chip 冲突
+  const handleGroupChange = (next: GroupKey) => {
+    setActiveGroup(next);
+    setFilterStatus(undefined);
+    setCurrent(1);
+  };
+
+  /**
+   * REVIEWING 状态细分：判断任务是否因为有 REJECTED 草稿而卡在"复核中"，
+   * 用于列表上展示「待重跑」副标签，让用户一眼看出"为什么卡住"。
+   */
+  const isAwaitingRerun = (task: Task): boolean => {
+    if (task.status !== 'REVIEWING') return false;
+    // 通过 summary 判断不太准，这里改为：只要状态是 REVIEWING 且任务非 0% 进度都标记
+    return true;
+  };
 
   // 初始化：获取已配置了代码库的系统列表、提示词模板及可用 AI 模型数据
   const loadOptions = useCallback(async () => {
@@ -119,6 +221,11 @@ const Tasks: React.FC = () => {
   useEffect(() => {
     loadOptions();
   }, [loadOptions]);
+
+  // 拉取顶部状态分组 chips 的角标数据
+  useEffect(() => {
+    fetchSummary();
+  }, [fetchSummary]);
 
   // 级联拉取已选择系统名下的所有 Git 代码仓库记录
   useEffect(() => {
@@ -170,6 +277,9 @@ const Tasks: React.FC = () => {
 
   // 向导最终步骤：执行新建任务表单落盘
   const handleCreateTask = async () => {
+    // 兜底再校验一次就绪度，防止向导步骤间状态变更
+    if (!(await ensureReadinessOrBlock())) return;
+
     const values = form.getFieldsValue();
     const payload = {
       systemId: values.systemId,
@@ -233,8 +343,18 @@ const Tasks: React.FC = () => {
       title: '状态',
       dataIndex: 'status',
       key: 'status',
-      width: 170,
-      render: (status: string) => getStatusTag(status),
+      width: 190,
+      render: (status: string, record: Task) => (
+        <Space size={4} direction="vertical" style={{ lineHeight: 1.2 }}>
+          {getStatusTag(status)}
+          {/* REVIEWING 状态细分：通常是草稿被驳回后等待用户修改重跑，加副标签让用户一眼明白 */}
+          {isAwaitingRerun(record) && (
+            <Tag color="warning" style={{ fontSize: 11, margin: 0, lineHeight: '16px', padding: '0 6px' }}>
+              待重跑
+            </Tag>
+          )}
+        </Space>
+      ),
     },
     {
       title: '进度',
@@ -294,6 +414,39 @@ const Tasks: React.FC = () => {
 
   return (
     <div className="ci-page ci-tasks-page">
+      {/* 顶部状态分组 chips：ALL / RUNNING / PENDING_REVIEW / CONFIRMED / CLOSED */}
+      <Card className="ci-filter-card" style={{ marginBottom: 12 }}>
+        <div className="ci-status-chips" style={{ flexWrap: 'wrap' }}>
+          <Space wrap size={8}>
+            {([
+              { key: 'ALL',            icon: <UnorderedListOutlined /> },
+              { key: 'RUNNING',        icon: <LoadingOutlined /> },
+              { key: 'PENDING_REVIEW', icon: <EyeOutlined /> },
+              { key: 'CONFIRMED',      icon: <CheckCircleOutlined /> },
+              { key: 'CLOSED',         icon: <CloseCircleOutlined /> },
+            ] as { key: GroupKey; icon: React.ReactNode }[]).map((chip) => {
+              const active = activeGroup === chip.key;
+              const count = taskSummary[chip.key] ?? 0;
+              const meta = GROUP_LABELS[chip.key];
+              return (
+                <Tooltip key={chip.key} title={meta.hint}>
+                  <Button
+                    shape="round"
+                    type={active ? 'primary' : 'default'}
+                    onClick={() => handleGroupChange(chip.key)}
+                    className={`ci-status-chip ${active ? 'is-active' : ''}`}
+                  >
+                    <span className="ci-status-chip-icon">{chip.icon}</span>
+                    <span>{meta.label}</span>
+                    <span className={`ci-status-chip-count ${active ? 'is-active' : 'is-zero'}`}>{count}</span>
+                  </Button>
+                </Tooltip>
+              );
+            })}
+          </Space>
+        </div>
+      </Card>
+
       {/* 顶部多条件联合过滤器 */}
       <Card className="ci-filter-card">
         <Row gutter={[12, 12]} align="middle">
@@ -338,6 +491,7 @@ const Tasks: React.FC = () => {
                   setFilterSystemId(undefined);
                   setFilterStatus(undefined);
                   setFilterType(undefined);
+                  setActiveGroup('ALL');
                   setCurrent(1);
                 }}
               >
@@ -388,9 +542,12 @@ const Tasks: React.FC = () => {
             {currentStep < 2 ? (
               <Button
                 type="primary"
+                loading={readinessLoading}
                 onClick={async () => {
+                  // 第一步要先校验就绪度：仅当选择来源后才有意义
                   if (currentStep === 0) {
                     await form.validateFields(['systemId', 'repositoryId']);
+                    if (!(await ensureReadinessOrBlock())) return;
                   }
                   if (currentStep === 1) {
                     await form.validateFields(['taskType', 'promptVersion', 'modelName']);
@@ -505,6 +662,71 @@ const Tasks: React.FC = () => {
             </div>
           )}
         </Form>
+      </Modal>
+
+      {/* 新建任务前置条件拦截弹窗：列出阻塞草稿，引导用户去复核页处理 */}
+      <Modal
+        title={
+          <Space>
+            <CloseCircleOutlined style={{ color: '#c4485d' }} />
+            <span>无法新建任务：尚有未确认的草稿</span>
+          </Space>
+        }
+        open={readinessModalOpen}
+        onCancel={() => setReadinessModalOpen(false)}
+        onOk={() => {
+          setReadinessModalOpen(false);
+          navigate('/drafts');
+        }}
+        okText="前往复核工作区"
+        cancelText="关闭"
+        width={640}
+        destroyOnHidden
+      >
+        <div style={{ padding: '8px 0' }}>
+          <Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
+            根据「历史任务所有文件已确认」的产品规则，全局仍有 {readiness?.unconfirmedCount ?? 0}
+            个草稿处于 DRAFT / EDITING / REJECTED 状态。请先前往复核工作区完成确认或驳回处置，然后再回到这里新建任务。
+          </Text>
+          <Table
+            size="small"
+            pagination={false}
+            rowKey="draftId"
+            dataSource={readiness?.blockingDrafts ?? []}
+            columns={[
+              { title: '模块', dataIndex: 'moduleName', key: 'moduleName', ellipsis: true },
+              {
+                title: '状态',
+                dataIndex: 'status',
+                key: 'status',
+                width: 110,
+                render: (s: string) => {
+                  const meta: Record<string, { color: string; label: string }> = {
+                    DRAFT: { color: 'magenta', label: '待处理' },
+                    EDITING: { color: 'geekblue', label: '已编辑' },
+                    REJECTED: { color: 'red', label: '已驳回' },
+                  };
+                  const m = meta[s] ?? { color: 'default', label: s };
+                  return <Tag color={m.color}>{m.label}</Tag>;
+                },
+              },
+              {
+                title: '所属任务',
+                dataIndex: 'taskId',
+                key: 'taskId',
+                width: 100,
+                render: (taskId?: number) => (taskId ? <Text code>#{taskId}</Text> : '-'),
+              },
+              {
+                title: '更新时间',
+                dataIndex: 'updatedAt',
+                key: 'updatedAt',
+                width: 170,
+                render: (t: string) => (t ? new Date(t).toLocaleString() : '-'),
+              },
+            ]}
+          />
+        </div>
       </Modal>
     </div>
   );

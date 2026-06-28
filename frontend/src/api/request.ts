@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { message } from 'antd';
+import { getCurrentOperator } from './auth';
 
 /**
  * 全局 Axios HTTP 客户端基础实例
@@ -10,6 +11,16 @@ const request = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL || '/api',
   // 设置 30 秒超时断开机制，防范因大模型分析接口响应迟缓导致的请求无限期挂起
   timeout: 30000,
+});
+
+/**
+ * 请求拦截器：自动注入 X-Operator 请求头
+ * 后端 OperatorHeaderFilter 读取该头写入 OperatorContext ThreadLocal，
+ * 后续 service 层可以通过 OperatorContext.get() 获取当前操作人。
+ */
+request.interceptors.request.use((config) => {
+  config.headers['X-Operator'] = getCurrentOperator();
+  return config;
 });
 
 /**

@@ -5,8 +5,10 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.company.codeinsight.common.exception.BusinessException;
+import com.company.codeinsight.common.util.DraftFileUtil;
 import com.company.codeinsight.modules.draft.entity.DraftWorkspace;
 import com.company.codeinsight.modules.draft.entity.KnowledgeDraft;
+import com.company.codeinsight.modules.draft.enums.DraftStatus;
 import com.company.codeinsight.modules.draft.mapper.DraftWorkspaceMapper;
 import com.company.codeinsight.modules.draft.mapper.KnowledgeDraftMapper;
 import com.company.codeinsight.modules.knowledge.entity.KnowledgeVersion;
@@ -21,9 +23,8 @@ import com.company.codeinsight.modules.parser.model.ParsedClassInfo;
 import com.company.codeinsight.modules.draft.entity.DraftSourceReference;
 import com.company.codeinsight.modules.draft.mapper.DraftSourceReferenceMapper;
 import lombok.extern.slf4j.Slf4j;
-import org.eclipse.jgit.api.Git;
-import org.eclipse.jgit.transport.UsernamePasswordCredentialsProvider;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -31,7 +32,6 @@ import org.springframework.util.StringUtils;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
-import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -70,11 +70,20 @@ public class KnowledgeServiceImpl implements KnowledgeService {
     @Autowired
     private DraftSourceReferenceMapper draftSourceReferenceMapper;
 
+    /**
+     * 草稿正文存储根目录，与 ci_knowledge_draft.content_uri 的相对路径拼接。
+     * 配置项：{@code code-insight.storage.local-path}，默认 {@code ./storage}。
+     */
+    @Value("${code-insight.storage.local-path:./storage}")
+    private String storageLocalPath;
+
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     /**
      * 生成知识发布版本
-     * 自动提取工作区内所有 CONFIRMED、REVISED 或已生成的草稿，在本地临时 Git 库下生成结构化文档索引并提交版本。
+     * 严格语义：仅提取工作区内所有 CONFIRMED（已确认）状态的草稿，
+     * 在本地临时 Git 库下生成结构化文档索引并提交版本。
+     * 处于 PENDING_REVIEW / REVISED / AI_GENERATED / REJECTED 等状态的草稿不会进入版本。
      */
     @Override
     @Transactional
@@ -96,15 +105,16 @@ public class KnowledgeServiceImpl implements KnowledgeService {
             throw new BusinessException("草稿工作区不存在");
         }
 
-        // 提取该工作区下所有有效的草稿文件（已确认或待确认）
+        // 严格语义：知识库只收录"人审核通过"的草稿（CONFIRMED 或 PUSHED）。
+        // DRAFT / EDITING（未确认）/ ARCHIVED（已归档）不直接进版本。
         List<KnowledgeDraft> drafts = draftMapper.selectList(
                 new LambdaQueryWrapper<KnowledgeDraft>()
                         .eq(KnowledgeDraft::getWorkspaceId, ws.getId())
-                        .in(KnowledgeDraft::getStatus, "CONFIRMED", "REVISED", "AI_GENERATED") 
+                        .in(KnowledgeDraft::getStatus, DraftStatus.CONFIRMED.name(), DraftStatus.PUSHED.name())
         );
 
         if (drafts.isEmpty()) {
-            throw new BusinessException("没有可导出的确认草稿");
+            throw new BusinessException("工作区内没有已确认（CONFIRMED/PUSHED）的草稿，无法生成知识版本");
         }
 
         // 定位并创建临时 Git 克隆工程目录中的 docs 文件夹
@@ -144,7 +154,7 @@ public class KnowledgeServiceImpl implements KnowledgeService {
 
             // 拷贝各个草稿的物理 Markdown 到发布目录下
             for (KnowledgeDraft draft : drafts) {
-                File draftFile = new File(URI.create(draft.getContentUri()));
+                File draftFile = DraftFileUtil.resolveDraftPath(draft.getContentUri(), storageLocalPath).toFile();
                 String content = draftFile.exists() ? Files.readString(draftFile.toPath()) : "# " + draft.getModuleName();
 
                 String cleanFileName = draft.getModuleName().replaceAll("[\\s/\\(\\)]", "_") + ".md";
@@ -280,7 +290,7 @@ public class KnowledgeServiceImpl implements KnowledgeService {
             pcBuilder.append("# 待确认事项汇总清单\n\n");
             boolean hasPc = false;
             for (KnowledgeDraft draft : drafts) {
-                File draftFile = new File(URI.create(draft.getContentUri()));
+                File draftFile = DraftFileUtil.resolveDraftPath(draft.getContentUri(), storageLocalPath).toFile();
                 if (draftFile.exists()) {
                     List<String> lines = Files.readAllLines(draftFile.toPath());
                     for (String line : lines) {
@@ -338,124 +348,21 @@ public class KnowledgeServiceImpl implements KnowledgeService {
         version.setVersionNum(versionNum);
         version.setSourceBranch(repo.getBranch());
         version.setSourceCommit(repo.getLastCommitId());
-        version.setTargetBranch("docs-code-insight"); 
+        version.setTargetBranch(
+                org.springframework.util.StringUtils.hasText(repo.getPushBranch())
+                        ? repo.getPushBranch()
+                        : "docs-code-insight");
         version.setTargetCommit(null);
         version.setPromptVersion(task.getPromptVersion());
         version.setModelName("MiniMax-M3");
         version.setStatus("DRAFT");
+        version.setPushMethod("GIT");
         version.setConfirmedBy(confirmedBy);
         version.setConfirmedAt(LocalDateTime.now());
         version.setCreatedAt(LocalDateTime.now());
 
         versionMapper.insert(version);
         return version;
-    }
-
-    /**
-     * 推送知识库到 Git
-     * 使用 JGit 操作，若没有克隆的 .git 目录，则自动降级为 Mock 提交推送成功状态以保障 MVP 顺畅流转。
-     */
-    @Override
-    @Transactional
-    public void pushToGit(Long versionId) {
-        KnowledgeVersion version = versionMapper.selectById(versionId);
-        if (version == null) {
-            throw new BusinessException("未找到该版本记录");
-        }
-
-        DecompileTask task = taskMapper.selectById(version.getTaskId());
-        CodeRepository repo = repositoryMapper.selectById(version.getRepositoryId());
-
-        DraftWorkspace ws = workspaceMapper.selectOne(
-                new LambdaQueryWrapper<DraftWorkspace>().eq(DraftWorkspace::getTaskId, version.getTaskId())
-        );
-        if (ws == null) {
-            throw new BusinessException("草稿工作区不存在，无法推送");
-        }
-
-        List<KnowledgeDraft> drafts = draftMapper.selectList(
-                new LambdaQueryWrapper<KnowledgeDraft>().eq(KnowledgeDraft::getWorkspaceId, ws.getId())
-        );
-
-        if (drafts.isEmpty()) {
-            throw new BusinessException("没有草稿需要推送");
-        }
-
-        // 强校验一：必须所有模块都复核并确认为 CONFIRMED 状态才能推送
-        for (KnowledgeDraft draft : drafts) {
-            if (!"CONFIRMED".equals(draft.getStatus())) {
-                throw new BusinessException("模块 " + draft.getModuleName() + " 的状态是 " + draft.getStatus() + "，必须确认为已确认(CONFIRMED)状态才能推送！");
-            }
-        }
-
-        // 强校验二：模块草稿内容中不能残留任何 `- [ ]` 待确认标记
-        for (KnowledgeDraft draft : drafts) {
-            File draftFile = new File(URI.create(draft.getContentUri()));
-            if (draftFile.exists()) {
-                try {
-                    String content = Files.readString(draftFile.toPath());
-                    if (content.contains("- [ ]")) {
-                        throw new BusinessException("模块 " + draft.getModuleName() + " 中包含待确认项 '- [ ]'，无法推送！请先复核并解决这些待确认项。");
-                    }
-                } catch (IOException e) {
-                    log.error("读取草稿文件校验失败", e);
-                }
-            }
-        }
-
-        // 强校验三：模块名称不能包含非法的特殊路径字符
-        String illegalChars = ".*[\\\\/:*?\"<>|].*";
-        for (KnowledgeDraft draft : drafts) {
-            if (draft.getModuleName().matches(illegalChars)) {
-                throw new BusinessException("模块名 " + draft.getModuleName() + " 包含非法字符，无法推送！");
-            }
-        }
-
-        version.setStatus("PUSHING");
-        versionMapper.updateById(version);
-
-        File taskRepoDir = new File("temp_repos/task_" + task.getId());
-        if (!taskRepoDir.exists() || !new File(taskRepoDir, ".git").exists()) {
-            // 本地离线开发降级处理
-            log.warn("未检测到本地 .git 目录，直接启用 Git 推送 Mock 降级");
-            version.setStatus("PUSHED");
-            version.setTargetCommit("MOCK_PUSH_COMMIT_" + System.currentTimeMillis());
-            version.setPushedAt(LocalDateTime.now());
-            versionMapper.updateById(version);
-            return;
-        }
-
-        try {
-            log.info("开始使用 JGit 提交并推送至 Git 仓库...");
-            try (Git git = Git.open(taskRepoDir)) {
-                // git add docs/
-                git.add().addFilepattern("docs").call();
-                // git commit -m "docs: add code-insight knowledge version ..."
-                git.commit().setMessage("docs: add code-insight knowledge version " + version.getVersionNum()).call();
-                
-                // 执行 Git Push
-                if (StringUtils.hasText(repo.getUsername()) && StringUtils.hasText(repo.getPassword())) {
-                    git.push()
-                            .setCredentialsProvider(new UsernamePasswordCredentialsProvider(repo.getUsername(), repo.getPassword()))
-                            .call();
-                } else {
-                    git.push().call();
-                }
-                
-                String pushedCommit = git.getRepository().resolve("HEAD").getName();
-                version.setTargetCommit(pushedCommit);
-                version.setStatus("PUSHED");
-                version.setPushedAt(LocalDateTime.now());
-                versionMapper.updateById(version);
-                log.info("Git 知识推送成功，Commit ID: {}", pushedCommit);
-            }
-        } catch (Exception e) {
-            log.error("JGit 提交推送失败，应用软降级（标记 PUSHED 并记入日志）", e);
-            version.setStatus("PUSHED");
-            version.setTargetCommit("FALLBACK_COMMIT_" + System.currentTimeMillis());
-            version.setPushedAt(LocalDateTime.now());
-            versionMapper.updateById(version);
-        }
     }
 
     /**

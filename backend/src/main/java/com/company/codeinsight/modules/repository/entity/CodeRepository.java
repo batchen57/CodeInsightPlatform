@@ -49,6 +49,31 @@ public class CodeRepository extends BaseEntity {
     private String password;
 
     /**
+     * 推送目标 Git 仓库 URL（为空则使用 git_url）
+     */
+    private String pushGitUrl;
+
+    /**
+     * 推送目标分支名（为空则默认 docs-code-insight）
+     */
+    private String pushBranch;
+
+    /**
+     * 推送目标 Git 凭证用户名
+     */
+    private String pushUsername;
+
+    /**
+     * 推送目标 Git 凭证密码或 Token
+     */
+    private String pushPassword;
+
+    /**
+     * 文档在仓库中的目标文件夹路径（默认 docs/code-insight）
+     */
+    private String pushTargetFolder;
+
+    /**
      * 项目扫描时的起始相对路径根目录（默认为项目根路径）
      */
     private String scanRoot;

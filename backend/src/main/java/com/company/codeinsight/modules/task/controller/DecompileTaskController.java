@@ -3,6 +3,8 @@ package com.company.codeinsight.modules.task.controller;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.company.codeinsight.common.response.ApiResponse;
 import com.company.codeinsight.common.response.PageResult;
+import com.company.codeinsight.modules.draft.dto.SaveDraftRequest;
+import com.company.codeinsight.modules.draft.service.DraftService;
 import com.company.codeinsight.modules.log.service.OperationLogService;
 import com.company.codeinsight.modules.task.entity.DecompileTask;
 import com.company.codeinsight.modules.task.service.DecompileTaskService;
@@ -25,6 +27,9 @@ public class DecompileTaskController {
 
     @Autowired
     private DecompileTaskService decompileTaskService;
+
+    @Autowired
+    private DraftService draftService;
 
     @Autowired
     private OperationLogService operationLogService;
@@ -71,8 +76,9 @@ public class DecompileTaskController {
             @RequestParam(defaultValue = "10") int size,
             @RequestParam(required = false) Long systemId,
             @RequestParam(required = false) String status,
-            @RequestParam(required = false) String type) {
-        Page<DecompileTask> page = decompileTaskService.listTasksPage(current, size, systemId, status, type);
+            @RequestParam(required = false) String type,
+            @RequestParam(name = "statuses", required = false) java.util.List<String> statuses) {
+        Page<DecompileTask> page = decompileTaskService.listTasksPage(current, size, systemId, status, type, statuses);
         PageResult<DecompileTask> result = new PageResult<>(page.getTotal(), page.getSize(), page.getCurrent(), page.getRecords());
         return ApiResponse.success(result);
     }
@@ -84,6 +90,33 @@ public class DecompileTaskController {
     @PostMapping("/{id}/start")
     public ApiResponse<Void> startTask(@PathVariable Long id) {
         decompileTaskService.startTask(id);
+        return ApiResponse.success();
+    }
+
+    /**
+     * 任务级「确认通过」：把任务下整组草稿一次性置为 CONFIRMED，
+     * 工作区晋升 COMPLETED，任务推进到 CONFIRMED。
+     *
+     * <p>这是复核工作区「确认通过」按钮的真实语义入口 — 操作粒度是任务，不是单个文件。
+     * 细粒度的单文件确认仍可使用 {@code POST /drafts/{id}/confirm}，但不会再触发级联状态升级。</p>
+     *
+     * @param id      任务 ID
+     * @param author  操作人（默认 Admin）
+     * @param comment 可选的任务级通过意见（可空）
+     */
+    @Operation(summary = "任务级「确认通过」")
+    @PostMapping("/{id}/confirm")
+    public ApiResponse<Void> confirmTask(
+            @PathVariable Long id,
+            @RequestBody SaveDraftRequest body) {
+        String author = body.getAuthor() != null ? body.getAuthor() : "Admin";
+        String comment = body.getComment();
+        draftService.confirmTask(id, author, comment);
+        operationLogService.logOperation(
+                null, id, "CONFIRM_TASK",
+                "任务级确认通过整组草稿" + (comment != null && !comment.isBlank() ? "，意见：" + comment : ""),
+                null, true
+        );
         return ApiResponse.success();
     }
 
@@ -122,6 +155,19 @@ public class DecompileTaskController {
         dto.setProgress(task.getProgress());
         dto.setErrorReason(task.getErrorReason());
         return ApiResponse.success(dto);
+    }
+
+    /**
+     * 任务中心顶部 chips 角标：按状态分组统计各分组的任务数量。
+     * 返回 key 固定为 ALL / RUNNING / PENDING_REVIEW / CONFIRMED / CLOSED。
+     *
+     * @param systemId 可选系统过滤
+     */
+    @Operation(summary = "任务状态分组统计（用于顶部 chips 角标）")
+    @GetMapping("/summary")
+    public ApiResponse<java.util.Map<String, Long>> getTaskSummary(
+            @RequestParam(required = false) Long systemId) {
+        return ApiResponse.success(decompileTaskService.countByStatusGroup(systemId));
     }
 
     /**
