@@ -355,6 +355,7 @@ CREATE TABLE IF NOT EXISTS ci_knowledge_version (
 );
 CREATE INDEX IF NOT EXISTS idx_version_system_id ON ci_knowledge_version (system_id);
 CREATE INDEX IF NOT EXISTS idx_version_number ON ci_knowledge_version (version_num);
+ALTER TABLE ci_knowledge_version ADD COLUMN IF NOT EXISTS push_method VARCHAR(20) DEFAULT 'GIT';
 COMMENT ON TABLE ci_knowledge_version IS '知识版本表';
 COMMENT ON COLUMN ci_knowledge_version.system_id IS '关联系统ID';
 COMMENT ON COLUMN ci_knowledge_version.repository_id IS '关联代码库ID';

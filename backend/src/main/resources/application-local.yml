@@ -49,6 +49,6 @@ code-insight:
     scheduler:
       poll-interval-ms: ${PUSH_SCHEDULER_INTERVAL:2000}
     git:
-      commit-prefix: ${PUSH_GIT_COMMIT_PREFIX:docs: add code-insight knowledge}
+      commit-prefix: "${PUSH_GIT_COMMIT_PREFIX:docs: add code-insight knowledge}"
     s3:
       enabled: ${PUSH_S3_ENABLED:false}
