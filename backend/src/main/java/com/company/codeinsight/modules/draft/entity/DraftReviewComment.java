@@ -37,6 +37,16 @@ public class DraftReviewComment {
     private String comment;
 
     /**
+     * 意见类型
+     * <ul>
+     *   <li>NORMAL：通用意见（手动添加的批注）</li>
+     *   <li>PASS：确认通过意见（confirmDraft 时填写）</li>
+     *   <li>REJECT：驳回意见（rejectDraft 时填写）</li>
+     * </ul>
+     */
+    private String type;
+
+    /**
      * 评审记录创建时间
      */
     private LocalDateTime createdAt;

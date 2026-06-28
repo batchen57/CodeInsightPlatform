@@ -5,6 +5,8 @@ import com.company.codeinsight.common.response.ApiResponse;
 import com.company.codeinsight.common.response.PageResult;
 import com.company.codeinsight.modules.knowledge.entity.KnowledgeVersion;
 import com.company.codeinsight.modules.knowledge.service.KnowledgeService;
+import com.company.codeinsight.modules.push.enums.PushMethod;
+import com.company.codeinsight.modules.push.service.PushService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -25,6 +27,9 @@ public class KnowledgeController {
     @Autowired
     private KnowledgeService knowledgeService;
 
+    @Autowired
+    private PushService pushService;
+
     /**
      * 根据复核通过的任务创建知识版本记录
      *
@@ -43,12 +48,16 @@ public class KnowledgeController {
     }
 
     /**
-     * 提交推送当前版本到目标 Git 代码库
+     * 提交推送当前版本到目标 Git 代码库（异步队列）
+     * 任务进入 Redis 队列后立即返回，由后台调度器异步执行实际推送。
      */
-    @Operation(summary = "提交推送至 Git 代码库")
+    @Operation(summary = "提交推送至 Git 代码库（异步队列）")
     @PostMapping("/{versionId}/push")
-    public ApiResponse<Void> push(@PathVariable Long versionId) {
-        knowledgeService.pushToGit(versionId);
+    public ApiResponse<Void> push(
+            @PathVariable Long versionId,
+            @RequestParam(defaultValue = "GIT") String method) {
+        PushMethod pushMethod = PushMethod.valueOf(method.toUpperCase());
+        pushService.enqueuePush(versionId, pushMethod);
         return ApiResponse.success();
     }
 

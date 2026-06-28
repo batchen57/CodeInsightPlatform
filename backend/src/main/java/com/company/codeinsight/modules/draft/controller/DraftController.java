@@ -1,13 +1,19 @@
 package com.company.codeinsight.modules.draft.controller;
 
 import com.company.codeinsight.common.response.ApiResponse;
+import com.company.codeinsight.modules.draft.dto.DraftTreeNode;
+import com.company.codeinsight.modules.draft.dto.PreviewSystemDto;
+import com.company.codeinsight.modules.draft.dto.SaveDraftRequest;
 import com.company.codeinsight.modules.draft.entity.*;
 import com.company.codeinsight.modules.draft.service.DraftService;
+import com.company.codeinsight.modules.task.entity.DecompileTask;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -56,6 +62,17 @@ public class DraftController {
     }
 
     /**
+     * 查询指定工作区下的草稿目录树（DB 自引用 parent_id 递归构建）。
+     * 前端可把返回值直接喂给 AntD Tree 组件。
+     */
+    @Operation(summary = "查询工作区下草稿目录树")
+    @GetMapping("/workspace/{workspaceId}/tree")
+    public ApiResponse<List<DraftTreeNode>> getWorkspaceTree(@PathVariable Long workspaceId) {
+        List<DraftTreeNode> tree = draftService.getWorkspaceTree(workspaceId);
+        return ApiResponse.success(tree);
+    }
+
+    /**
      * 读取指定草稿的 Markdown 正文全文内容
      */
     @Operation(summary = "读取草稿正文内容")
@@ -66,54 +83,47 @@ public class DraftController {
     }
 
     /**
-     * 手动编辑物理保存草稿：物理写入文件并写入修订记录表
+     * 手动编辑物理保存草稿：物理写入文件并写入修订记录表。
+     * content 等字段通过请求体（JSON）传递，避免长 Markdown 正文因 URL 查询参数长度限制而失败。
      */
     @Operation(summary = "保存修改草稿")
     @PostMapping("/{id}/save")
     public ApiResponse<Void> save(
             @PathVariable Long id,
-            @RequestParam String content,
-            @RequestParam(required = false, defaultValue = "Admin") String author,
-            @RequestParam(required = false, defaultValue = "手动编辑保存") String remark) {
+            @RequestBody SaveDraftRequest body) {
+        String content = body.getContent();
+        String author = body.getAuthor() != null ? body.getAuthor() : "Admin";
+        String remark = body.getRemark() != null ? body.getRemark() : "手动编辑保存";
         draftService.saveDraft(id, content, author, remark);
         return ApiResponse.success();
     }
 
     /**
-     * 自动暂存草稿内容：1.8s防抖自动保存，快速将草稿缓存写入临时缓冲介质以防止意外丢失
+     * 自动暂存草稿内容：1.8s防抖自动保存，快速将草稿缓存写入临时缓冲介质以防止意外丢失。
+     * content 通过请求体传递，避免 URL 查询参数限制。
      */
     @Operation(summary = "自动暂存草稿内容")
     @PostMapping("/{id}/autosave")
     public ApiResponse<Void> autoSave(
             @PathVariable Long id,
-            @RequestParam String content,
-            @RequestParam(required = false, defaultValue = "Admin") String author) {
+            @RequestBody SaveDraftRequest body) {
+        String content = body.getContent();
+        String author = body.getAuthor() != null ? body.getAuthor() : "Admin";
         draftService.autoSaveDraft(id, content, author);
         return ApiResponse.success();
     }
 
     /**
-     * 确认并通过草稿：将草稿置为 CONFIRMED (已确认) 状态
+     * 确认并通过草稿：将草稿置为 CONFIRMED (已确认) 状态。
+     * author / comment 通过请求体传递。
      */
-    @Operation(summary = "确认并通过草稿")
+    @Operation(summary = "确认并通过草稿（可选填写通过意见）")
     @PostMapping("/{id}/confirm")
     public ApiResponse<Void> confirm(
             @PathVariable Long id,
-            @RequestParam(required = false, defaultValue = "Admin") String author) {
-        draftService.confirmDraft(id, author);
-        return ApiResponse.success();
-    }
-
-    /**
-     * 驳回/打回草稿：记录具体批注，并将草稿退回至 REJECTED (已驳回) 状态
-     */
-    @Operation(summary = "驳回/打回草稿")
-    @PostMapping("/{id}/reject")
-    public ApiResponse<Void> reject(
-            @PathVariable Long id,
-            @RequestParam String comment,
-            @RequestParam(required = false, defaultValue = "Admin") String author) {
-        draftService.rejectDraft(id, author, comment);
+            @RequestBody SaveDraftRequest body) {
+        String author = body.getAuthor() != null ? body.getAuthor() : "Admin";
+        draftService.confirmDraft(id, author, body.getComment());
         return ApiResponse.success();
     }
 
@@ -138,6 +148,20 @@ public class DraftController {
     }
 
     /**
+     * 任务级复核意见聚合：把 task 下整组草稿的复核意见一次性取出，
+     * 附带来源草稿的 moduleName / filePath，便于复核人按任务粒度浏览整组意见
+     * （含 confirmTask 写入的 `[任务级通过]` 任务级记录）。
+     *
+     * <p>这是复核工作区「复核意见」按钮的真实语义入口 — 操作粒度是任务，不是单个文件。
+     * 单文件级仍可使用 {@code GET /drafts/{id}/comments}。</p>
+     */
+    @Operation(summary = "查询任务级复核意见聚合")
+    @GetMapping("/task/{taskId}/comments")
+    public ApiResponse<List<com.company.codeinsight.modules.draft.dto.TaskCommentDto>> listTaskComments(@PathVariable Long taskId) {
+        return ApiResponse.success(draftService.listAllCommentsByTask(taskId));
+    }
+
+    /**
      * 查询该草稿模块关联的底层代码来源文件及行号范围列表
      */
     @Operation(summary = "查询源文件引用")
@@ -145,6 +169,50 @@ public class DraftController {
     public ApiResponse<List<DraftSourceReference>> getReferences(@PathVariable Long id) {
         List<DraftSourceReference> list = draftService.getSourceReferences(id);
         return ApiResponse.success(list);
+    }
+
+    // ========================================================================
+    // 复核工作区「可预览系统」相关端点
+    // ========================================================================
+
+    /**
+     * 复核工作区首页：列出所有「可预览」系统及其复核任务计数。
+     * 用于前端下拉选择与角标展示。
+     */
+    @Operation(summary = "查询可预览系统（复核工作区首页）")
+    @GetMapping("/preview-systems")
+    public ApiResponse<List<PreviewSystemDto>> listPreviewSystems() {
+        List<PreviewSystemDto> list = draftService.listPreviewSystems();
+        return ApiResponse.success(list);
+    }
+
+    /**
+     * 复核工作区二级筛选：列出指定系统下可复核的任务列表。
+     * status 为可选过滤（多值用英文逗号分隔），留空时默认 PENDING_REVIEW/REVIEWING/CONFIRMED。
+     */
+    @Operation(summary = "查询可复核任务（按系统与状态筛选）")
+    @GetMapping("/review-tasks")
+    public ApiResponse<List<DecompileTask>> listReviewableTasks(
+            @RequestParam(required = false) Long systemId,
+            @RequestParam(required = false) String status) {
+        List<String> statuses = (status == null || status.isBlank())
+                ? Collections.emptyList()
+                : Arrays.stream(status.split(",")).map(String::trim).filter(s -> !s.isEmpty()).toList();
+        List<DecompileTask> list = draftService.listReviewableTasks(systemId, statuses);
+        return ApiResponse.success(list);
+    }
+
+    /**
+     * 全局新建任务前置条件查询：扫描所有 ci_knowledge_draft，识别仍处于非终态
+     * （DRAFT / EDITING / REJECTED）的草稿明细，供 TasksPage 新建任务向导第一步之前拦截。
+     *
+     * <p>返回 {@link com.company.codeinsight.modules.draft.dto.RepositoryReadinessDto}，
+     * 字段 ready 为 true 时调用方可放行向导。</p>
+     */
+    @Operation(summary = "全局新建任务前置条件查询")
+    @GetMapping("/readiness")
+    public ApiResponse<com.company.codeinsight.modules.draft.dto.RepositoryReadinessDto> getReadiness() {
+        return ApiResponse.success(draftService.findGlobalReadiness());
     }
 }
 

@@ -5,6 +5,9 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.company.codeinsight.common.exception.BusinessException;
 import com.company.codeinsight.modules.ai.mapper.AiCallRecordMapper;
+import com.company.codeinsight.modules.draft.entity.KnowledgeDraft;
+import com.company.codeinsight.modules.draft.enums.DraftStatus;
+import com.company.codeinsight.modules.draft.mapper.KnowledgeDraftMapper;
 import com.company.codeinsight.modules.repository.entity.CodeRepository;
 import com.company.codeinsight.modules.repository.service.CodeRepositoryService;
 import com.company.codeinsight.modules.system.entity.SystemApplication;
@@ -21,7 +24,9 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.io.File;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import com.company.codeinsight.modules.chunk.entity.CodeChunk;
 import java.util.concurrent.CompletableFuture;
@@ -74,17 +79,67 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
     private AiCallRecordMapper aiCallRecordMapper;
 
     /**
+     * 草稿主表映射：用于任务创建前置条件校验，
+     * 扫描 ci_knowledge_draft 中仍处于非终态的草稿。
+     */
+    @Autowired
+    private KnowledgeDraftMapper draftMapper;
+
+    /**
      * 分页获取任务列表
      */
     @Override
-    public Page<DecompileTask> listTasksPage(int current, int size, Long systemId, String status, String type) {
+    public Page<DecompileTask> listTasksPage(int current, int size, Long systemId, String status, String type, List<String> statuses) {
         Page<DecompileTask> page = new Page<>(current, size);
         LambdaQueryWrapper<DecompileTask> queryWrapper = new LambdaQueryWrapper<>();
         queryWrapper.eq(systemId != null, DecompileTask::getSystemId, systemId)
+                // status（单值）与 statuses（多值）互斥：单值用 eq，多值用 in
                 .eq(StringUtils.hasText(status), DecompileTask::getStatus, status)
+                .in(statuses != null && !statuses.isEmpty(), DecompileTask::getStatus, statuses)
                 .eq(StringUtils.hasText(type), DecompileTask::getType, type)
                 .orderByDesc(DecompileTask::getCreatedAt);
         return this.page(page, queryWrapper);
+    }
+
+    /**
+     * 各状态分组的固定映射，便于一处维护。
+     * key 是分组标识（API 返回给前端），value 是该分组下包含的所有状态枚举名。
+     */
+    private static final Map<String, List<String>> TASK_STATUS_GROUPS = Map.of(
+            "RUNNING",         List.of("PENDING", "PULLING_CODE", "PARSING_CODE", "SPLITTING_TASK", "AI_ANALYZING", "MODULE_HIERARCHY", "MODULE_HIERARCHY_REVIEW", "GENERATING_DOC", "PUSHING"),
+            "PENDING_REVIEW",  List.of("PENDING_REVIEW", "REVIEWING"),
+            "CONFIRMED",       List.of("CONFIRMED", "PUSHED"),
+            "CLOSED",          List.of("FAILED", "CANCELLED", "ARCHIVED", "DRAFT")
+    );
+
+    @Override
+    public Map<String, Long> countByStatusGroup(Long systemId) {
+        Map<String, Long> result = new HashMap<>();
+        // 初始化所有分组为 0
+        for (String key : TASK_STATUS_GROUPS.keySet()) {
+            result.put(key, 0L);
+        }
+
+        // 一次性 GROUP BY status 拉所有状态的数量（按 systemId 过滤）
+        LambdaQueryWrapper<DecompileTask> qw = new LambdaQueryWrapper<>();
+        if (systemId != null) {
+            qw.eq(DecompileTask::getSystemId, systemId);
+        }
+        qw.select(DecompileTask::getStatus);
+        List<DecompileTask> all = this.list(qw);
+
+        long total = 0L;
+        // 累加 ALL 与各分组
+        for (DecompileTask t : all) {
+            total += 1;
+            for (Map.Entry<String, List<String>> entry : TASK_STATUS_GROUPS.entrySet()) {
+                if (entry.getValue().contains(t.getStatus())) {
+                    result.merge(entry.getKey(), 1L, Long::sum);
+                }
+            }
+        }
+        result.put("ALL", total);
+        return result;
     }
 
     /**
@@ -106,7 +161,7 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
                                            Boolean requireHierarchyReview) {
         // 验证系统和仓库的从属合法性
         validateTaskSource(systemId, repositoryId);
-
+        validateNoUnconfirmedDrafts();
         DecompileTask task = new DecompileTask();
         task.setSystemId(systemId);
         task.setRepositoryId(repositoryId);
@@ -146,6 +201,7 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
                                                com.company.codeinsight.modules.entrypoint.model.EntryPointConfig entryScanConfig,
                                                Boolean requireHierarchyReview) {
         validateTaskSource(systemId, repositoryId);
+        validateNoUnconfirmedDrafts();
         DecompileTask task = new DecompileTask();
         task.setSystemId(systemId);
         task.setRepositoryId(repositoryId);
@@ -218,6 +274,32 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
         }
         if (!Objects.equals(repository.getSystemId(), systemId)) {
             throw new BusinessException("所选代码库不属于当前系统");
+        }
+    }
+
+    /**
+     * 业务前置条件：全局任意一个草稿仍处于非终态时禁止新建任务。
+     *
+     * <p>非终态白名单与 {@link com.company.codeinsight.modules.draft.service.impl.DraftServiceImpl#findGlobalReadiness()}
+     * 保持一致：DRAFT / EDITING 视为未完成。CONFIRMED / PUSHED / ARCHIVED 算"已消化"。
+     * 自 v0.3 起 REJECTED 已从枚举移除，存量 REJECTED 由 schema.sql 末尾的迁移刷为 DRAFT，
+     * 故本校验不再单独判 REJECTED。</p>
+     *
+     * <p>为什么放在 service 层而不是 controller：避免前端绕过向导直接 POST 时绕过校验；
+     * 状态机层也无法拦截（状态机只管"任务已经创建之后"的流转）。</p>
+     */
+    private void validateNoUnconfirmedDrafts() {
+        long blocking = draftMapper.selectCount(
+                new LambdaQueryWrapper<KnowledgeDraft>()
+                        .notIn(KnowledgeDraft::getStatus, java.util.List.of(
+                                DraftStatus.CONFIRMED.name(),
+                                DraftStatus.PUSHED.name(),
+                                DraftStatus.ARCHIVED.name()
+                        ))
+        );
+        if (blocking > 0) {
+            throw new BusinessException("当前仍有 " + blocking +
+                    " 个草稿未确认，无法新建任务。请前往「复核工作区」完成确认。");
         }
     }
 

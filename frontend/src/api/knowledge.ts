@@ -13,9 +13,25 @@ export interface KnowledgeVersion {
   promptVersion: number;
   modelName: string;
   status: string;
+  pushMethod: string;
   confirmedBy: string;
   confirmedAt: string;
   pushedAt: string | null;
+  createdAt: string;
+}
+
+export interface PushTask {
+  id: number;
+  versionId: number;
+  pushMethod: string;
+  status: string;
+  retryCount: number;
+  maxRetries: number;
+  targetInfo: string;
+  errorMessage?: string;
+  enqueuedAt: string;
+  startedAt?: string;
+  completedAt?: string;
   createdAt: string;
 }
 
@@ -25,8 +41,14 @@ export function createVersion(taskId: number, versionNum: string, confirmedBy?: 
   });
 }
 
-export function pushVersion(versionId: number): Promise<void> {
-  return request.post(`/knowledge/${versionId}/push`);
+export function pushVersion(versionId: number, method: string = 'GIT'): Promise<void> {
+  return request.post(`/knowledge/${versionId}/push`, null, {
+    params: { method },
+  });
+}
+
+export function listPushTasks(versionId: number): Promise<PushTask[]> {
+  return request.get(`/push/version/${versionId}/tasks`);
 }
 
 export function listVersions(params: {

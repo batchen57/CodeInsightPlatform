@@ -42,17 +42,30 @@ button, input, textarea, select { font: inherit; }
 .ci-shell { min-height: 100vh; background: transparent; }
 
 .ci-sider {
-  position: sticky !important;
+  /* 使用 fixed 而非 sticky：sticky 在 flex 容器 + 100vh 高度下偶尔会因为父容器
+     滚动边界的计算在页面底部"提前解粘"，导致底部深色背景露出下方浅色 body。
+     fixed 后侧栏完全脱离文档流钉在视口左侧，主内容通过 margin-left: 236px 让位。
+     宽度按 AntD Sider 默认值 236px 同步设置，确保完全覆盖。 */
+  position: fixed !important;
   top: 0;
+  left: 0;
   z-index: 30;
   height: 100vh;
+  width: 236px;
   overflow: hidden;
   background:
     radial-gradient(circle at 20% 0%, rgba(82, 88, 232, 0.14), transparent 18rem),
     linear-gradient(180deg, #131722 0%, #0d111a 100%) !important;
   border-right: 1px solid rgba(255, 255, 255, 0.07);
   box-shadow: 12px 0 36px rgba(17, 20, 29, 0.09);
+  transition: width 200ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
+.ci-sider.ant-layout-sider-collapsed { width: 72px !important; }
+
+/* 主内容让出 fixed 侧栏的宽度，避免被遮住 */
+.ci-main { margin-left: 236px; transition: margin-left 200ms cubic-bezier(0.2, 0.8, 0.2, 1); }
+/* 折叠态：侧栏变窄，主内容同步让位 */
+.ci-sider.ant-layout-sider-collapsed ~ .ci-main { margin-left: 72px; }
 
 .ci-brand {
   height: 76px;
@@ -703,8 +716,1094 @@ button, input, textarea, select { font: inherit; }
   letter-spacing: -0.035em;
 }
 .ci-guardrail-alert { border-color: #e2e6ef; box-shadow: var(--premium-shadow-xs); }
-.ci-review-page { height: calc(100vh - 206px); min-height: 620px; }
+.ci-review-page {
+  height: calc(100vh - 206px);
+  min-height: 620px;
+  /* 修复：让顶部筛选条固定、复核面板占满剩余高度，否则编辑器自然撑高会把标题里的 filePath 挤出视野 */
+  display: flex;
+  flex-direction: column;
+}
+.ci-review-page > .ant-card.ci-filter-card { flex-shrink: 0; }
+.ci-review-page > .ci-review-grid {
+  flex: 1;
+  min-height: 0;
+}
+/* Row → Col → Card 之间需要 flex 链路贯通，否则 Card 拿不到 Row 的剩余高度 */
+.ci-review-page > .ci-review-grid > .ant-col {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
 .ci-editor-actions { padding: 2px; }
+
+/* ===========================================================
+ *  复核工作区 - 顶部状态 chips
+ *  形如 [全部 8] [待复核 3] [复核中 2] [已确认 3]
+ *  数字徽标用主题色 token 渲染，激活态反白以提升视觉聚焦
+ *  新增：左侧引导图标 + 激活态的辉光描边
+ * =========================================================== */
+.ci-status-chips { gap: 8px !important; }
+.ci-status-chip {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 7px !important;
+  height: 34px !important;
+  padding: 0 14px !important;
+  font-size: 13px !important;
+  border-radius: 999px !important;
+  border-color: #e3e6ee !important;
+  background: #fff !important;
+  color: #2a2f3c !important;
+  transition: all 200ms cubic-bezier(0.2, 0.8, 0.2, 1) !important;
+}
+.ci-status-chip .ci-status-chip-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  color: #818aa0;
+  font-size: 12px;
+  border-radius: 5px;
+  background: #f3f5fa;
+  transition: all 200ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.ci-status-chip:hover {
+  border-color: #b6baf0 !important;
+  color: #4147d5 !important;
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(82, 88, 232, 0.08);
+}
+.ci-status-chip:hover .ci-status-chip-icon {
+  color: #5258e8;
+  background: #eef0ff;
+}
+.ci-status-chip.is-active {
+  background: linear-gradient(135deg, #5258e8 0%, #6e74f0 100%) !important;
+  border-color: transparent !important;
+  color: #fff !important;
+  box-shadow:
+    0 8px 20px rgba(82, 88, 232, 0.32),
+    inset 0 1px 0 rgba(255, 255, 255, 0.18) !important;
+}
+.ci-status-chip.is-active .ci-status-chip-icon {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.22);
+}
+.ci-status-chip.is-active:hover { color: #fff !important; }
+.ci-status-chip-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 19px;
+  padding: 0 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 720;
+  letter-spacing: 0.02em;
+  background: #f1f3f8;
+  color: #4a5266;
+  line-height: 19px;
+  transition: all 200ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.ci-status-chip:hover .ci-status-chip-count {
+  background: #eef0ff;
+  color: #4147d5;
+}
+.ci-status-chip-count.is-active {
+  background: rgba(255, 255, 255, 0.25);
+  color: #fff;
+}
+.ci-status-chip-count.is-zero {
+  opacity: 0.45;
+}
+
+/* ===========================================================
+ *  复核工作区 - 筛选条选择器前缀
+ *  Select 内部左侧塞入图标徽标，与 chips 视觉语言统一
+ * =========================================================== */
+.ci-select-prefix {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  margin-right: 6px;
+  color: #5258e8;
+  font-size: 12px;
+  background: #eef0ff;
+  border-radius: 6px;
+  vertical-align: middle;
+}
+.ci-select-prefix.is-task {
+  color: #137e91;
+  background: #e0f3f7;
+}
+
+/* ===========================================================
+ *  复核工作区 - 顶部工作区信息摘要
+ *  把「工作区 #N · N 个模块」做成视觉小卡片，强调当前工作区身份
+ *  升级：单行紧凑布局（图标 + 主体文案 + 右侧统计块），避免文字折行
+ * =========================================================== */
+.ci-workspace-summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 38px;
+  padding: 0 12px;
+  background: linear-gradient(135deg, #f7f8ff 0%, #f0f4ff 100%);
+  border: 1px solid #d8dcf2;
+  border-radius: 10px;
+  color: #2a2f3c;
+  font-size: 12px;
+  font-weight: 600;
+  transition: all 200ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.ci-workspace-summary:hover {
+  border-color: #b6baf0;
+  box-shadow: 0 6px 16px rgba(82, 88, 232, 0.08);
+}
+.ci-workspace-summary-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  color: #5258e8;
+  font-size: 13px;
+  background: #fff;
+  border: 1px solid #d8dcf2;
+  border-radius: 7px;
+  flex-shrink: 0;
+}
+.ci-workspace-summary-text {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 1px;
+  line-height: 1.2;
+}
+.ci-workspace-summary-text strong {
+  overflow: hidden;
+  color: #232631;
+  font-size: 12px;
+  font-weight: 680;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ci-workspace-summary-text span {
+  overflow: hidden;
+  color: #697386;
+  font-size: 11px;
+  font-weight: 550;
+  letter-spacing: 0.01em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ci-workspace-summary-stats {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 3px;
+  padding: 4px 8px;
+  background: #fff;
+  border: 1px solid #d8dcf2;
+  border-radius: 7px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+}
+.ci-workspace-summary-stats strong {
+  color: #4147d5;
+  font-size: 13px;
+  font-weight: 720;
+  letter-spacing: -0.01em;
+}
+.ci-workspace-summary-stats span {
+  color: #697386;
+  font-size: 10px;
+  font-weight: 550;
+}
+.ci-workspace-summary.is-empty {
+  opacity: 0.7;
+  background: linear-gradient(135deg, #f8f9fb 0%, #f3f5fa 100%);
+  border-color: #e3e6ee;
+}
+.ci-workspace-summary.is-empty .ci-workspace-summary-icon {
+  color: #818aa0;
+  background: #f7f8fb;
+  border-color: #e3e6ee;
+}
+
+/* ===========================================================
+ *  复核工作区 - 左侧模块目录（hover/pin 抽屉）
+ *  默认隐藏，悬停左边缘 handle 后从左侧滑出；可固定常驻
+ *  当折叠时，handle 收纳到最左边缘且不占主区横向空间
+ *  升级：抽屉卡片采用"舞台"渐变、tree 节点更精致的 hover/selected
+ * =========================================================== */
+.ci-drafts-page { position: relative; }
+.ci-module-drawer {
+  position: absolute;
+  top: 120px;            /* 顶部 filter-card 之下 */
+  left: 0;
+  bottom: 16px;
+  width: 296px;
+  z-index: 25;
+  transform: translateX(-105%);
+  transition: transform 280ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  pointer-events: none;
+  filter: drop-shadow(0 12px 32px rgba(15, 22, 45, 0.14));
+}
+.ci-module-drawer.is-open {
+  transform: translateX(0);
+  pointer-events: auto;
+}
+.ci-module-drawer .ant-card {
+  height: 100%;
+  border-radius: 0 14px 14px 0;
+  border-left: 0;
+  background: rgba(255, 255, 255, 0.98);
+  border-top: 1px solid var(--premium-line-soft);
+  border-right: 1px solid var(--premium-line-soft);
+  border-bottom: 1px solid var(--premium-line-soft);
+}
+.ci-module-drawer-card .ant-card-head {
+  background: linear-gradient(135deg, #fafbff 0%, #f3f5fc 100%) !important;
+  border-bottom: 1px solid var(--premium-line-soft) !important;
+  min-height: 52px !important;
+  padding: 0 14px !important;
+}
+.ci-module-drawer-card .ant-card-head-title {
+  color: #252936;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+.ci-module-drawer-card .ant-card-body {
+  padding: 10px !important;
+  background: linear-gradient(180deg, #fbfcff 0%, #ffffff 50%);
+}
+.ci-module-drawer-card .ant-tree {
+  background: transparent;
+  font-size: 13px;
+  color: #343a48;
+}
+.ci-module-drawer-card .ant-tree-node-content-wrapper:hover {
+  background: #f0f4ff !important;
+}
+.ci-module-drawer-card .ant-tree-node-selected {
+  background: transparent !important;
+}
+
+/* 树节点行：模块名 + 文档状态 Tag 一行内显示，超长省略 */
+.ci-tree-node-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+  cursor: pointer;
+  min-width: 0;
+}
+.ci-tree-node-row .ci-tree-node-icon {
+  color: #8c8c8c;
+  flex-shrink: 0;
+}
+.ci-tree-node-row .ci-tree-node-icon.is-selected {
+  color: #5258e8;
+}
+.ci-tree-node-row .ci-tree-node-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  color: inherit;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ci-tree-node-row.is-selected .ci-tree-node-name {
+  font-weight: 600;
+  color: #5258e8;
+}
+.ci-tree-node-row .ci-tree-node-status {
+  flex-shrink: 0;
+  margin: 0 !important;
+  font-size: 10px;
+  line-height: 16px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 9px;
+  letter-spacing: 0;
+}
+.ci-module-drawer-handle {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 32px;
+  height: 100px;
+  margin-top: -50px;
+  z-index: 24;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  cursor: pointer;
+  color: #5a6275;
+  background: linear-gradient(135deg, #ffffff 0%, #f3f5fc 100%);
+  border: 1px solid #e0e3ec;
+  border-left: 0;
+  border-radius: 0 12px 12px 0;
+  box-shadow:
+    3px 3px 12px rgba(15, 22, 45, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.7);
+  transition: width 200ms cubic-bezier(0.2, 0.8, 0.2, 1), background 200ms, color 200ms, box-shadow 200ms;
+}
+.ci-module-drawer-handle::before {
+  content: '';
+  position: absolute;
+  top: 16px;
+  bottom: 16px;
+  right: 6px;
+  width: 2px;
+  background: linear-gradient(180deg, transparent, #cdd2dc 50%, transparent);
+  border-radius: 2px;
+  opacity: 0.5;
+  transition: opacity 200ms, background 200ms;
+}
+.ci-module-drawer-handle:hover {
+  width: 42px;
+  background: linear-gradient(135deg, #eef0ff 0%, #dde3ff 100%);
+  color: #4147d5;
+  box-shadow:
+    4px 4px 16px rgba(82, 88, 232, 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.7);
+}
+.ci-module-drawer-handle:hover::before {
+  opacity: 1;
+  background: linear-gradient(180deg, transparent, #5258e8 50%, transparent);
+}
+.ci-module-drawer-handle.is-open {
+  background: linear-gradient(135deg, #eef0ff 0%, #dde3ff 100%);
+  color: #4147d5;
+  border-color: #b6baf0;
+}
+.ci-module-drawer-handle.is-open::before {
+  opacity: 1;
+  background: linear-gradient(180deg, transparent, #5258e8 50%, transparent);
+}
+.ci-module-drawer-handle .anticon {
+  position: relative;
+  z-index: 1;
+  font-size: 13px;
+  flex-shrink: 0;
+}
+.ci-module-drawer-handle-label {
+  font-size: 9px;
+  font-weight: 600;
+  writing-mode: vertical-rl;
+  letter-spacing: 2px;
+  color: inherit;
+  opacity: 0.7;
+  line-height: 1;
+  user-select: none;
+}
+.ci-module-drawer-handle-count {
+  font-size: 11px;
+  font-weight: 700;
+  color: inherit;
+  background: rgba(82, 88, 232, 0.08);
+  border-radius: 8px;
+  min-width: 20px;
+  height: 18px;
+  line-height: 18px;
+  text-align: center;
+  padding: 0 4px;
+  flex-shrink: 0;
+}
+
+/* ===========================================================
+ *  复核工作区 - 全屏浏览 Modal
+ *  复刻页面的"信息按钮 + 模块抽屉"交互：
+ *  - ci-fullscreen-body 作为抽屉的定位上下文（position: relative）
+ *  - 全屏下没有顶部 filter-card，抽屉 top 从 120px 调整为 16px
+ *  - 抽屉宽度 288px 在 100vw 编辑器右侧滑出，handle 仍贴左边缘
+ * =========================================================== */
+.ci-fullscreen-body {
+  position: relative;
+}
+.ci-fullscreen-body .ci-module-drawer {
+  top: 16px;
+}
+
+/* ===========================================================
+ *  复核工作区 - 右侧信息面板按钮组（替代原 Tabs）
+ *  用 Segmented 实现"按钮组"形态，避免使用下拉/Tab
+ * =========================================================== */
+.ci-review-panel .ant-segmented {
+  background: #f5f6fa !important;
+  padding: 3px !important;
+  border-radius: 8px !important;
+}
+.ci-review-panel .ant-segmented .ant-segmented-item-label {
+  font-size: 12px !important;
+  padding: 2px 10px !important;
+}
+
+/* ===========================================================
+ *  视图模式切换器（编辑 / 预览 / 分屏）
+ *  设计：直接把 Segmented 放进 .ci-action-group 容器里复用样式，
+ *        再把 Segmented 自身样式清零，让 label 与 .ci-action-group 内的按钮
+ *        完全同尺寸（min-height: 28px / padding-inline: 8px / 字号 12px / 字重 600）
+ * =========================================================== */
+.ci-view-group.ant-segmented {
+  background: transparent !important;
+  padding: 0 !important;
+  border: none !important;
+  height: auto !important;
+  border-radius: 6px !important;
+  gap: 2px;
+}
+.ci-view-group .ant-segmented-item-label {
+  min-height: 28px !important;
+  height: 28px !important;
+  line-height: 28px !important;
+  font-size: 12px !important;
+  font-weight: 600 !important;
+  padding: 0 8px !important;
+  color: #4a5266 !important;
+  border-radius: 6px !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 4px;
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+.ci-view-group .ant-segmented-item-label .anticon {
+  font-size: 13px !important;
+}
+.ci-view-group .ant-segmented-item-selected .ant-segmented-item-label {
+  background: #ffffff !important;
+  color: #4147d5 !important;
+  box-shadow: 0 2px 6px rgba(82, 88, 232, 0.10) !important;
+}
+.ci-view-group .ant-segmented-item:hover:not(.ant-segmented-item-selected) .ant-segmented-item-label {
+  background: #fff !important;
+  color: #4147d5 !important;
+  box-shadow: 0 2px 6px rgba(82, 88, 232, 0.10) !important;
+}
+.ci-view-group .ant-segmented-thumb {
+  display: none !important;
+}
+
+/* ===========================================================
+ *  复核工作区 - 编辑器标题栏重构
+ *  左侧：模块名 + 状态徽标 + 文件路径（栈式排版）
+ *  右侧：分组操作按钮（复核 / 信息 / 工具）
+ *  通过 .ci-action-group + 分隔竖线做视觉分组
+ * =========================================================== */
+.ci-review-title-block {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  max-width: 100%;
+}
+.ci-review-title-icon {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  color: #5258e8;
+  font-size: 16px;
+  background: linear-gradient(135deg, #eef0ff 0%, #dde3ff 100%);
+  border: 1px solid #d8dcf2;
+  border-radius: 9px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6);
+}
+.ci-review-title-text {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+  line-height: 1.15;
+}
+.ci-review-title-text .ci-review-title-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.ci-review-title-text .ci-review-title-name strong {
+  overflow: hidden;
+  color: #1a1e2a;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ci-review-title-text .ci-review-title-name .ant-tag {
+  flex-shrink: 0;
+  height: 19px;
+  padding: 0 7px;
+  font-size: 10px;
+  font-weight: 680;
+  letter-spacing: 0.02em;
+  border-radius: 5px;
+}
+.ci-review-title-path {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  color: #818aa0;
+  font-size: 11px;
+  font-family: 'SF Mono', Menlo, Consolas, 'Courier New', monospace;
+  font-weight: 500;
+}
+.ci-review-title-path .anticon {
+  font-size: 11px;
+  opacity: 0.7;
+}
+.ci-review-title-path span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ci-action-groups {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.ci-action-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px 4px;
+  background: #f7f8fb;
+  border: 1px solid #eceef3;
+  border-radius: 9px;
+  transition: all 200ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.ci-action-group:hover {
+  border-color: #d8dce8;
+  background: #fbfcff;
+}
+.ci-action-group .ant-btn {
+  min-height: 28px;
+  padding-inline: 8px !important;
+  font-size: 12px !important;
+  font-weight: 600 !important;
+  border: 0 !important;
+  background: transparent !important;
+  color: #4a5266 !important;
+  border-radius: 6px !important;
+  box-shadow: none !important;
+}
+.ci-action-group .ant-btn .anticon {
+  font-size: 13px;
+}
+.ci-action-group .ant-btn:hover {
+  color: #4147d5 !important;
+  background: #fff !important;
+  box-shadow: 0 2px 6px rgba(82, 88, 232, 0.10) !important;
+}
+.ci-action-group .ant-btn.ant-btn-primary {
+  color: #fff !important;
+  background: linear-gradient(135deg, #5258e8 0%, #6e74f0 100%) !important;
+  box-shadow: 0 3px 10px rgba(82, 88, 232, 0.25) !important;
+}
+.ci-action-group .ant-btn.ant-btn-primary:hover {
+  background: linear-gradient(135deg, #4147d5 0%, #5e64e3 100%) !important;
+  box-shadow: 0 4px 12px rgba(82, 88, 232, 0.32) !important;
+  color: #fff !important;
+}
+.ci-action-group .ant-btn.ant-btn-dangerous {
+  color: #c4485d !important;
+}
+.ci-action-group .ant-btn.ant-btn-dangerous:hover {
+  color: #fff !important;
+  background: #c4485d !important;
+  box-shadow: 0 3px 10px rgba(196, 72, 93, 0.25) !important;
+}
+.ci-action-group .ant-btn:disabled {
+  color: #b8bcc8 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+.ci-action-group-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 5px;
+  margin-left: 4px;
+  background: #eef0ff;
+  color: #4147d5;
+  font-size: 10px;
+  font-weight: 700;
+  border-radius: 999px;
+  line-height: 16px;
+}
+.ci-action-group .ant-btn:disabled .ci-action-group-badge {
+  background: #f1f3f8;
+  color: #9aa2b1;
+}
+.ci-action-divider {
+  width: 1px;
+  height: 18px;
+  background: #e0e3ec;
+  margin: 0 2px;
+  flex-shrink: 0;
+}
+
+/* 上一篇/下一篇导航中的进度指示 */
+.ci-nav-progress {
+  font-size: 11px;
+  font-weight: 650;
+  color: #4147d5;
+  white-space: nowrap;
+  user-select: none;
+  padding: 0 4px;
+  min-width: 36px;
+  text-align: center;
+}
+.ci-nav-progress-sep {
+  color: #b8bcc8;
+  margin: 0 1px;
+}
+
+/* 状态栏失败重试点击态 */
+.ci-status-pill-clickable:hover {
+  filter: brightness(0.95);
+  transform: scale(1.02);
+}
+
+/* ===========================================================
+ *  复核工作区 - 编辑器底部状态栏
+ *  左侧：编辑锁 + 只读提示；右侧：自动保存状态
+ *  用胶囊徽标的形式呈现，比纯文字更有"控制台"质感
+ * =========================================================== */
+.ci-editor-statusbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-shrink: 0;
+  height: 36px;
+  padding: 0 12px;
+  background: linear-gradient(180deg, #fafbff 0%, #f5f6fc 100%);
+  border: 1px solid var(--premium-line-soft);
+  border-radius: 10px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6);
+}
+.ci-statusbar-cluster {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.ci-status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 8px;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 999px;
+  letter-spacing: 0.01em;
+  background: #fff;
+  border: 1px solid #e3e6ee;
+  color: #5a6275;
+  transition: all 200ms;
+}
+.ci-status-pill .anticon {
+  font-size: 11px;
+}
+.ci-status-pill.is-ok {
+  color: #1e7a48;
+  background: linear-gradient(135deg, #ecfaf2 0%, #d8f3e3 100%);
+  border-color: #c0e7ce;
+}
+.ci-status-pill.is-saving {
+  color: #2a55c4;
+  background: linear-gradient(135deg, #eef2ff 0%, #dde5ff 100%);
+  border-color: #c5cff5;
+}
+.ci-status-pill.is-warn {
+  color: #8a5b00;
+  background: linear-gradient(135deg, #fff7e3 0%, #ffeac0 100%);
+  border-color: #f5d99c;
+}
+.ci-status-pill.is-error {
+  color: #8a2a3d;
+  background: linear-gradient(135deg, #fdeef0 0%, #fbd7dc 100%);
+  border-color: #f1b9c1;
+}
+.ci-status-pill .ci-status-pill-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 20%, transparent);
+}
+.ci-status-pill.is-saving .ci-status-pill-dot {
+  animation: ci-pulse 1.4s ease-in-out infinite;
+}
+@keyframes ci-pulse {
+  0%, 100% { opacity: 0.5; transform: scale(0.85); }
+  50% { opacity: 1; transform: scale(1.15); }
+}
+.ci-statusbar-meta {
+  color: #818aa0;
+  font-size: 11px;
+  font-weight: 550;
+}
+.ci-statusbar-meta .anticon {
+  margin-right: 3px;
+  opacity: 0.7;
+}
+
+/* ===========================================================
+ *  复核工作区 - Monaco 容器
+ *  比默认白底更克制，配合状态栏营造"专业编辑器"质感
+ * =========================================================== */
+.ci-editor-shell.ci-editor-shell-premium {
+  background: #fcfcfd;
+  border: 1px solid var(--premium-line-soft);
+  border-radius: 10px;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.7),
+    0 6px 18px rgba(15, 22, 45, 0.04);
+  overflow: hidden;
+  /* 修复：让 Monaco 在父级 flex column 中正确收缩 */
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.ci-editor-shell.ci-editor-shell-premium > .monaco-editor,
+.ci-editor-shell.ci-editor-shell-premium > .monaco-editor > .overflow-guard {
+  flex: 1;
+  min-height: 0;
+}
+
+/* 修复：让复核面板（Card）整体进入 flex column 上下文，
+   标题区不被压缩、Card body 撑满剩余高度，避免编辑器把标题里 filePath 挤出视野 */
+.ci-review-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.ci-review-panel .ant-card-head {
+  flex-shrink: 0;
+}
+.ci-review-panel .ant-card-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 14px !important;
+}
+.ci-editor-shell.ci-editor-shell-premium .monaco-editor,
+.ci-editor-shell.ci-editor-shell-premium .monaco-editor .overflow-guard {
+  border-radius: 9px;
+}
+
+/* ===========================================================
+ *  复核工作区 - 信息弹窗（代码来源 / 修订记录 / 复核意见）
+ *  列表项改成时间线 + 状态点形态
+ * =========================================================== */
+.ci-info-modal-body {
+  padding: 4px 4px 0;
+}
+.ci-info-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+.ci-info-timeline-item {
+  position: relative;
+  display: flex;
+  gap: 14px;
+  padding: 14px 4px 14px 0;
+  border-bottom: 1px dashed #eceef3;
+}
+.ci-info-timeline-item:last-child { border-bottom: 0; }
+.ci-info-timeline-rail {
+  position: relative;
+  display: flex;
+  flex: 0 0 32px;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 2px;
+}
+.ci-info-timeline-rail::before {
+  content: '';
+  position: absolute;
+  top: 24px;
+  bottom: -14px;
+  left: 50%;
+  width: 1px;
+  background: linear-gradient(180deg, #e0e3ec, transparent);
+  transform: translateX(-50%);
+}
+.ci-info-timeline-item:last-child .ci-info-timeline-rail::before { display: none; }
+.ci-info-timeline-dot {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  color: #5258e8;
+  font-size: 13px;
+  background: linear-gradient(135deg, #eef0ff 0%, #dde3ff 100%);
+  border: 1px solid #d8dcf2;
+  border-radius: 8px;
+  box-shadow: 0 2px 6px rgba(82, 88, 232, 0.10);
+}
+.ci-info-timeline-dot.is-revision {
+  color: #2a55c4;
+  background: linear-gradient(135deg, #eaf0ff 0%, #d6e1ff 100%);
+  border-color: #c5cff5;
+  box-shadow: 0 2px 6px rgba(42, 85, 196, 0.12);
+}
+.ci-info-timeline-dot.is-comment {
+  color: #137e91;
+  background: linear-gradient(135deg, #e0f3f7 0%, #c1e8ef 100%);
+  border-color: #b6dde5;
+  box-shadow: 0 2px 6px rgba(19, 126, 145, 0.12);
+}
+.ci-info-timeline-dot.is-source {
+  color: #4147d5;
+  background: linear-gradient(135deg, #eef0ff 0%, #dde3ff 100%);
+  border-color: #cfd2f3;
+  box-shadow: 0 2px 6px rgba(65, 71, 213, 0.12);
+}
+/* 复核意见：PASS 通过（绿色）/ REJECT 驳回（红色） */
+.ci-info-timeline-dot.is-comment.is-pass {
+  color: #1f7a45;
+  background: linear-gradient(135deg, #ecf7ef 0%, #cfe9d6 100%);
+  border-color: #b9dac3;
+  box-shadow: 0 2px 6px rgba(31, 122, 69, 0.14);
+}
+.ci-info-timeline-dot.is-comment.is-reject {
+  color: #c4485d;
+  background: linear-gradient(135deg, #fdeef0 0%, #fbd7dc 100%);
+  border-color: #f1b9c1;
+  box-shadow: 0 2px 6px rgba(196, 72, 93, 0.14);
+}
+.ci-info-timeline-body {
+  flex: 1;
+  min-width: 0;
+}
+.ci-info-timeline-title {
+  margin-bottom: 4px;
+  color: #1a1e2a;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.45;
+  word-break: break-word;
+}
+.ci-info-timeline-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #697386;
+  font-size: 11px;
+  font-weight: 550;
+}
+.ci-info-timeline-meta .anticon {
+  font-size: 11px;
+  opacity: 0.7;
+}
+.ci-info-timeline-meta-sep {
+  color: #c5cad5;
+}
+.ci-info-timeline-content {
+  margin-top: 6px;
+  padding: 10px 12px;
+  color: #2a2f3c;
+  font-size: 13px;
+  line-height: 1.65;
+  background: #f8f9fc;
+  border: 1px solid #eceef3;
+  border-radius: 8px;
+  word-break: break-word;
+}
+.ci-info-timeline-line {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 8px;
+  margin-top: 6px;
+  color: #4147d5;
+  font-size: 11px;
+  font-weight: 620;
+  background: #eef0ff;
+  border: 1px solid #d8dcf2;
+  border-radius: 999px;
+}
+
+/* 信息弹窗空态：插画卡片 */
+.ci-info-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 36px 0 28px;
+  color: #818aa0;
+}
+.ci-info-empty-illus {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 64px;
+  height: 64px;
+  color: #b6baf0;
+  font-size: 30px;
+  background: linear-gradient(135deg, #f7f8ff 0%, #eef0ff 100%);
+  border: 1px dashed #cfd2f3;
+  border-radius: 16px;
+  margin-bottom: 14px;
+}
+.ci-info-empty strong {
+  display: block;
+  margin-bottom: 4px;
+  color: #4a5266;
+  font-size: 13px;
+  font-weight: 620;
+}
+.ci-info-empty span {
+  color: #818aa0;
+  font-size: 12px;
+}
+
+/* ===========================================================
+ *  复核工作区 - 演示模式横幅
+ *  开启后所有数据来自本地 mock store，用紫色渐变背景与正常态区分
+ * =========================================================== */
+.ci-demo-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  margin-bottom: 12px;
+  background: linear-gradient(135deg, #f1ecff 0%, #e2f3ed 100%);
+  border: 1px solid #c8b8f5;
+  border-radius: 10px;
+  box-shadow: 0 1px 0 rgba(124, 92, 224, 0.04);
+}
+.ci-demo-banner-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #b39bff 0%, #7c5ce0 100%);
+  color: #ffffff;
+  font-size: 14px;
+  flex-shrink: 0;
+  box-shadow: 0 4px 10px rgba(124, 92, 224, 0.25);
+}
+.ci-demo-banner-text {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.ci-demo-banner-text strong {
+  font-size: 13px;
+  font-weight: 700;
+  color: #4b2d8f;
+  letter-spacing: 0.02em;
+}
+.ci-demo-banner-text span {
+  font-size: 12px;
+  color: #6c5aa6;
+  line-height: 1.5;
+}
+
+/* ===========================================================
+ *  复核工作区 - 顶部筛选条信息条
+ *  不用纯 Tag，用渐变背景小卡强调当前工作区
+ * =========================================================== */
+.ci-filter-card-premium {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 4px 0 2px;
+}
+.ci-filter-card-premium .ci-filter-section-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 10px;
+  color: #818aa0;
+  font-size: 10px;
+  font-weight: 720;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+.ci-filter-card-premium .ci-filter-section-label .anticon {
+  font-size: 11px;
+  color: #5258e8;
+}
+
+/* ===========================================================
+ *  复核工作区 - 工作区空态
+ *  把"暂无草稿 / 请先选择系统"做成视觉空态
+ * =========================================================== */
+.ci-empty-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 56px 32px;
+  text-align: center;
+  background:
+    radial-gradient(circle at 50% 0%, rgba(82, 88, 232, 0.05), transparent 60%),
+    linear-gradient(180deg, #fbfcff 0%, #f5f6fa 100%);
+  border: 1px dashed #d8dce8;
+  border-radius: 12px;
+}
+.ci-empty-panel .ci-empty-illus {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 72px;
+  height: 72px;
+  color: #5258e8;
+  font-size: 30px;
+  background: linear-gradient(135deg, #fff 0%, #eef0ff 100%);
+  border: 1px solid #d8dcf2;
+  border-radius: 18px;
+  margin-bottom: 16px;
+  box-shadow: 0 8px 20px rgba(82, 88, 232, 0.10);
+}
+.ci-empty-panel strong {
+  display: block;
+  margin-bottom: 6px;
+  color: #232631;
+  font-size: 15px;
+  font-weight: 680;
+}
+.ci-empty-panel span {
+  max-width: 360px;
+  color: #697386;
+  font-size: 12px;
+  line-height: 1.65;
+}
+
 
 @media (prefers-reduced-motion: no-preference) {
   .ci-page, .ci-page-heading { animation: premium-enter 320ms cubic-bezier(0.2, 0.8, 0.2, 1) both; }
@@ -728,6 +1827,9 @@ button, input, textarea, select { font: inherit; }
 
 @media (max-width: 991px) {
   .ci-sider { position: fixed !important; left: 0; z-index: 50; }
+  /* 移动端侧栏宽度为 0（isMobile ? 0 : 72），主内容收回全部宽度 */
+  .ci-main,
+  .ci-sider.ant-layout-sider-collapsed ~ .ci-main { margin-left: 0; }
   .ci-mobile-backdrop {
     position: fixed;
     z-index: 45;
@@ -819,4 +1921,312 @@ button, input, textarea, select { font: inherit; }
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+/* =====================================================================
+ *  Markdown 渲染视图（用于知识复核页面的「预览 / 分屏」模式）
+ *  视觉语言：白底 + 浅线 + 主色高亮，与 premium 设计系统对齐
+ * ===================================================================*/
+
+.ci-md {
+  color: var(--premium-ink);
+  font-size: 14px;
+  line-height: 1.78;
+  word-wrap: break-word;
+  padding: 8px 4px;
+}
+
+.ci-md > *:first-child { margin-top: 0; }
+.ci-md > *:last-child { margin-bottom: 0; }
+
+/* 段落与文本 */
+.ci-md p {
+  margin: 0 0 14px;
+  color: var(--premium-ink);
+}
+.ci-md strong { color: var(--premium-ink); font-weight: 600; }
+.ci-md em { color: var(--premium-ink); font-style: italic; }
+.ci-md del { color: var(--premium-muted); }
+.ci-md hr {
+  border: none;
+  border-top: 1px dashed var(--premium-line);
+  margin: 24px 0;
+}
+
+/* 标题 */
+.ci-md h1, .ci-md h2, .ci-md h3, .ci-md h4, .ci-md h5, .ci-md h6 {
+  color: var(--premium-ink);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  margin: 28px 0 12px;
+  line-height: 1.35;
+}
+.ci-md h1 { font-size: 26px; padding-bottom: 10px; border-bottom: 1px solid var(--premium-line); }
+.ci-md h2 {
+  font-size: 21px;
+  padding: 0 0 8px 12px;
+  border-left: 4px solid var(--premium-primary);
+  background: linear-gradient(90deg, var(--premium-primary-soft) 0%, transparent 70%);
+}
+.ci-md h3 { font-size: 17px; color: var(--premium-primary-strong); }
+.ci-md h4 { font-size: 15px; }
+.ci-md h5, .ci-md h6 { font-size: 14px; color: var(--premium-muted); }
+
+/* 列表 */
+.ci-md ul, .ci-md ol {
+  margin: 0 0 14px;
+  padding-left: 24px;
+}
+.ci-md li {
+  margin: 4px 0;
+}
+.ci-md li > ul, .ci-md li > ol { margin: 4px 0; }
+.ci-md li::marker { color: var(--premium-primary); }
+
+/* GFM 任务清单 */
+.ci-md input[type="checkbox"] {
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  margin-right: 6px;
+  border: 1.5px solid var(--premium-line);
+  border-radius: 3px;
+  position: relative;
+  vertical-align: -2px;
+  cursor: default;
+  background: var(--premium-surface);
+}
+.ci-md input[type="checkbox"]:checked {
+  background: var(--premium-primary);
+  border-color: var(--premium-primary);
+}
+.ci-md input[type="checkbox"]:checked::after {
+  content: '';
+  position: absolute;
+  inset: 1px 3px;
+  border-right: 2px solid #fff;
+  border-bottom: 2px solid #fff;
+  transform: rotate(45deg) translate(-1px, -2px);
+  width: 4px;
+  height: 7px;
+}
+
+/* 链接 */
+.ci-md a {
+  color: var(--premium-primary-strong);
+  text-decoration: none;
+  border-bottom: 1px dashed var(--premium-primary);
+  transition: color 0.15s ease;
+}
+.ci-md a:hover { color: var(--premium-primary); border-bottom-style: solid; }
+
+/* 引用 */
+.ci-md blockquote {
+  margin: 14px 0;
+  padding: 10px 14px;
+  border-left: 4px solid var(--premium-primary);
+  background: var(--premium-primary-soft);
+  border-radius: 0 8px 8px 0;
+  color: var(--premium-ink);
+}
+.ci-md blockquote p:last-child { margin-bottom: 0; }
+.ci-md blockquote > :first-child { margin-top: 0; }
+.ci-md blockquote > :last-child { margin-bottom: 0; }
+
+/* 表格（GFM） */
+.ci-md table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  margin: 14px 0;
+  border: 1px solid var(--premium-line);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--premium-surface);
+  font-size: 13px;
+}
+.ci-md thead {
+  background: linear-gradient(180deg, #fafbff 0%, #f5f6fa 100%);
+}
+.ci-md th, .ci-md td {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--premium-line-soft);
+  text-align: left;
+}
+.ci-md th {
+  font-weight: 600;
+  color: var(--premium-ink);
+  border-bottom: 1.5px solid var(--premium-line);
+}
+.ci-md tbody tr:last-child td { border-bottom: none; }
+.ci-md tbody tr:hover { background: rgba(82, 88, 232, 0.04); }
+
+/* 行内代码 */
+.ci-md :not(pre) > code {
+  padding: 2px 6px;
+  margin: 0 2px;
+  font-size: 12.5px;
+  font-family: 'JetBrains Mono', Consolas, 'Courier New', monospace;
+  background: var(--premium-primary-soft);
+  color: var(--premium-primary-strong);
+  border-radius: 4px;
+  border: 1px solid rgba(82, 88, 232, 0.12);
+}
+
+/* 代码块 */
+.ci-md .ci-md-pre {
+  margin: 14px 0;
+  padding: 14px 16px;
+  background: #fafbff;
+  border: 1px solid var(--premium-line);
+  border-radius: 10px;
+  overflow-x: auto;
+  font-size: 13px;
+  line-height: 1.65;
+  font-family: 'JetBrains Mono', Consolas, 'Courier New', monospace;
+  box-shadow: var(--premium-shadow-xs);
+}
+.ci-md .ci-md-pre code {
+  background: transparent !important;
+  border: none !important;
+  padding: 0;
+  color: inherit;
+  font-size: inherit;
+}
+
+/* highlight.js 主题微调，与 premium 对齐 */
+.ci-md .hljs { background: transparent; color: var(--premium-ink); }
+.ci-md .hljs-comment, .ci-md .hljs-quote { color: var(--premium-muted); font-style: italic; }
+.ci-md .hljs-keyword, .ci-md .hljs-selector-tag { color: var(--premium-primary-strong); font-weight: 600; }
+.ci-md .hljs-string, .ci-md .hljs-attr { color: #137e91; }
+.ci-md .hljs-number, .ci-md .hljs-literal { color: #c4485d; }
+.ci-md .hljs-title, .ci-md .hljs-name { color: var(--premium-ink); font-weight: 600; }
+.ci-md .hljs-variable, .ci-md .hljs-template-variable { color: #7c5ce0; }
+.ci-md .hljs-built_in, .ci-md .hljs-type { color: #d9751d; }
+.ci-md .hljs-meta { color: var(--premium-muted); }
+.ci-md .hljs-tag { color: var(--premium-primary-strong); }
+.ci-md .hljs-attribute { color: #137e91; }
+
+/* 图片 */
+.ci-md img {
+  max-width: 100%;
+  border-radius: 8px;
+  border: 1px solid var(--premium-line-soft);
+  box-shadow: var(--premium-shadow-xs);
+}
+
+/* Mermaid 图表容器 */
+.ci-md-mermaid {
+  margin: 18px 0;
+  padding: 18px;
+  background: linear-gradient(180deg, #ffffff 0%, #fafbff 100%);
+  border: 1px solid var(--premium-line);
+  border-radius: 12px;
+  overflow-x: auto;
+  text-align: center;
+  box-shadow: var(--premium-shadow-xs);
+}
+.ci-md-mermaid svg {
+  max-width: 100%;
+  height: auto;
+  display: inline-block;
+}
+.ci-md-mermaid.is-loading {
+  color: var(--premium-muted);
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 80px;
+}
+.ci-md-mermaid.is-error {
+  text-align: left;
+  background: linear-gradient(180deg, #fff5f6 0%, #fdeef0 100%);
+  border-color: #f1b9c1;
+}
+.ci-md-mermaid-error-title {
+  color: #c4485d;
+  font-weight: 600;
+  font-size: 13px;
+  margin-bottom: 8px;
+}
+.ci-md-mermaid-error-body {
+  color: #c4485d;
+  font-size: 12px;
+  margin: 0 0 8px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: 'JetBrains Mono', Consolas, monospace;
+}
+.ci-md-mermaid-error-source {
+  color: var(--premium-muted);
+  font-size: 12px;
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: 'JetBrains Mono', Consolas, monospace;
+  border-top: 1px dashed #f1b9c1;
+  padding-top: 8px;
+}
+
+/* 预览/分屏容器 */
+.ci-md-scroll {
+  height: 100%;
+  overflow: auto;
+  padding: 24px 28px;
+  background: var(--premium-surface);
+  border-radius: 12px;
+  border: 1px solid var(--premium-line-soft);
+}
+
+/* 分屏布局 */
+.ci-editor-split {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  height: 100%;
+  min-height: 0;
+}
+.ci-editor-split > .ci-editor-shell,
+.ci-editor-split > .ci-md-scroll {
+  min-height: 0;
+  height: 100%;
+}
+@media (max-width: 1100px) {
+  .ci-editor-split { grid-template-columns: 1fr; }
+}
+
+/* 视图模式切换器 */
+.ci-view-switcher {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px;
+  background: var(--premium-canvas);
+  border: 1px solid var(--premium-line);
+  border-radius: 999px;
+  box-shadow: var(--premium-shadow-xs);
+}
+.ci-view-switcher .ci-view-switcher-btn {
+  border: none;
+  background: transparent;
+  color: var(--premium-muted);
+  font-size: 12.5px;
+  font-weight: 500;
+  height: 28px;
+  padding: 0 12px;
+  border-radius: 999px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  transition: all 0.15s ease;
+}
+.ci-view-switcher .ci-view-switcher-btn:hover {
+  color: var(--premium-ink);
+}
+.ci-view-switcher .ci-view-switcher-btn.is-active {
+  background: var(--premium-surface);
+  color: var(--premium-primary-strong);
+  box-shadow: 0 1px 2px rgba(19, 24, 38, 0.06);
 }

@@ -82,7 +82,7 @@ public class DecompileTaskServiceTests {
         Assertions.assertEquals(TaskStatus.DRAFT.name(), task.getStatus());
 
         // List
-        Page<DecompileTask> page = decompileTaskService.listTasksPage(1, 10, systemId, "DRAFT", "INCREMENTAL");
+        Page<DecompileTask> page = decompileTaskService.listTasksPage(1, 10, systemId, "DRAFT", "INCREMENTAL", null);
         Assertions.assertTrue(page.getTotal() > 0);
 
         // Start

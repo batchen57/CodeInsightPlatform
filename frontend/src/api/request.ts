@@ -1,6 +1,7 @@
 import axios from 'axios';
 import { message } from 'antd';
 import { useAuthStore } from '../stores/auth';
+import { getCurrentOperator } from './auth';
 
 /**
  * 全局 Axios HTTP 客户端基础实例
@@ -18,6 +19,16 @@ request.interceptors.request.use((config) => {
   if (session?.token) {
     config.headers.Authorization = `Bearer ${session.token}`;
   }
+  return config;
+});
+
+/**
+ * 请求拦截器：自动注入 X-Operator 请求头
+ * 后端 OperatorHeaderFilter 读取该头写入 OperatorContext ThreadLocal，
+ * 后续 service 层可以通过 OperatorContext.get() 获取当前操作人。
+ */
+request.interceptors.request.use((config) => {
+  config.headers['X-Operator'] = getCurrentOperator();
   return config;
 });
 

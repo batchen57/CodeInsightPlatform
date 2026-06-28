@@ -77,6 +77,11 @@ public class KnowledgeVersion {
     private String status;
 
     /**
+     * 推送方式：GIT（Git 推送）或 S3（对象存储推送）
+     */
+    private String pushMethod;
+
+    /**
      * 操作确认人用户名
      */
     private String confirmedBy;
