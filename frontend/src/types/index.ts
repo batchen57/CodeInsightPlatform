@@ -70,6 +70,56 @@ export interface Task {
 }
 
 /**
+ * 任务流水线中单个阶段的统计摘要（来自 GET /tasks/{id}/log/summary）。
+ * 前端"执行日志"卡片渲染 Timeline 时使用。
+ */
+export interface PipelineStageStat {
+  key: string;
+  label: string;
+  status: 'pending' | 'running' | 'done' | 'skipped' | 'error';
+  durationMs: number;
+  startedAt?: string;
+  endedAt?: string;
+}
+
+/**
+ * 任务执行日志的结构化摘要（来自 GET /tasks/{id}/log/summary）。
+ * 同时驱动反编译任务页的"执行日志"卡片与"查看完整日志"模态框顶栏。
+ */
+export interface TaskLogSummary {
+  taskId: number;
+  status: string;
+  progress: number;
+  durationMs: number;
+  startedAt?: string;
+  endedAt?: string;
+  modelName?: string;
+  /** 是否启用 AI 本地 Mock（来自后端 code-insight.ai.mock） */
+  aiMock: boolean;
+  pipeline: PipelineStageStat[];
+  counters: {
+    totalFiles: number;
+    totalChunks: number;
+    chunksByType: { FILE: number; CLASS: number; METHOD: number; DIFF: number };
+    chunksAnalyzed: number;
+    chunksFailed: number;
+    chunksPending: number;
+  };
+  aiCalls: { total: number; success: number; failed: number };
+  /** 当前正在处理的进度索引；-1 表示未知 */
+  current: {
+    fileIndex: number;
+    totalFiles: number;
+    chunkIndex: number;
+    totalChunks: number;
+    moduleIndex: number;
+    moduleTotal: number;
+  };
+  /** 失败原因的单行摘要（无堆栈），失败时用于"执行日志"卡片友好提示 */
+  lastError?: string;
+}
+
+/**
  * 任务级入口扫描配置（仅在该任务创建时生效，不影响仓库）
  * include 规则"或"逻辑：任一列表非空即视为启用配置驱动，全部为空走默认 Controller/JOB/MQ 兜底
  * exclude 规则"或"逻辑：任一命中即从候选中排除

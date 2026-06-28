@@ -2,6 +2,7 @@ package com.company.codeinsight.modules.chunk.service;
 
 import com.company.codeinsight.modules.chunk.entity.CodeChunk;
 import com.company.codeinsight.modules.scanner.entity.CodeFileSnapshot;
+import com.company.codeinsight.modules.scanner.model.IncrementalContext;
 
 import java.util.List;
 
@@ -18,6 +19,18 @@ public interface CodeChunkService {
      * @param snapshots 任务所拉取出的代码文件快照集合
      */
     void chunkAndEstimate(Long taskId, List<CodeFileSnapshot> snapshots);
+
+    /**
+     * 增量感知的切片重算。{@code ctx.isIncremental()} 为 false 时等价于 {@link #chunkAndEstimate(Long, List)}。
+     * <p>
+     * 增量模式：
+     * <ul>
+     *   <li>删除 {@code ctx.getChangedPaths()} + {@code ctx.getDeletedPaths()} 中所有旧 chunk 行</li>
+     *   <li>仅对 {@code ctx.getChangedPaths()} 中的文件重新做 FILE/CLASS/METHOD 切片</li>
+     *   <li>未变文件的 chunk 行原样保留</li>
+     * </ul>
+     */
+    void chunkAndEstimate(Long taskId, List<CodeFileSnapshot> snapshots, IncrementalContext ctx);
 
     /**
      * 获取指定任务生成的全部代码分片

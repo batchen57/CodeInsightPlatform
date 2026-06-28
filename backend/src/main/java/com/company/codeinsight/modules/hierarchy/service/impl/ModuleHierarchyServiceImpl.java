@@ -17,6 +17,7 @@ import com.company.codeinsight.modules.hierarchy.model.ModuleHierarchy;
 import com.company.codeinsight.modules.hierarchy.model.PromptViewDtos;
 import com.company.codeinsight.modules.hierarchy.model.SubModuleDto;
 import com.company.codeinsight.modules.hierarchy.service.ModuleHierarchyService;
+import com.company.codeinsight.modules.scanner.model.IncrementalContext;
 import com.company.codeinsight.modules.task.entity.DecompileTask;
 import com.company.codeinsight.modules.task.mapper.DecompileTaskMapper;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -91,6 +92,12 @@ public class ModuleHierarchyServiceImpl implements ModuleHierarchyService {
     @Override
     @Transactional(rollbackFor = Exception.class)
     public ModuleHierarchy buildAndPersist(Long taskId, File projectDir) {
+        return buildAndPersist(taskId, projectDir, IncrementalContext.fullScan());
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public ModuleHierarchy buildAndPersist(Long taskId, File projectDir, IncrementalContext ctx) {
         if (taskId == null) {
             throw new BusinessException("taskId 不能为空");
         }
@@ -98,6 +105,7 @@ public class ModuleHierarchyServiceImpl implements ModuleHierarchyService {
         if (task == null) {
             throw new BusinessException("任务不存在: " + taskId);
         }
+        IncrementalContext effective = ctx == null ? IncrementalContext.fullScan() : ctx;
 
         // 1. 加载已有节点 → 重建 DTO
         ModuleHierarchy hierarchy = loadByTaskId(taskId);
@@ -125,7 +133,7 @@ public class ModuleHierarchyServiceImpl implements ModuleHierarchyService {
 
         // 2. 识别入口
         List<EntryPoint> entries = entryPointDiscoveryService.discoverEntries(taskId, projectDir, entryPointConfig);
-        log.info("ModuleHierarchyService.buildAndPersist taskId={} entries={}", taskId, entries.size());
+        log.info("ModuleHierarchyService.buildAndPersist taskId={} entries={} ctx={}", taskId, entries.size(), effective);
 
         // 3. 加载 prompt 模板（仅一次）
         //    优先 DB（按 task.modularizePromptVersion 或同类型默认），找不到再回退到 classpath 资源，保证向后兼容
@@ -137,20 +145,94 @@ public class ModuleHierarchyServiceImpl implements ModuleHierarchyService {
         }
 
         // 4. 遍历每个入口
+        int processedByAi = 0;
+        int skippedByIncremental = 0;
         for (EntryPoint entry : entries) {
             try {
+                // 增量模式：仅对变更文件对应的入口重新调 AI，其余入口保留 DTO 中已有数据
+                if (effective.isIncremental() && !effective.isPathChanged(entry.getFilePath())) {
+                    skippedByIncremental++;
+                    continue;
+                }
                 processEntry(task, hierarchy, entry, promptTemplate, projectDir, entryPointConfig);
+                processedByAi++;
             } catch (Exception e) {
                 log.error("processEntry failed for {}: {}", entry.getClassName(), e.getMessage(), e);
             }
         }
 
-        // 5. 全量重写（保证幂等）
+        // 5. 增量模式：清理被删除文件对应的 classPath 引用
+        if (effective.isIncremental() && !effective.getDeletedPaths().isEmpty()) {
+            int removedRefs = purgeDeletedClassPaths(hierarchy, effective.getDeletedPaths());
+            log.info("增量清理 — 任务 {} 删除 {} 个文件，从层级中移除 {} 个 classPath 引用",
+                    taskId, effective.getDeletedPaths().size(), removedRefs);
+        }
+
+        // 6. 全量重写（保证幂等；增量模式下未变节点仍会被原样重写）
         persistAll(taskId, task.getSystemId(), hierarchy);
 
-        log.info("ModuleHierarchyService.buildAndPersist done. taskId={} modules={} functions={}",
-                taskId, hierarchy.getModules().size(), countFunctions(hierarchy));
+        log.info("ModuleHierarchyService.buildAndPersist done. taskId={} modules={} functions={} aiCalls={} skipped={}",
+                taskId, hierarchy.getModules().size(), countFunctions(hierarchy), processedByAi, skippedByIncremental);
         return hierarchy;
+    }
+
+    /**
+     * 增量模式辅助：把被删除文件的 FQ 类名从所有 function.classPaths 中移除。
+     * 不会删除 function 节点本身（其他入口可能仍引用同一 function）；
+     * 若某 function 移除后 classPaths 为空，自动清空集合让前端能感知到「无入口归属」。
+     *
+     * @return 实际移除的 classPath 引用数
+     */
+    private int purgeDeletedClassPaths(ModuleHierarchy hierarchy, Set<String> deletedPaths) {
+        if (hierarchy == null || deletedPaths == null || deletedPaths.isEmpty()) {
+            return 0;
+        }
+        Set<String> deletedFqSet = new HashSet<>();
+        for (String p : deletedPaths) {
+            String fq = deriveFqcnFromPath(p);
+            if (StringUtils.hasText(fq)) {
+                deletedFqSet.add(fq);
+            }
+        }
+        if (deletedFqSet.isEmpty()) {
+            return 0;
+        }
+        int removed = 0;
+        for (ModuleDto m : hierarchy.getModules().values()) {
+            for (SubModuleDto sm : m.getSubModules().values()) {
+                for (FunctionDto fn : sm.getFunctions().values()) {
+                    if (fn.getClassPaths() == null || fn.getClassPaths().isEmpty()) {
+                        continue;
+                    }
+                    int before = fn.getClassPaths().size();
+                    fn.getClassPaths().removeAll(deletedFqSet);
+                    removed += before - fn.getClassPaths().size();
+                }
+            }
+        }
+        return removed;
+    }
+
+    /**
+     * 从 Maven/Gradle 约定的源码相对路径推导出 FQ 类名。
+     * 例如 {@code src/main/java/com/demo/UserService.java} → {@code com.demo.UserService}。
+     * 无法识别（无 src/main/java 前缀、非 .java 文件）时返回 null。
+     * <p>public 以便 AI 草稿阶段等跨包调用方复用同一份推导规则。
+     */
+    public static String deriveFqcnFromPath(String relativePath) {
+        if (!StringUtils.hasText(relativePath) || !relativePath.endsWith(".java")) {
+            return null;
+        }
+        String normalized = relativePath.replace('\\', '/');
+        String[] prefixes = {"src/main/java/", "src/test/java/", "src/"};
+        for (String pfx : prefixes) {
+            if (normalized.startsWith(pfx)) {
+                normalized = normalized.substring(pfx.length());
+                break;
+            }
+        }
+        normalized = normalized.substring(0, normalized.length() - ".java".length());
+        return normalized.replace('/', '.');
     }
 
     @Override

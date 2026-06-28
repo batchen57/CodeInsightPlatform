@@ -1,5 +1,5 @@
 import request from './request';
-import type { EntryScanConfig, ModuleHierarchy, PageResult, Task } from '../types';
+import type { EntryScanConfig, ModuleHierarchy, PageResult, Task, TaskLogSummary } from '../types';
 
 export interface TaskProgress {
   status: string;
@@ -64,6 +64,14 @@ export const getTaskProgress = (id: number): Promise<TaskProgress> => {
 /** 读取任务真实执行日志（pipeline 写入的 pipeline.log 文件内容） */
 export const getTaskExecutionLog = (id: number): Promise<string> => {
   return request.get(`/tasks/${id}/log`);
+};
+
+/**
+ * 读取任务执行日志的结构化摘要（阶段耗时、文件/切片计数、AI 成功失败数、Mock 标记、当前进度）。
+ * 与 getTaskExecutionLog 互补：前者返回全文，后者返回聚合结构，供"执行日志"卡片快速展示。
+ */
+export const getTaskLogSummary = (id: number): Promise<TaskLogSummary> => {
+  return request.get(`/tasks/${id}/log/summary`);
 };
 
 /** 拉取任务当前模块层级（人工复核断点用） */

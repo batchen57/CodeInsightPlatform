@@ -1,6 +1,7 @@
 package com.company.codeinsight.modules.callchain.service;
 
 import com.company.codeinsight.modules.callchain.entity.MethodCall;
+import com.company.codeinsight.modules.scanner.model.IncrementalContext;
 
 import java.io.File;
 import java.util.List;
@@ -22,6 +23,18 @@ public interface MethodCallService {
      * @return 实际写入 ci_method_call 的调用链条目数
      */
     int persistAstForTask(Long taskId, File projectDir);
+
+    /**
+     * 增量感知的 AST 落表。{@code ctx.isIncremental()} 为 false 时等价于 {@link #persistAstForTask(Long, File)}。
+     * <p>
+     * 增量模式：
+     * <ul>
+     *   <li>删除 {@code ctx.getDeletedPaths()} 中文件对应的所有调用链行</li>
+     *   <li>仅对 {@code ctx.getChangedPaths()} 中的 .java 文件做 AST 解析并写入</li>
+     *   <li>未变文件的调用链行原样保留</li>
+     * </ul>
+     */
+    int persistAstForTask(Long taskId, File projectDir, IncrementalContext ctx);
 
     /**
      * 查询指定任务的所有调用链条目

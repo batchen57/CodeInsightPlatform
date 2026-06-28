@@ -6,8 +6,10 @@ import com.company.codeinsight.common.response.PageResult;
 import com.company.codeinsight.modules.hierarchy.model.ModuleHierarchy;
 import com.company.codeinsight.modules.hierarchy.service.ModuleHierarchyService;
 import com.company.codeinsight.modules.log.service.OperationLogService;
+import com.company.codeinsight.modules.task.dto.TaskLogSummaryDto;
 import com.company.codeinsight.modules.task.entity.DecompileTask;
 import com.company.codeinsight.modules.task.service.DecompileTaskService;
+import com.company.codeinsight.modules.task.service.TaskLogSummaryService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.Data;
@@ -33,6 +35,9 @@ public class DecompileTaskController {
 
     @Autowired
     private ModuleHierarchyService moduleHierarchyService;
+
+    @Autowired
+    private TaskLogSummaryService taskLogSummaryService;
 
     @org.springframework.beans.factory.annotation.Value("${code-insight.storage.local-path:./storage}")
     private String storageBase;
@@ -151,6 +156,16 @@ public class DecompileTaskController {
         } catch (Exception e) {
             return ApiResponse.error("读取日志失败: " + e.getMessage());
         }
+    }
+
+    /**
+     * 读取任务执行日志的结构化摘要（阶段耗时、文件/切片计数、AI 成功失败数、Mock 标记、当前进度）。
+     * 供前端"执行日志"卡片与"查看完整日志"模态框顶栏使用，与 {@link #getExecutionLog(Long)} 互补。
+     */
+    @Operation(summary = "读取任务执行日志摘要")
+    @GetMapping("/{id}/log/summary")
+    public ApiResponse<TaskLogSummaryDto> getExecutionLogSummary(@PathVariable Long id) {
+        return ApiResponse.success(taskLogSummaryService.summarize(id));
     }
 
     /**

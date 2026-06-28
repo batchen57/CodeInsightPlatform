@@ -24,6 +24,7 @@ import com.company.codeinsight.modules.draft.entity.DraftSourceReference;
 import com.company.codeinsight.modules.draft.mapper.DraftSourceReferenceMapper;
 import com.company.codeinsight.modules.repository.entity.CodeRepository;
 import com.company.codeinsight.modules.repository.mapper.CodeRepositoryMapper;
+import com.company.codeinsight.modules.task.service.TaskExecutionLogger;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -88,6 +89,19 @@ public class AiSummaryServiceImpl implements AiSummaryService {
 
     @Autowired
     private com.company.codeinsight.modules.prompt.mapper.DecompilePromptMapper promptMapper;
+
+    /**
+     * 任务执行日志写入器：用于在"查看完整日志"中实时呈现 AI 阶段逐切片/逐模块进度。
+     */
+    @Autowired
+    private TaskExecutionLogger execLog;
+
+    /**
+     * 包级访问器：供 DecompileTaskServiceImpl 在 AI 阶段开头读取 Mock 状态写到 pipeline.log。
+     */
+    public boolean isAiMock() {
+        return this.aiMock;
+    }
 
     @Autowired
     private com.company.codeinsight.modules.prompt.service.DecompilePromptService decompilePromptService;
@@ -606,16 +620,24 @@ public class AiSummaryServiceImpl implements AiSummaryService {
      */
     @Override
     public void generateDraftDocument(Long taskId, List<CodeChunk> chunks, String promptContent) {
+        generateDraftDocument(taskId, chunks, promptContent, com.company.codeinsight.modules.scanner.model.IncrementalContext.fullScan());
+    }
+
+    @Override
+    public void generateDraftDocument(Long taskId, List<CodeChunk> chunks, String promptContent,
+                                     com.company.codeinsight.modules.scanner.model.IncrementalContext ctx) {
         DecompileTask task = decompileTaskMapper.selectById(taskId);
         if (task == null) {
             throw new BusinessException("未找到关联的任务");
         }
+        com.company.codeinsight.modules.scanner.model.IncrementalContext effective =
+                ctx == null ? com.company.codeinsight.modules.scanner.model.IncrementalContext.fullScan() : ctx;
 
         // 1. 加载 ModuleHierarchy DTO（项 2 产出）
         com.company.codeinsight.modules.hierarchy.model.ModuleHierarchy hierarchy =
                 moduleHierarchyService.loadByTaskId(taskId);
 
-        // 2. DTO 为空 → 走旧 17 章节逻辑兜底
+        // 2. DTO 为空 → 走旧 17 章节逻辑兜底（增量和全量都先走兜底，避免空树切到一半的诡异状态）
         if (hierarchy.getModules().isEmpty()) {
             log.warn("taskId={} 尚无模块层级，回退到旧 17 章节生成逻辑", taskId);
             legacyGenerateDraftDocument(taskId, chunks, promptContent);
@@ -640,17 +662,67 @@ public class AiSummaryServiceImpl implements AiSummaryService {
         // 4. projectDir 通过 taskId 反查（pipeline 启动时 pullAndScan 已写入该目录）
         File projectDir = new File("temp_repos/task_" + taskId);
 
-        // 5. 遍历每个 ModuleDto → 整模块喂 AI → 落库
+        // 5. 增量模式：算出「本次变更文件对应的 FQ 类名集合」，用于判定哪些模块需要重跑 AI
+        java.util.Set<String> changedFqSet = null;
+        if (effective.isIncremental() && !effective.getChangedPaths().isEmpty()) {
+            changedFqSet = new java.util.HashSet<>();
+            for (String p : effective.getChangedPaths()) {
+                String fq = com.company.codeinsight.modules.hierarchy.service.impl.ModuleHierarchyServiceImpl.deriveFqcnFromPath(p);
+                if (StringUtils.hasText(fq)) {
+                    changedFqSet.add(fq);
+                }
+            }
+            log.info("增量草稿生成 — taskId={} 变更文件映射到 FQ 类名 {} 个", taskId, changedFqSet.size());
+        }
+
+        // 6. 遍历每个 ModuleDto → 整模块喂 AI → 落库
+        int moduleIndex = 0;
+        int moduleTotal = hierarchy.getModules().size();
+        int regenerated = 0;
+        int skipped = 0;
         for (com.company.codeinsight.modules.hierarchy.model.ModuleDto moduleDto : hierarchy.getModules().values()) {
+            moduleIndex++;
+            // 增量模式：模块的 function.classPaths 全部不在变更集中 → 跳过，旧草稿保留
+            if (changedFqSet != null && !moduleTouchedByChange(moduleDto, changedFqSet)) {
+                skipped++;
+                execLog.log(taskId, "  [module " + moduleIndex + "/" + moduleTotal + "] " + moduleDto.getModuleName() + " — 未受本次变更影响，跳过");
+                continue;
+            }
+            execLog.log(taskId, "  [module " + moduleIndex + "/" + moduleTotal + "] " + moduleDto.getModuleName());
             try {
                 generateModuleDraft(task, ws, moduleDto, hierarchy, projectDir);
+                regenerated++;
             } catch (Exception e) {
                 log.error("generateModuleDraft failed for module {}: {}",
                         moduleDto.getModuleName(), e.getMessage(), e);
             }
         }
 
-        log.info("generateDraftDocument done. taskId={} modules={}", taskId, hierarchy.getModules().size());
+        log.info("generateDraftDocument done. taskId={} modules={} regenerated={} skipped={} ctx={}",
+                taskId, hierarchy.getModules().size(), regenerated, skipped, effective);
+    }
+
+    /**
+     * 增量模式辅助：判断模块下是否任一 function 的 classPath 引用了本次变更的类。
+     * 命中即视为该模块需要被重新生成。
+     */
+    private boolean moduleTouchedByChange(com.company.codeinsight.modules.hierarchy.model.ModuleDto moduleDto,
+                                          java.util.Set<String> changedFqSet) {
+        if (moduleDto == null || changedFqSet == null || changedFqSet.isEmpty()) {
+            return false;
+        }
+        for (com.company.codeinsight.modules.hierarchy.model.SubModuleDto sm : moduleDto.getSubModules().values()) {
+            for (com.company.codeinsight.modules.hierarchy.model.FunctionDto fn : sm.getFunctions().values()) {
+                if (fn.getClassPaths() != null) {
+                    for (String cp : fn.getClassPaths()) {
+                        if (cp != null && changedFqSet.contains(cp)) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        return false;
     }
 
     /**
@@ -1207,11 +1279,21 @@ public class AiSummaryServiceImpl implements AiSummaryService {
             docBuilder.append("```\n\n");
 
             docBuilder.append("## 十一、 核心业务逻辑\n");
+            int methodIndex = 0;
+            int methodTotal = 0;
+            for (CodeChunk _c : cList) {
+                if ("METHOD".equals(_c.getChunkType())) methodTotal++;
+            }
             for (CodeChunk c : cList) {
                 if ("METHOD".equals(c.getChunkType())) {
+                    methodIndex++;
                     docBuilder.append("### 方法: `").append(c.getMethodName()).append("`\n");
                     docBuilder.append("- **所属类**: `").append(c.getClassName()).append("`\n");
                     docBuilder.append("- **行范围**: 第 ").append(c.getStartLine()).append(" 行到第 ").append(c.getEndLine()).append(" 行\n");
+
+                    // 实时把"当前切片 i/N"写到 pipeline.log，供"查看完整日志"查看当前进度
+                    execLog.log(taskId, "  [chunk " + methodIndex + "/" + methodTotal + "] "
+                            + c.getFilePath() + (c.getMethodName() != null ? "#" + c.getMethodName() : "") + " type=METHOD");
 
                     // 为每一个方法级 Chunks 触发大模型归纳归纳
                     String chunkSummary = summarizeChunk(taskId, c.getId(), promptContent, task.getModelName());

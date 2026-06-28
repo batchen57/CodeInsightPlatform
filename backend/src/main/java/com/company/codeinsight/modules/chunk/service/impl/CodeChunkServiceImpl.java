@@ -9,6 +9,7 @@ import com.company.codeinsight.modules.chunk.service.CodeChunkService;
 import com.company.codeinsight.modules.parser.model.ParsedClassInfo;
 import com.company.codeinsight.modules.parser.service.JavaParserService;
 import com.company.codeinsight.modules.scanner.entity.CodeFileSnapshot;
+import com.company.codeinsight.modules.scanner.model.IncrementalContext;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -22,6 +23,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
@@ -68,61 +70,100 @@ public class CodeChunkServiceImpl implements CodeChunkService {
      */
     @Override
     public void chunkAndEstimate(Long taskId, List<CodeFileSnapshot> snapshots) {
+        chunkAndEstimate(taskId, snapshots, IncrementalContext.fullScan());
+    }
+
+    @Override
+    public void chunkAndEstimate(Long taskId, List<CodeFileSnapshot> snapshots, IncrementalContext ctx) {
         if (snapshots == null || snapshots.isEmpty()) {
             return;
         }
+        IncrementalContext effective = ctx == null ? IncrementalContext.fullScan() : ctx;
 
-        // 清理当前任务的历史切片记录
-        chunkMapper.delete(new LambdaQueryWrapper<CodeChunk>().eq(CodeChunk::getTaskId, taskId));
+        if (!effective.isIncremental()) {
+            // 全量：清空当前任务所有旧 chunk，再走全部文件
+            chunkMapper.delete(new LambdaQueryWrapper<CodeChunk>().eq(CodeChunk::getTaskId, taskId));
+            for (CodeFileSnapshot snapshot : snapshots) {
+                chunkOneSnapshot(taskId, snapshot);
+            }
+            return;
+        }
 
+        // 增量：仅删掉「变更文件 + 删除文件」的历史 chunk；其余原样保留
+        Set<String> toEvict = new HashSet<>();
+        toEvict.addAll(effective.getChangedPaths());
+        toEvict.addAll(effective.getDeletedPaths());
+        if (!toEvict.isEmpty()) {
+            chunkMapper.delete(
+                    new LambdaQueryWrapper<CodeChunk>()
+                            .eq(CodeChunk::getTaskId, taskId)
+                            .in(CodeChunk::getFilePath, toEvict)
+            );
+        }
+        if (effective.getChangedPaths().isEmpty()) {
+            log.info("增量切片 — 本次无变更文件, taskId={}", taskId);
+            return;
+        }
         for (CodeFileSnapshot snapshot : snapshots) {
-            try {
-                File file = new File(URI.create(snapshot.getContentUri()));
-                if (!file.exists()) {
-                    saveFailedChunk(taskId, snapshot.getFilePath(), "Snapshot file does not exist: " + snapshot.getContentUri());
-                    continue;
-                }
+            if (effective.isPathChanged(snapshot.getFilePath())) {
+                chunkOneSnapshot(taskId, snapshot);
+            }
+        }
+        log.info("增量切片完成, taskId={}, 重切 {} 个文件, 已删 {} 个文件, ctx={}",
+                taskId, effective.getChangedPaths().size(), effective.getDeletedPaths().size(), effective);
+    }
 
-                if (shouldSkipNonTextFile(snapshot)) {
-                    log.debug("Skip non-text file for chunking: {}", snapshot.getFilePath());
-                    continue;
-                }
+    /**
+     * 对单个快照执行 FILE/CLASS/METHOD 三级切片。
+     * 公用全量与增量两个入口。
+     */
+    private void chunkOneSnapshot(Long taskId, CodeFileSnapshot snapshot) {
+        try {
+            File file = new File(URI.create(snapshot.getContentUri()));
+            if (!file.exists()) {
+                saveFailedChunk(taskId, snapshot.getFilePath(), "Snapshot file does not exist: " + snapshot.getContentUri());
+                return;
+            }
 
-                List<String> lines = Files.readAllLines(file.toPath(), StandardCharsets.UTF_8);
-                String fullContent = String.join("\n", lines);
+            if (shouldSkipNonTextFile(snapshot)) {
+                log.debug("Skip non-text file for chunking: {}", snapshot.getFilePath());
+                return;
+            }
 
-                // 保存文件级切片 (FILE)
-                saveChunk(taskId, snapshot.getFilePath(), null, null, "FILE",
-                        fullContent, 1, lines.size());
+            List<String> lines = Files.readAllLines(file.toPath(), StandardCharsets.UTF_8);
+            String fullContent = String.join("\n", lines);
 
-                // 如果是 Java 源文件，则做更精细的 AST 解析以提取类与方法
-                if ("java".equalsIgnoreCase(snapshot.getFileType())) {
-                    ParsedClassInfo classInfo = javaParserService.parseFile(file);
-                    if (classInfo != null && classInfo.getClassName() != null) {
-                        // 保存类级切片 (CLASS)
-                        saveChunk(taskId, snapshot.getFilePath(), classInfo.getClassName(), null, "CLASS",
-                                fullContent, 1, lines.size());
+            // 保存文件级切片 (FILE)
+            saveChunk(taskId, snapshot.getFilePath(), null, null, "FILE",
+                    fullContent, 1, lines.size());
 
-                        // 循环解析各个方法
-                        for (ParsedClassInfo.MethodInfo method : classInfo.getMethods()) {
-                            // 定位方法在 Java 文件中的起始行和结束行
-                            int[] range = locateMethodRange(lines, method.getName());
-                            int start = range[0];
-                            int end = Math.min(range[1], lines.size());
-                            String methodCode = joinLines(lines, start, end);
+            // 如果是 Java 源文件，则做更精细的 AST 解析以提取类与方法
+            if ("java".equalsIgnoreCase(snapshot.getFileType())) {
+                ParsedClassInfo classInfo = javaParserService.parseFile(file);
+                if (classInfo != null && classInfo.getClassName() != null) {
+                    // 保存类级切片 (CLASS)
+                    saveChunk(taskId, snapshot.getFilePath(), classInfo.getClassName(), null, "CLASS",
+                            fullContent, 1, lines.size());
 
-                            // 保存方法级切片 (METHOD)
-                            saveChunk(taskId, snapshot.getFilePath(), classInfo.getClassName(), method.getName(), "METHOD",
-                                    methodCode, start, end);
-                        }
+                    // 循环解析各个方法
+                    for (ParsedClassInfo.MethodInfo method : classInfo.getMethods()) {
+                        // 定位方法在 Java 文件中的起始行和结束行
+                        int[] range = locateMethodRange(lines, method.getName());
+                        int start = range[0];
+                        int end = Math.min(range[1], lines.size());
+                        String methodCode = joinLines(lines, start, end);
+
+                        // 保存方法级切片 (METHOD)
+                        saveChunk(taskId, snapshot.getFilePath(), classInfo.getClassName(), method.getName(), "METHOD",
+                                methodCode, start, end);
                     }
                 }
-            } catch (MalformedInputException e) {
-                log.debug("Skip binary file for chunking: {}", snapshot.getFilePath());
-            } catch (Exception e) {
-                log.error("Failed to chunk file: {}", snapshot.getFilePath(), e);
-                saveFailedChunk(taskId, snapshot.getFilePath(), e.getMessage());
             }
+        } catch (MalformedInputException e) {
+            log.debug("Skip binary file for chunking: {}", snapshot.getFilePath());
+        } catch (Exception e) {
+            log.error("Failed to chunk file: {}", snapshot.getFilePath(), e);
+            saveFailedChunk(taskId, snapshot.getFilePath(), e.getMessage());
         }
     }
 

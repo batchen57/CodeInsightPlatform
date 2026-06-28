@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Alert, Button, Card, Col, Descriptions, Modal, Progress, Row, Space, Steps, Statistic, Tag, Typography, message } from 'antd';
+import { Alert, Button, Card, Col, Descriptions, Modal, Progress, Row, Space, Steps, Statistic, Tag, Timeline, Typography, message } from 'antd';
 import {
   ArrowLeftOutlined,
   CheckCircleOutlined,
@@ -11,9 +11,9 @@ import {
   SwapOutlined,
 } from '@ant-design/icons';
 import { useNavigate, useParams } from 'react-router-dom';
-import { getTask, getTaskExecutionLog, retryTask, startTask, terminateTask } from '../../api/task';
+import { getTask, getTaskExecutionLog, getTaskLogSummary, retryTask, startTask, terminateTask } from '../../api/task';
 import { getSystem } from '../../api/system';
-import type { System, Task } from '../../types';
+import type { PipelineStageStat, System, Task, TaskLogSummary } from '../../types';
 
 /** 构造携带当前任务上下文（systemId + taskId）的复核页跳转链接 */
 const buildDraftsHref = (task: Task) => `/drafts?systemId=${task.systemId}&taskId=${task.id}`;
@@ -88,6 +88,30 @@ const TaskDetail: React.FC = () => {
     return () => window.clearInterval(timer);
   }, [loadCardLog, task]);
 
+  // 结构化日志摘要：阶段耗时、文件/切片计数、AI 成功/失败数、Mock 标记、当前进度
+  const [summary, setSummary] = useState<TaskLogSummary | null>(null);
+
+  const loadSummary = useCallback(async () => {
+    if (!taskId) return;
+    try {
+      const data = await getTaskLogSummary(taskId);
+      setSummary(data);
+    } catch {
+      // 静默失败：保留上一次成功拉到的摘要，避免运行中一闪而过
+    }
+  }, [taskId]);
+
+  // 与 raw 卡片日志同步轮询，避免额外定时器漂移
+  useEffect(() => {
+    loadSummary();
+  }, [loadSummary]);
+
+  useEffect(() => {
+    if (!task || !runningStatuses.includes(task.status)) return;
+    const timer = window.setInterval(loadSummary, 2500);
+    return () => window.clearInterval(timer);
+  }, [loadSummary, task]);
+
   // 执行日志弹窗
   const [logModalOpen, setLogModalOpen] = useState(false);
   const [execLogContent, setExecLogContent] = useState('');
@@ -161,6 +185,60 @@ const TaskDetail: React.FC = () => {
   };
 
   const meta = task ? statusMeta[task.status] ?? { color: 'default', label: task.status, step: -1 } : null;
+
+/** 把单个阶段统计转成 antd Timeline 的 item 配置 */
+const timelineItem = (s: PipelineStageStat) => {
+  const color =
+    s.status === 'done' ? 'green'
+    : s.status === 'running' ? 'blue'
+    : s.status === 'error' ? 'red'
+    : 'gray';
+  const suffix =
+    s.status === 'running' ? ' · 进行中'
+    : s.status === 'pending' ? ' · 待开始'
+    : s.status === 'error' ? ' · 异常'
+    : s.status === 'skipped' ? ' · 已跳过'
+    : '';
+  const duration = s.durationMs && s.durationMs > 0
+    ? `耗时 ${(s.durationMs / 1000).toFixed(1)} 秒`
+    : '—';
+  return {
+    color,
+    children: (
+      <Space direction="vertical" size={0}>
+        <Text strong>{s.label}{suffix}</Text>
+        <Text type="secondary" style={{ fontSize: 12 }}>{duration}</Text>
+      </Space>
+    ),
+  };
+};
+
+  // 友好提示：失败时不暴露具体异常，仅指向"查看完整日志"
+  const friendlyHint = (() => {
+    if (!task) return '';
+    if (task.status === 'FAILED') {
+      return '任务失败，请查看完整日志';
+    }
+    if (['PUSHED', 'CANCELLED', 'ARCHIVED'].includes(task.status)) {
+      const sec = task.durationMs ? (task.durationMs / 1000).toFixed(1) : '0.0';
+      return `任务已结束 · 累计耗时 ${sec} 秒`;
+    }
+    if (['PENDING_REVIEW', 'REVIEWING', 'CONFIRMED'].includes(task.status)) {
+      const sec = task.durationMs ? (task.durationMs / 1000).toFixed(1) : '0.0';
+      return `等待人工复核 · 累计耗时 ${sec} 秒`;
+    }
+    const done = summary?.pipeline?.filter((s) => s.status === 'done' || s.status === 'skipped').length ?? 0;
+    const total = summary?.pipeline?.length ?? 8;
+    const sec = task.durationMs ? (task.durationMs / 1000).toFixed(1) : '0.0';
+    return `正在：${meta?.label ?? task.status} · 已完成 ${done}/${total} 阶段 · 累计 ${sec} 秒`;
+  })();
+
+  // 当前进行中的阶段中文名（用于 Timeline 中高亮提示）
+  const currentStageLabel = summary?.pipeline?.find((s) => s.status === 'running')?.label ?? '';
+
+  // Mock 模式 / 真实模型文案
+  const aiModeLabel = summary?.aiMock ? 'Mock 模式' : '真实模型';
+  const aiModeColor = summary?.aiMock ? 'gold' : 'geekblue';
 
   if (loading) {
     return <Card loading style={{ minHeight: 420 }} />;
@@ -326,35 +404,107 @@ const TaskDetail: React.FC = () => {
           </Card>
         </Col>
 
-        {/* 右侧：执行进程日志（全部内容可在卡片内滚动） */}
+        {/* 右侧：执行日志卡片（结构化概览；无异常堆栈） */}
         <Col xs={24} xl={12}>
           <Card
             title="执行日志"
             extra={
-              <Button size="small" icon={<FileSearchOutlined />} onClick={openExecLog}>
-                查看完整日志
-              </Button>
+              <Space size={4} wrap>
+                <Tag color={aiModeColor}>{aiModeLabel}</Tag>
+                <Tag color="purple">{summary?.modelName || task.modelName || '未指定模型'}</Tag>
+                <Button size="small" icon={<FileSearchOutlined />} onClick={openExecLog}>
+                  查看完整日志
+                </Button>
+              </Space>
             }
             style={{ height: '100%' }}
             styles={{ body: { padding: '12px 16px' } }}
           >
-            <pre
-              className="ci-terminal"
-              style={{
-                fontSize: 12,
-                margin: 0,
-                maxHeight: 380,
-                overflow: 'auto',
-                whiteSpace: 'pre-wrap',
-                wordBreak: 'break-all',
-                background: '#1e1e1e',
-                color: '#d4d4d4',
-                padding: 8,
-                borderRadius: 4,
-              }}
-            >
-              {cardLogContent || '暂无日志'}
-            </pre>
+            {/* 1. 状态条 + 友好提示 */}
+            <Space style={{ width: '100%', justifyContent: 'space-between', marginBottom: 8 }} wrap>
+              <Space size={6}>
+                <Tag color={meta.color}>{meta.label}</Tag>
+                {currentStageLabel && <Text type="secondary" style={{ fontSize: 12 }}>当前：{currentStageLabel}</Text>}
+              </Space>
+              <Text type="secondary" style={{ fontSize: 12 }}>{friendlyHint}</Text>
+            </Space>
+            <Progress
+              percent={summary?.progress ?? task.progress}
+              size="small"
+              status={task.status === 'FAILED' ? 'exception' : 'active'}
+            />
+
+            {/* 2. 4 列 KPI：扫描文件 / 代码切片 / AI 成功 / AI 失败 */}
+            <div className="ci-kpi-grid" style={{ marginTop: 12 }}>
+              <Card size="small" className="ci-stat-card">
+                <Statistic
+                  title="扫描文件"
+                  value={
+                    summary
+                      ? `${Math.max(summary.current.chunkIndex, 0)} / ${summary.counters.totalFiles || summary.current.totalFiles}`
+                      : 0
+                  }
+                  valueStyle={{ fontSize: 20 }}
+                />
+              </Card>
+              <Card size="small" className="ci-stat-card">
+                <Statistic
+                  title="代码切片（已处理/总数）"
+                  value={
+                    summary
+                      ? `${(summary.counters.chunksAnalyzed + summary.counters.chunksFailed)} / ${summary.counters.totalChunks}`
+                      : '0 / 0'
+                  }
+                  valueStyle={{ fontSize: 20 }}
+                />
+              </Card>
+              <Card size="small" className="ci-stat-card">
+                <Statistic
+                  title="AI 成功"
+                  value={summary?.aiCalls.success ?? 0}
+                  valueStyle={{ color: '#16a34a', fontSize: 20 }}
+                  prefix={<CheckCircleOutlined />}
+                />
+              </Card>
+              <Card size="small" className="ci-stat-card">
+                <Statistic
+                  title="AI 失败"
+                  value={summary?.aiCalls.failed ?? 0}
+                  valueStyle={{
+                    color: (summary?.aiCalls.failed ?? 0) > 0 ? '#dc2626' : undefined,
+                    fontSize: 20,
+                  }}
+                  prefix={<CloseCircleOutlined />}
+                />
+              </Card>
+            </div>
+
+            {/* 3. 失败/完成友好提示（仅一行，不暴露堆栈） */}
+            {task.status === 'FAILED' && (
+              <Alert
+                type="warning"
+                showIcon
+                style={{ marginTop: 12 }}
+                message="任务失败，请查看完整日志"
+                description={summary?.lastError ? `原因：${summary.lastError}` : undefined}
+                action={
+                  <Button size="small" icon={<FileSearchOutlined />} onClick={openExecLog}>
+                    查看完整日志
+                  </Button>
+                }
+              />
+            )}
+            {['PUSHED', 'CONFIRMED'].includes(task.status) && (
+              <Alert type="success" showIcon style={{ marginTop: 12 }} message="任务已完成" />
+            )}
+
+            {/* 4. 阶段 Timeline */}
+            {summary?.pipeline && summary.pipeline.length > 0 && (
+              <Timeline
+                style={{ marginTop: 12 }}
+                items={summary.pipeline.map((s) => timelineItem(s))}
+              />
+            )}
           </Card>
         </Col>
       </Row>
@@ -381,14 +531,48 @@ const TaskDetail: React.FC = () => {
         title={`执行日志 — 任务 #${task.id}`}
         open={logModalOpen}
         onCancel={() => setLogModalOpen(false)}
-        width={800}
+        width={960}
         footer={<Button onClick={() => setLogModalOpen(false)}>关闭</Button>}
         destroyOnClose
       >
+        {/* 顶部粘性信息条：Mock / 模型 / 总耗时 / 状态 / 日志 URI */}
+        <div
+          style={{
+            position: 'sticky',
+            top: 0,
+            background: '#fff',
+            zIndex: 1,
+            padding: '8px 0',
+            borderBottom: '1px solid #f0f0f0',
+            marginBottom: 8,
+          }}
+        >
+          <Space wrap>
+            <Tag color={aiModeColor}>{aiModeLabel}</Tag>
+            <Tag color="purple">模型：{summary?.modelName || task.modelName || '未指定'}</Tag>
+            <Tag color="blue">
+              总耗时 {(((summary?.durationMs ?? task.durationMs) || 0) / 1000).toFixed(1)} 秒
+            </Tag>
+            <Tag color={meta.color}>{meta.label}</Tag>
+            <Text type="secondary" copyable={{ text: task.logUri || `local://storage/tasks/${task.id}.log` }}>
+              日志 URI：{task.logUri || `local://storage/tasks/${task.id}.log`}
+            </Text>
+            <Button
+              size="small"
+              icon={<ReloadOutlined />}
+              onClick={openExecLog}
+              disabled={logLoading}
+            >
+              刷新
+            </Button>
+          </Space>
+        </div>
+
         {logLoading ? (
           <Card loading style={{ minHeight: 200 }} />
         ) : (
           <pre
+            className="ci-terminal"
             style={{
               fontSize: 12,
               maxHeight: 480,
@@ -402,7 +586,7 @@ const TaskDetail: React.FC = () => {
               borderRadius: 4,
             }}
           >
-            {execLogContent}
+            {execLogContent || cardLogContent || '(暂无日志)'}
           </pre>
         )}
       </Modal>

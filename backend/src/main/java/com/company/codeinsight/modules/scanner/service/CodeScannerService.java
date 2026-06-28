@@ -1,7 +1,7 @@
 package com.company.codeinsight.modules.scanner.service;
 
 import com.company.codeinsight.modules.scanner.entity.CodeFileSnapshot;
-import java.io.File;
+import com.company.codeinsight.modules.scanner.model.ScanResult;
 import java.util.List;
 
 /**
@@ -15,9 +15,12 @@ public interface CodeScannerService {
      *
      * @param taskId       关联的任务 ID
      * @param repositoryId 关联的代码库配置 ID
-     * @return 最终拉取并克隆到本地的临时代码仓库根目录 File 对象
+     * @param taskType     任务类型：INITIAL-全量（默认） / INCREMENTAL-基于 git diff 的增量。
+     *                     增量任务需要仓库已存在 {@code lastCommitId} 基线，否则降级为全量扫描。
+     * @return {@link ScanResult} 包含本地项目目录与本次扫描的增量上下文（变更/删除文件清单），
+     *         下游 AST/Chunk/Hierarchy/AI 阶段通过 {@code ScanResult.getIncrementalContext()} 判断走全量还是增量。
      */
-    File pullAndScan(Long taskId, Long repositoryId);
+    ScanResult pullAndScan(Long taskId, Long repositoryId, String taskType);
 
     /**
      * 获取指定分析任务下生成的全部代码文件快照元数据列表

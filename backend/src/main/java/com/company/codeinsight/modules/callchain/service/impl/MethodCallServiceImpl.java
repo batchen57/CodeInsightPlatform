@@ -6,6 +6,7 @@ import com.company.codeinsight.modules.callchain.mapper.MethodCallMapper;
 import com.company.codeinsight.modules.callchain.service.MethodCallService;
 import com.company.codeinsight.modules.parser.model.ParsedClassInfo;
 import com.company.codeinsight.modules.parser.service.JavaParserService;
+import com.company.codeinsight.modules.scanner.model.IncrementalContext;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -49,25 +50,59 @@ public class MethodCallServiceImpl implements MethodCallService {
     @Override
     @Transactional(rollbackFor = Exception.class)
     public int persistAstForTask(Long taskId, File projectDir) {
+        return persistAstForTask(taskId, projectDir, IncrementalContext.fullScan());
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public int persistAstForTask(Long taskId, File projectDir, IncrementalContext ctx) {
         if (taskId == null || projectDir == null || !projectDir.exists() || !projectDir.isDirectory()) {
             log.warn("persistAstForTask skipped: taskId={}, projectDir={}", taskId, projectDir);
             return 0;
         }
+        IncrementalContext effective = ctx == null ? IncrementalContext.fullScan() : ctx;
 
-        // 幂等清理：先清空该 task 历史记录
-        deleteByTaskId(taskId);
+        if (!effective.isIncremental()) {
+            // 全量：保持原行为，幂等清理 + 走全树
+            deleteByTaskId(taskId);
+            return walkAndPersist(projectDir, projectDir, taskId, null);
+        }
 
-        // counters[0]=已扫描文件数, [1]=解析失败文件数, [2]=已采集调用链总条数
+        // 增量：先删「已删除文件」与「本次需重写文件」的历史记录
+        if (!effective.getDeletedPaths().isEmpty()) {
+            methodCallMapper.delete(
+                    new LambdaQueryWrapper<MethodCall>()
+                            .eq(MethodCall::getTaskId, taskId)
+                            .in(MethodCall::getFilePath, effective.getDeletedPaths())
+            );
+        }
+        if (!effective.getChangedPaths().isEmpty()) {
+            methodCallMapper.delete(
+                    new LambdaQueryWrapper<MethodCall>()
+                            .eq(MethodCall::getTaskId, taskId)
+                            .in(MethodCall::getFilePath, effective.getChangedPaths())
+            );
+        }
+        // 只对变更文件重新解析；空集合 = 没有文件需要重写
+        int inserted = walkAndPersist(projectDir, projectDir, taskId, effective.getChangedPaths());
+        log.info("AST incremental call-chain persistence done. taskId={}, ctx={}, callsInserted={}",
+                taskId, effective, inserted);
+        return inserted;
+    }
+
+    /**
+     * 递归遍历 projectDir 并把 .java 文件的 method calls 落表。
+     *
+     * @param pathFilter 非 null 时只解析相对路径命中该集合的文件（增量模式用）；null 表示全量遍历。
+     * @return 本次实际写入的调用链条目数
+     */
+    private int walkAndPersist(File baseDir, File current, Long taskId, Set<String> pathFilter) {
         int[] counters = new int[]{0, 0, 0};
         List<MethodCall> buffer = new ArrayList<>(BATCH_SIZE);
-
-        walk(projectDir, projectDir, taskId, buffer, counters);
-
-        // 收尾：写入剩余不足一批的
+        walk(baseDir, current, taskId, buffer, counters, pathFilter);
         if (!buffer.isEmpty()) {
             insertBatch(buffer);
         }
-
         log.info("AST call-chain persistence done. taskId={}, filesScanned={}, filesFailed={}, callsInserted={}",
                 taskId, counters[0], counters[1], counters[2]);
         return counters[2];
@@ -106,8 +141,11 @@ public class MethodCallServiceImpl implements MethodCallService {
 
     /**
      * 递归遍历目录，识别 Java 文件后调用 JavaParserService.parseFile 并把 methodCalls 灌入 buffer。
+     *
+     * @param pathFilter 非 null 时只解析相对路径命中该集合的文件（增量场景用）；
+     *                   目录级短路：若子树中没有命中文件，直接跳过递归。
      */
-    private void walk(File baseDir, File current, Long taskId, List<MethodCall> buffer, int[] counters) {
+    private void walk(File baseDir, File current, Long taskId, List<MethodCall> buffer, int[] counters, Set<String> pathFilter) {
         if (current.isDirectory()) {
             File[] children = current.listFiles();
             if (children == null) {
@@ -117,12 +155,18 @@ public class MethodCallServiceImpl implements MethodCallService {
                 if (child.isDirectory() && SKIP_DIRS.contains(child.getName())) {
                     continue;
                 }
-                walk(baseDir, child, taskId, buffer, counters);
+                walk(baseDir, child, taskId, buffer, counters, pathFilter);
             }
             return;
         }
 
         if (!current.isFile() || !current.getName().endsWith(".java")) {
+            return;
+        }
+
+        String relativePath = relativize(baseDir, current);
+        // 增量模式：仅处理命中 pathFilter 的文件
+        if (pathFilter != null && !pathFilter.contains(relativePath)) {
             return;
         }
 
@@ -134,7 +178,6 @@ public class MethodCallServiceImpl implements MethodCallService {
                 return;
             }
 
-            String relativePath = relativize(baseDir, current);
             for (ParsedClassInfo.MethodCallInfo src : info.getMethodCalls()) {
                 MethodCall mc = new MethodCall();
                 mc.setTaskId(taskId);

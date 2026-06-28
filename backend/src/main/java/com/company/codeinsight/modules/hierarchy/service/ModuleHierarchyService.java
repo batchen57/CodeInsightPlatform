@@ -1,6 +1,7 @@
 package com.company.codeinsight.modules.hierarchy.service;
 
 import com.company.codeinsight.modules.hierarchy.model.ModuleHierarchy;
+import com.company.codeinsight.modules.scanner.model.IncrementalContext;
 
 import java.io.File;
 
@@ -24,6 +25,18 @@ public interface ModuleHierarchyService {
      * @return 构建后的 ModuleHierarchy DTO
      */
     ModuleHierarchy buildAndPersist(Long taskId, File projectDir);
+
+    /**
+     * 增量感知的层级构建。{@code ctx.isIncremental()} 为 false 时等价于 {@link #buildAndPersist(Long, File)}。
+     * <p>
+     * 增量模式：
+     * <ul>
+     *   <li>对变更文件对应的入口类重新调 AI（其余入口跳过 AI、保留 DTO 中已有数据）</li>
+     *   <li>对被删除文件，将对应 FQ 类名从已有 function 的 classPaths 中移除</li>
+     *   <li>最终仍走 {@code deleteByTaskId + 全量 insert} 落表（保留幂等语义）</li>
+     * </ul>
+     */
+    ModuleHierarchy buildAndPersist(Long taskId, File projectDir, IncrementalContext ctx);
 
     /**
      * 从数据库加载该任务的模块层级 DTO

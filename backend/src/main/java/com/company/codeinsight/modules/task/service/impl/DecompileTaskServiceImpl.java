@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.company.codeinsight.common.exception.BusinessException;
+import com.company.codeinsight.modules.ai.mapper.AiCallRecordMapper;
 import com.company.codeinsight.modules.repository.entity.CodeRepository;
 import com.company.codeinsight.modules.repository.service.CodeRepositoryService;
 import com.company.codeinsight.modules.system.entity.SystemApplication;
@@ -68,6 +69,9 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
 
     @Autowired
     private com.company.codeinsight.modules.task.service.TaskExecutionLogger execLog;
+
+    @Autowired
+    private AiCallRecordMapper aiCallRecordMapper;
 
     /**
      * 分页获取任务列表
@@ -353,8 +357,16 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
                 execLog.log(taskId, "  repositoryId   = " + task.getRepositoryId());
 
                 long t1 = System.currentTimeMillis();
-                File projectDir = codeScannerService.pullAndScan(taskId, task.getRepositoryId());
+                com.company.codeinsight.modules.scanner.model.ScanResult scanResult =
+                        codeScannerService.pullAndScan(taskId, task.getRepositoryId(), task.getType());
+                File projectDir = scanResult.getProjectDir();
+                com.company.codeinsight.modules.scanner.model.IncrementalContext incrementalCtx = scanResult.getIncrementalContext();
                 execLog.log(taskId, "  projectDir     = " + projectDir.getAbsolutePath());
+                execLog.log(taskId, "  scanMode       = " + (incrementalCtx.isIncremental() ? "INCREMENTAL" : "INITIAL"));
+                if (incrementalCtx.isIncremental()) {
+                    execLog.log(taskId, "  changed files  = " + incrementalCtx.getChangedPaths().size()
+                            + ", deleted files = " + incrementalCtx.getDeletedPaths().size());
+                }
                 execLog.log(taskId, "  耗时 " + (System.currentTimeMillis() - t1) + "ms");
 
                 // 2. PARSING_CODE
@@ -365,7 +377,7 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
                 List<com.company.codeinsight.modules.scanner.entity.CodeFileSnapshot> snapshots = codeScannerService.getSnapshotsByTaskId(taskId);
                 execLog.log(taskId, "  文件快照数    = " + snapshots.size());
 
-                int callCount = methodCallService.persistAstForTask(taskId, projectDir);
+                int callCount = methodCallService.persistAstForTask(taskId, projectDir, incrementalCtx);
                 execLog.log(taskId, "  方法调用链数   = " + callCount);
                 execLog.log(taskId, "  耗时 " + (System.currentTimeMillis() - t1) + "ms");
 
@@ -373,7 +385,7 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
                 stateMachineService.transitTo(taskId, TaskStatus.SPLITTING_TASK, null);
                 execLog.log(taskId, ">>> SPLITTING_TASK — 代码切片");
                 t1 = System.currentTimeMillis();
-                codeChunkService.chunkAndEstimate(taskId, snapshots);
+                codeChunkService.chunkAndEstimate(taskId, snapshots, incrementalCtx);
 
                 List<CodeChunk> allChunks = codeChunkService.getChunksByTaskId(taskId);
                 long fileCount = allChunks.stream().filter(c -> "FILE".equals(c.getChunkType())).count();
@@ -384,11 +396,14 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
 
                 // 4. AI_ANALYZING → MODULE_HIERARCHY
                 stateMachineService.transitTo(taskId, TaskStatus.AI_ANALYZING, null);
+                execLog.log(taskId, ">>> AI_ANALYZING — AI 归纳");
+                execLog.log(taskId, "  aiMock=" + aiSummaryService.isAiMock() + " | model=" + (task.getModelName() != null ? task.getModelName() : "(default)"));
+                long aiT0 = System.currentTimeMillis();
                 stateMachineService.transitTo(taskId, TaskStatus.MODULE_HIERARCHY, null);
                 execLog.log(taskId, ">>> MODULE_HIERARCHY — AI 提炼模块层级");
                 t1 = System.currentTimeMillis();
                 com.company.codeinsight.modules.hierarchy.model.ModuleHierarchy hierarchy =
-                        moduleHierarchyService.buildAndPersist(taskId, projectDir);
+                        moduleHierarchyService.buildAndPersist(taskId, projectDir, incrementalCtx);
                 int modCount = hierarchy.getModules() != null ? hierarchy.getModules().size() : 0;
                 execLog.log(taskId, "  模块数         = " + modCount);
                 execLog.log(taskId, "  耗时 " + (System.currentTimeMillis() - t1) + "ms");
@@ -400,9 +415,19 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
                     execLog.log(taskId, ">>> GENERATING_DOC — 生成文档");
                     t1 = System.currentTimeMillis();
                     stateMachineService.transitTo(taskId, TaskStatus.GENERATING_DOC, null);
-                    aiSummaryService.generateDraftDocument(taskId, chunks, resolvePromptContent(task));
+                    aiSummaryService.generateDraftDocument(taskId, chunks, resolvePromptContent(task), incrementalCtx);
                     stateMachineService.transitTo(taskId, TaskStatus.PENDING_REVIEW, null);
                     execLog.log(taskId, "  耗时 " + (System.currentTimeMillis() - t1) + "ms");
+                    // AI 阶段终态汇总：从 ci_ai_call_record 统计本次任务的成功/失败次数
+                    long aiOk = aiCallRecordMapper.selectCount(
+                            new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<com.company.codeinsight.modules.ai.entity.AiCallRecord>()
+                                    .eq(com.company.codeinsight.modules.ai.entity.AiCallRecord::getTaskId, taskId)
+                                    .eq(com.company.codeinsight.modules.ai.entity.AiCallRecord::getIsSuccess, 1));
+                    long aiFail = aiCallRecordMapper.selectCount(
+                            new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<com.company.codeinsight.modules.ai.entity.AiCallRecord>()
+                                    .eq(com.company.codeinsight.modules.ai.entity.AiCallRecord::getTaskId, taskId)
+                                    .eq(com.company.codeinsight.modules.ai.entity.AiCallRecord::getIsSuccess, 0));
+                    execLog.log(taskId, "<<< AI_ANALYZING 完成 (成功 " + aiOk + " 失败 " + aiFail + ", 耗时 " + (System.currentTimeMillis() - aiT0) + "ms)");
                     execLog.log(taskId, "<<< 流水线完成 → PENDING_REVIEW (总耗时 " + (System.currentTimeMillis() - t0) + "ms)");
                 } else {
                     stateMachineService.transitTo(taskId, TaskStatus.MODULE_HIERARCHY_REVIEW, null);
