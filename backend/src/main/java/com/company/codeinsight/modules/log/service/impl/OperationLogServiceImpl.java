@@ -18,6 +18,9 @@ import java.time.LocalDateTime;
 @Service
 public class OperationLogServiceImpl extends ServiceImpl<OperationLogMapper, OperationLog> implements OperationLogService {
 
+    private static final int MAX_DETAIL_LENGTH = 1000;
+    private static final int MAX_ACTION_TYPE_LENGTH = 50;
+
     /**
      * 保存单条操作日志
      * 临时采用固定用户（id=1L, username="Owner"）和固定 IP ("127.0.0.1") 写入。
@@ -29,8 +32,8 @@ public class OperationLogServiceImpl extends ServiceImpl<OperationLogMapper, Ope
         log.setTaskId(taskId);
         log.setUserId(1L); // Mock 用户 ID
         log.setUsername("Owner"); // Mock 用户名
-        log.setActionType(actionType);
-        log.setDetail(detail);
+        log.setActionType(truncate(actionType, MAX_ACTION_TYPE_LENGTH));
+        log.setDetail(truncate(detail, MAX_DETAIL_LENGTH));
         log.setIpAddress("127.0.0.1");
         log.setExceptionMsg(exceptionMsg);
         log.setIsSuccess(success ? 1 : 0);
@@ -53,6 +56,16 @@ public class OperationLogServiceImpl extends ServiceImpl<OperationLogMapper, Ope
                 .eq(isSuccess != null, OperationLog::getIsSuccess, isSuccess)
                 .orderByDesc(OperationLog::getCreatedAt);
         return this.page(page, queryWrapper);
+    }
+
+    private String truncate(String value, int maxLength) {
+        if (!StringUtils.hasText(value) || value.length() <= maxLength) {
+            return value;
+        }
+        if (maxLength <= 3) {
+            return value.substring(0, maxLength);
+        }
+        return value.substring(0, maxLength - 3) + "...";
     }
 }
 

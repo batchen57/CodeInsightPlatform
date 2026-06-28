@@ -639,7 +639,7 @@ const Systems: React.FC = () => {
             </Button>
           </div>
           <Collapse
-            defaultActiveKey={['include']}
+            defaultActiveKey={['include', 'exclude']}
             items={[
               {
                 key: 'include',

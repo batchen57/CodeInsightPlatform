@@ -227,7 +227,7 @@ public class AiSummaryServiceImpl implements AiSummaryService {
             String mockResult = generateMockSummary(chunk);
             
             // 记录审计与调用报表
-            saveCallRecordAndAudit(systemId, taskId, null, null, chunkId, modelToUse,
+            saveCallRecordAndAudit(systemId, taskId, resolvePromptId(task, "CHUNK"), null, chunkId, modelToUse,
                     promptInput.length() / 3, mockResult.length() / 3, mockResult, true, null, 100, "CHUNK_SUMMARY");
             return mockResult;
         }
@@ -278,13 +278,13 @@ public class AiSummaryServiceImpl implements AiSummaryService {
                 chunkMapper.updateById(chunk);
 
                 // 保存 AI 原始响应记录并提交至 Token 审计表
-                saveCallRecordAndAudit(systemId, taskId, null, null, chunkId, modelToUse,
+                saveCallRecordAndAudit(systemId, taskId, resolvePromptId(task, "CHUNK"), null, chunkId, modelToUse,
                         inTokens, outTokens, aiText, true, null, duration, "CHUNK_SUMMARY");
                 return aiText;
             } else {
                 String errMsg = "HTTP 错误码: " + response.statusCode() + ", 详情: " + response.body();
                 log.error("大模型请求失败（{}），返回空标记，不再生成 Mock 内容: {}", modelToUse, errMsg);
-                saveCallRecordAndAudit(systemId, taskId, null, null, chunkId, modelToUse,
+                saveCallRecordAndAudit(systemId, taskId, resolvePromptId(task, "CHUNK"), null, chunkId, modelToUse,
                         promptInput.length() / 3, 0, "[AI_ERROR: " + errMsg + "]", false, errMsg, duration, "CHUNK_SUMMARY");
                 return "[AI_ERROR: " + errMsg + "]";
             }
@@ -292,7 +292,7 @@ public class AiSummaryServiceImpl implements AiSummaryService {
             long duration = System.currentTimeMillis() - start;
             log.error("调用大模型发生网络异常（{}）: {}", modelToUse, e.getMessage());
             // 网络超时/连接错误：不再降级生成 Mock 内容，避免制造虚假 AI 输出
-            saveCallRecordAndAudit(systemId, taskId, null, null, chunkId, modelToUse,
+            saveCallRecordAndAudit(systemId, taskId, resolvePromptId(task, "CHUNK"), null, chunkId, modelToUse,
                     promptInput.length() / 3, 0, "[AI_ERROR: " + e.getMessage() + "]", false, e.getMessage(), duration, "CHUNK_SUMMARY");
             return "[AI_ERROR: " + e.getMessage() + "]";
         }
@@ -1431,7 +1431,7 @@ public class AiSummaryServiceImpl implements AiSummaryService {
         if (shouldMock) {
             log.info("Mock 模式已开启 (aiMock={}, apiKey={})，对 task {} / stage {} 跳过真实 AI 调用",
                     this.aiMock, maskKey(activeApiKey), taskId, callStage);
-            saveCallRecordAndAudit(systemId, taskId, null, null,
+            saveCallRecordAndAudit(systemId, taskId, resolvePromptId(task, callStage), null,
                     null, modelToUse, currentEstimate, 2, "{}", true, "mock-mode", 100, callStage);
             return "{}";
         }
@@ -1487,7 +1487,7 @@ public class AiSummaryServiceImpl implements AiSummaryService {
         } catch (Exception e) {
             long duration = System.currentTimeMillis() - start;
             log.error("真实 AI 调用异常 task={} stage={} model={}: {}", taskId, callStage, modelToUse, e.getMessage());
-            saveCallRecordAndAudit(systemId, taskId, null, null,
+            saveCallRecordAndAudit(systemId, taskId, resolvePromptId(task, callStage), null,
                     null, modelToUse, currentEstimate, 0, "{}", false, e.getMessage(), duration, callStage);
             return "{}";
         }
@@ -1521,6 +1521,17 @@ public class AiSummaryServiceImpl implements AiSummaryService {
 
     private boolean isSystemTokenExceeded(int systemUsed, int currentEstimate) {
         return tokenLimitEnabled && systemUsed + currentEstimate > systemMonthlyTokenLimit;
+    }
+
+    /**
+     * 从 task 中按 callStage 解析当前使用的 promptId
+     * MODULE_HIERARCHY / CHUNK → modularizePromptId
+     * MODULE_DOC → documentPromptId
+     */
+    private Long resolvePromptId(DecompileTask task, String callStage) {
+        if (task == null || callStage == null) return null;
+        if ("MODULE_DOC".equals(callStage)) return task.getDocumentPromptId();
+        return task.getModularizePromptId();
     }
 
     /**

@@ -17,10 +17,13 @@ import org.springframework.util.StringUtils;
 
 import java.io.File;
 import java.net.URI;
+import java.nio.charset.MalformedInputException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 
 /**
  * 代码切片管理服务实现类
@@ -39,6 +42,13 @@ public class CodeChunkServiceImpl implements CodeChunkService {
     
     // 每一个切片的最低 Token 估算占位
     private static final int MIN_TOKEN_ESTIMATE = 5;
+
+    // 不参与文本切片分析的已知二进制扩展名
+    private static final Set<String> NON_TEXT_EXTENSIONS = Set.of(
+            "jar", "class", "zip", "gz", "tar", "war", "ear",
+            "png", "jpg", "jpeg", "gif", "webp", "ico", "bmp",
+            "pdf", "exe", "dll", "so", "dylib", "bin", "o"
+    );
 
     @Autowired
     private CodeChunkMapper chunkMapper;
@@ -73,7 +83,12 @@ public class CodeChunkServiceImpl implements CodeChunkService {
                     continue;
                 }
 
-                List<String> lines = Files.readAllLines(file.toPath());
+                if (shouldSkipNonTextFile(snapshot)) {
+                    log.debug("Skip non-text file for chunking: {}", snapshot.getFilePath());
+                    continue;
+                }
+
+                List<String> lines = Files.readAllLines(file.toPath(), StandardCharsets.UTF_8);
                 String fullContent = String.join("\n", lines);
 
                 // 保存文件级切片 (FILE)
@@ -102,6 +117,8 @@ public class CodeChunkServiceImpl implements CodeChunkService {
                         }
                     }
                 }
+            } catch (MalformedInputException e) {
+                log.debug("Skip binary file for chunking: {}", snapshot.getFilePath());
             } catch (Exception e) {
                 log.error("Failed to chunk file: {}", snapshot.getFilePath(), e);
                 saveFailedChunk(taskId, snapshot.getFilePath(), e.getMessage());
@@ -314,6 +331,11 @@ public class CodeChunkServiceImpl implements CodeChunkService {
             }
         }
         return new int[]{start, end};
+    }
+
+    private boolean shouldSkipNonTextFile(CodeFileSnapshot snapshot) {
+        String ext = snapshot.getFileType();
+        return StringUtils.hasText(ext) && NON_TEXT_EXTENSIONS.contains(ext.toLowerCase());
     }
 }
 

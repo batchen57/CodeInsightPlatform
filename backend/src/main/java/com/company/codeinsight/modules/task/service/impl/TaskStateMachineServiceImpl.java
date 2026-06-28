@@ -113,8 +113,8 @@ public class TaskStateMachineServiceImpl implements TaskStateMachineService {
                 task.getSystemId(),
                 task.getId(),
                 "TASK_TRANSIT",
-                "任务状态变更: " + currentStatus + " -> " + targetStatus + (errorReason != null ? "，原因: " + errorReason : ""),
-                null,
+                "任务状态变更: " + currentStatus + " -> " + targetStatus,
+                errorReason,
                 true
         );
     }

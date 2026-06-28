@@ -342,11 +342,16 @@ public class ModuleHierarchyServiceImpl implements ModuleHierarchyService {
             for (JsonNode subNode : subsNode) {
                 String subId = subNode.path("id").asText("");
                 if (!StringUtils.hasText(subId)) continue;
+                if (existingSubModuleIds.contains(subId) && !module.getSubModules().containsKey(subId)) {
+                    log.warn("AI 输出子模块 ID {} 与同任务其他模块冲突，重新生成", subId);
+                    subId = base62Generator.generateUnique('s', existingSubModuleIds);
+                }
                 SubModuleDto sub = module.getSubModules().get(subId);
                 if (sub == null) {
                     sub = new SubModuleDto();
                     sub.setId(subId);
                     module.getSubModules().put(subId, sub);
+                    existingSubModuleIds.add(subId);
                 }
                 if (StringUtils.hasText(subNode.path("sub_module_name").asText(""))) {
                     sub.setSubModuleName(subNode.path("sub_module_name").asText());
@@ -358,11 +363,16 @@ public class ModuleHierarchyServiceImpl implements ModuleHierarchyService {
                 for (JsonNode fnNode : fnsNode) {
                     String fnId = fnNode.path("id").asText("");
                     if (!StringUtils.hasText(fnId)) continue;
+                    if (existingFunctionIds.contains(fnId) && !sub.getFunctions().containsKey(fnId)) {
+                        log.warn("AI 输出功能 ID {} 与同任务其他子模块冲突，重新生成", fnId);
+                        fnId = base62Generator.generateUnique('f', existingFunctionIds);
+                    }
                     FunctionDto fn = sub.getFunctions().get(fnId);
                     if (fn == null) {
                         fn = new FunctionDto();
                         fn.setId(fnId);
                         sub.getFunctions().put(fnId, fn);
+                        existingFunctionIds.add(fnId);
                         newlyCreatedFunctionIds.add(fnId);
                     }
                     if (StringUtils.hasText(fnNode.path("function_name").asText(""))) {
@@ -464,10 +474,15 @@ public class ModuleHierarchyServiceImpl implements ModuleHierarchyService {
         }
 
         List<ModuleHierarchyNode> subRows = new ArrayList<>();
+        Set<String> seenSubNodeIds = new HashSet<>();
         for (ModuleDto m : hierarchy.getModules().values()) {
             Long parentRowId = moduleRowIdByNodeId.get(m.getId());
             if (parentRowId == null) continue;
             for (SubModuleDto sm : m.getSubModules().values()) {
+                if (!seenSubNodeIds.add(sm.getId())) {
+                    log.warn("persistAll 跳过重复子模块 node_id={}, taskId={}", sm.getId(), taskId);
+                    continue;
+                }
                 ModuleHierarchyNode subRow = new ModuleHierarchyNode();
                 subRow.setTaskId(taskId);
                 subRow.setSystemId(systemId);
@@ -496,11 +511,16 @@ public class ModuleHierarchyServiceImpl implements ModuleHierarchyService {
         }
 
         List<ModuleHierarchyNode> fnRows = new ArrayList<>();
+        Set<String> seenFunctionNodeIds = new HashSet<>();
         for (ModuleDto m : hierarchy.getModules().values()) {
             for (SubModuleDto sm : m.getSubModules().values()) {
                 Long parentRowId = subModuleRowIdByNodeId.get(sm.getId());
                 if (parentRowId == null) continue;
                 for (FunctionDto fn : sm.getFunctions().values()) {
+                    if (!seenFunctionNodeIds.add(fn.getId())) {
+                        log.warn("persistAll 跳过重复功能 node_id={}, taskId={}", fn.getId(), taskId);
+                        continue;
+                    }
                     ModuleHierarchyNode fnRow = new ModuleHierarchyNode();
                     fnRow.setTaskId(taskId);
                     fnRow.setSystemId(systemId);
@@ -573,7 +593,7 @@ public class ModuleHierarchyServiceImpl implements ModuleHierarchyService {
         }
         Set<String> seenModuleIds = new HashSet<>();
         for (ModuleDto m : hierarchy.getModules().values()) {
-            if (!StringUtils.hasText(m.getId()) || !m.getId().startsWith("m") || m.getId().length() != 6) {
+            if (!StringUtils.hasText(m.getId()) || !m.getId().startsWith("m") || m.getId().length() != 5) {
                 throw new BusinessException("模块 ID 非法: " + m.getId());
             }
             if (!seenModuleIds.add(m.getId())) {
@@ -584,7 +604,7 @@ public class ModuleHierarchyServiceImpl implements ModuleHierarchyService {
             }
             Set<String> seenSubIds = new HashSet<>();
             for (SubModuleDto sm : m.getSubModules().values()) {
-                if (!StringUtils.hasText(sm.getId()) || !sm.getId().startsWith("s") || sm.getId().length() != 6) {
+                if (!StringUtils.hasText(sm.getId()) || !sm.getId().startsWith("s") || sm.getId().length() != 5) {
                     throw new BusinessException("子模块 ID 非法: " + sm.getId());
                 }
                 if (!seenSubIds.add(sm.getId())) {
@@ -595,7 +615,7 @@ public class ModuleHierarchyServiceImpl implements ModuleHierarchyService {
                 }
                 Set<String> seenFnIds = new HashSet<>();
                 for (FunctionDto fn : sm.getFunctions().values()) {
-                    if (!StringUtils.hasText(fn.getId()) || !fn.getId().startsWith("f") || fn.getId().length() != 6) {
+                    if (!StringUtils.hasText(fn.getId()) || !fn.getId().startsWith("f") || fn.getId().length() != 5) {
                         throw new BusinessException("功能 ID 非法: " + fn.getId());
                     }
                     if (!seenFnIds.add(fn.getId())) {

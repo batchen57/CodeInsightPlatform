@@ -113,6 +113,27 @@ public class UserController {
         Assertions.assertEquals("manual failure", markedFailed.getErrorReason());
     }
 
+    @Test
+    public void testSkipsBinaryJarFile() throws Exception {
+        Long taskId = 891L;
+        File tempFile = File.createTempFile("gradle-wrapper", ".jar");
+        tempFile.deleteOnExit();
+        Files.write(tempFile.toPath(), new byte[] {0x50, 0x4b, 0x03, 0x04, (byte) 0xff});
+
+        CodeFileSnapshot snapshot = new CodeFileSnapshot();
+        snapshot.setTaskId(taskId);
+        snapshot.setFilePath("gradle/wrapper/gradle-wrapper.jar");
+        snapshot.setFileType("jar");
+        snapshot.setLineCount(0);
+        snapshot.setFileHash("jar-hash");
+        snapshot.setContentUri(tempFile.toURI().toString());
+        snapshot.setCreatedAt(LocalDateTime.now());
+
+        codeChunkService.chunkAndEstimate(taskId, List.of(snapshot));
+
+        Assertions.assertTrue(codeChunkService.getChunksByTaskId(taskId).isEmpty());
+    }
+
     private CodeFileSnapshot snapshot(Long taskId, File file, int lineCount) {
         CodeFileSnapshot snapshot = new CodeFileSnapshot();
         snapshot.setTaskId(taskId);
