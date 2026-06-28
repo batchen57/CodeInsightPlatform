@@ -446,6 +446,10 @@ public class ModuleHierarchyServiceImpl implements ModuleHierarchyService {
         for (JsonNode modNode : modulesNode) {
             String modId = modNode.path("id").asText("");
             if (!StringUtils.hasText(modId)) continue;
+            // 归一化 AI 输出的 ID：后端约定 prefix + 4 位 Base62 = 5 位总长，
+            // 但 AI 可能按 "5 位 Base62" 字面理解为 prefix + 5 位 = 6 位，
+            // 此处统一截断为 5 位后再做冲突检测与复用。
+            modId = normalizeAiNodeId(modId, 'm', hierarchy.getModules().keySet());
             ModuleDto module = hierarchy.getModules().get(modId);
             if (module == null) {
                 module = new ModuleDto();
@@ -462,6 +466,7 @@ public class ModuleHierarchyServiceImpl implements ModuleHierarchyService {
             for (JsonNode subNode : subsNode) {
                 String subId = subNode.path("id").asText("");
                 if (!StringUtils.hasText(subId)) continue;
+                subId = normalizeAiNodeId(subId, 's', existingSubModuleIds);
                 if (existingSubModuleIds.contains(subId) && !module.getSubModules().containsKey(subId)) {
                     log.warn("AI 输出子模块 ID {} 与同任务其他模块冲突，重新生成", subId);
                     subId = base62Generator.generateUnique('s', existingSubModuleIds);
@@ -483,6 +488,7 @@ public class ModuleHierarchyServiceImpl implements ModuleHierarchyService {
                 for (JsonNode fnNode : fnsNode) {
                     String fnId = fnNode.path("id").asText("");
                     if (!StringUtils.hasText(fnId)) continue;
+                    fnId = normalizeAiNodeId(fnId, 'f', existingFunctionIds);
                     if (existingFunctionIds.contains(fnId) && !sub.getFunctions().containsKey(fnId)) {
                         log.warn("AI 输出功能 ID {} 与同任务其他子模块冲突，重新生成", fnId);
                         fnId = base62Generator.generateUnique('f', existingFunctionIds);
@@ -697,6 +703,26 @@ public class ModuleHierarchyServiceImpl implements ModuleHierarchyService {
         } catch (Exception e) {
             return "{}";
         }
+    }
+
+    /**
+     * 归一化 AI 输出的节点 ID：后端约定 prefix + 4 位 Base62 = 5 位总长，
+     * 但 AI 可能按 prompt 字面理解为 prefix + 5 位 = 6 位（如 mA1b2C）。
+     * 此处将 6 位 ID 截断为 5 位；如截断后与已有 ID 冲突则重新生成。
+     */
+    private String normalizeAiNodeId(String aiId, char prefix, Set<String> existingIds) {
+        if (aiId == null || aiId.isEmpty()) return aiId;
+        // 已经是 5 位且前缀正确，直接返回
+        if (aiId.length() == 5 && aiId.charAt(0) == prefix) return aiId;
+        // 超过 5 位（通常是 AI 多生成了 1 位），截断为 5 位
+        if (aiId.length() > 5) {
+            String truncated = aiId.substring(0, 5);
+            if (truncated.charAt(0) == prefix && !existingIds.contains(truncated)) {
+                return truncated;
+            }
+        }
+        // 格式不对或截断后冲突 → 重新生成
+        return base62Generator.generateUnique(prefix, existingIds);
     }
 
     /**

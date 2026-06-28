@@ -32,7 +32,7 @@ public class Base62GeneratorTest {
     public void testGenerateWithPrefix() {
         for (int i = 0; i < 100; i++) {
             Assertions.assertTrue(generator.generateWithPrefix('m').startsWith("m"));
-            Assertions.assertEquals(6, generator.generateWithPrefix('s').length());
+            Assertions.assertEquals(5, generator.generateWithPrefix('s').length());
         }
     }
 

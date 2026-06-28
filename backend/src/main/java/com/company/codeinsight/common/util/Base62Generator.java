@@ -32,8 +32,7 @@ public class Base62Generator {
         return sb.toString();
     }
 
-    /** 生成带前缀的 ID（如 "m" + 5位 Base62 = mXXXXX） */
-    /** 生成带前缀的 ID，总长 5 位（前缀 1 + 随机 4），与 AI prompt 定义的 "5 位 Base62" 一致 */
+    /** 生成带前缀的 ID：prefix + 4 位 Base62 随机 = 共 5 位（如 m0B1A），与上游 mergeIncrementIntoHierarchy 的 5 位约定一致 */
     public String generateWithPrefix(char prefix) {
         return prefix + generate(4);
     }
