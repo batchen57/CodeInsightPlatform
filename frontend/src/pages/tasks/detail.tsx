@@ -15,6 +15,9 @@ import { getTask, getTaskExecutionLog, retryTask, startTask, terminateTask } fro
 import { getSystem } from '../../api/system';
 import type { System, Task } from '../../types';
 
+/** 构造携带当前任务上下文（systemId + taskId）的复核页跳转链接 */
+const buildDraftsHref = (task: Task) => `/drafts?systemId=${task.systemId}&taskId=${task.id}`;
+
 
 const { Text, Title } = Typography;
 
@@ -224,7 +227,7 @@ const TaskDetail: React.FC = () => {
               </Button>
             )}
             {['PENDING_REVIEW', 'REVIEWING', 'CONFIRMED'].includes(task.status) && (
-              <Button type="primary" icon={<EditOutlined />} onClick={() => navigate('/drafts')}>
+              <Button type="primary" icon={<EditOutlined />} onClick={() => navigate(buildDraftsHref(task))}>
                 复核草稿
               </Button>
             )}
@@ -278,7 +281,7 @@ const TaskDetail: React.FC = () => {
           message="知识草稿已就绪"
           description="生成的 Markdown 已进入平台草稿区，仍需人工复核后才能成为确认的知识版本。"
           action={
-            <Button type="primary" icon={<CheckCircleOutlined />} onClick={() => navigate('/drafts')}>
+            <Button type="primary" icon={<CheckCircleOutlined />} onClick={() => navigate(buildDraftsHref(task))}>
               打开复核
             </Button>
           }

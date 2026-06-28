@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Badge,
   Button,
@@ -101,7 +101,17 @@ const statusBadgeType: Record<string, "success" | "processing" | "error" | "warn
  */
 const Drafts: React.FC = () => {
   const navigate = useNavigate();
-  
+  const [searchParams, setSearchParams] = useSearchParams();
+  // 解析 URL 上的初始定位参数：来自任务详情/列表的「打开复核」入口
+  // 携带 systemId + taskId 时，跳过默认系统/任务选择流程，直接定位到指定任务的复核数据
+  const initialSystemIdParam = Number(searchParams.get('systemId'));
+  const initialTaskIdParam = Number(searchParams.get('taskId'));
+  const hasInitialTask =
+    Number.isFinite(initialSystemIdParam) && initialSystemIdParam > 0 &&
+    Number.isFinite(initialTaskIdParam) && initialTaskIdParam > 0;
+  // 标记是否在挂载时通过 query 注入了定位；注入后不再被系统/任务列表的自动选择覆盖
+  const hasInitialTaskRef = useRef(hasInitialTask);
+
   // 系统下拉数据及选中的系统 ID
   const [systems, setSystems] = useState<System[]>([]);
   const [selectedSystemId, setSelectedSystemId] = useState<number | undefined>();
@@ -119,7 +129,7 @@ const Drafts: React.FC = () => {
   // 编辑器状态：当前最新的编辑文本 and 最近一次保存的原始文本
   const [editorContent, setEditorContent] = useState('');
   const [originalContent, setOriginalContent] = useState('');
-  
+
   // 编辑器自动保存状态字与防抖定时器引用
   const [autoSaveStatus, setAutoSaveStatus] = useState('已同步');
   const autoSaveTimer = useRef<number | null>(null);
@@ -134,7 +144,7 @@ const Drafts: React.FC = () => {
   const [rejectComment, setRejectComment] = useState('');
   // 重新触发后台任务的 loading 状态
   const [rerunLoading, setRerunLoading] = useState(false);
-  
+
   // Monaco 编辑器底层引用
   const editorRef = useRef<any>(null);
 
@@ -144,9 +154,15 @@ const Drafts: React.FC = () => {
   }, [selectedDraft]);
 
   // 初始化：获取已启用的全部业务系统列表
+  // 若 query 上携带了 systemId + taskId，则预填并跳过自动选第一项
   useEffect(() => {
     listSystems({ current: 1, size: 100, status: 1 }).then((data) => {
       setSystems(data.records);
+      if (hasInitialTaskRef.current) {
+        setSelectedSystemId(initialSystemIdParam);
+        setSelectedTaskId(initialTaskIdParam);
+        return;
+      }
       if (data.records.length > 0) {
         setSelectedSystemId(data.records[0].id);
       }
@@ -160,7 +176,18 @@ const Drafts: React.FC = () => {
     }
     listTasks({ current: 1, size: 100, systemId: selectedSystemId }).then((data) => {
       setTasks(data.records);
-      // 优先高亮高亮有待人工处理的任务（如待复核、复核中等）
+      // 携带定位参数时，直接锁定到目标任务；否则优先高亮有待人工处理的任务
+      if (hasInitialTaskRef.current) {
+        // 消费定位标记，避免后续系统切换时仍强行跳回原任务
+        hasInitialTaskRef.current = false;
+        setSearchParams((prev) => {
+          const next = new URLSearchParams(prev);
+          next.delete('systemId');
+          next.delete('taskId');
+          return next;
+        }, { replace: true });
+        return;
+      }
       const reviewTask = data.records.find((task) => ['PENDING_REVIEW', 'REVIEWING'].includes(task.status));
       setSelectedTaskId(reviewTask?.id ?? data.records[0]?.id);
       if (data.records.length === 0) {
@@ -169,7 +196,7 @@ const Drafts: React.FC = () => {
         setSelectedDraftId(null);
       }
     });
-  }, [selectedSystemId]);
+  }, [selectedSystemId, setSearchParams]);
 
   // 联动监听所选任务变更，拉取对应的工作区 (Workspace) 及包含的全部模块列表
   useEffect(() => {
