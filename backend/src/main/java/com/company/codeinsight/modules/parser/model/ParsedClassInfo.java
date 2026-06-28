@@ -23,6 +23,12 @@ public class ParsedClassInfo {
     private String packageName;
 
     /**
+     * 源文件相对于项目根目录的路径（如 accounting-service/src/main/java/com/demo/UserController.java）
+     * 由 JavaParserServiceImpl.parseDirectory 在扫描时写入，供入口识别与源码读取使用
+     */
+    private String sourceRelativePath;
+
+    /**
      * 类的组件归属角色类型（如 CONTROLLER, SERVICE, MAPPER, ENTITY 等）
      */
     private String type;
@@ -51,6 +57,24 @@ public class ParsedClassInfo {
      * 类中存在的方法与方法调用级链条的明细列表
      */
     private List<MethodCallInfo> methodCalls = new ArrayList<>();
+
+    /**
+     * 该类是否包含 Java SE 标准入口方法 public static void main(String[] args)
+     * 由 JavaParserServiceImpl.parseFile 在识别到时置为 true
+     */
+    private boolean hasMainMethod;
+
+    /**
+     * 该类直接继承的父类全限定名（extends 子句的第一个类型）
+     * 由 JavaParserServiceImpl.parseFile 提取；interface / enum / @interface 时该字段保持 null
+     */
+    private String extendsClass;
+
+    /**
+     * 该类实现的接口列表（implements 子句，按逗号分隔）
+     * 元素可能为 FQ 也可能为简单类名（依赖源码写法）
+     */
+    private List<String> implementsList = new ArrayList<>();
 
     /**
      * 该类中涉及到的底层数据库表名称集合（如 ["ci_chunk", "ci_task"]）
@@ -87,6 +111,16 @@ public class ParsedClassInfo {
          * HTTP 请求方法类型（GET/POST/PUT/DELETE 等）
          */
         private String httpMethod;
+        /**
+         * 方法体起始行（1-indexed，含方法签名行）
+         * 由 JavaParserServiceImpl.parseFile 在解析时写入
+         * 用于阶段 2 按方法签名截取源码（filterClassToMethods）
+         */
+        private Integer startLine;
+        /**
+         * 方法体结束行（1-indexed，含闭合括号）
+         */
+        private Integer endLine;
     }
 
     /**
@@ -106,6 +140,16 @@ public class ParsedClassInfo {
          * 被调用的目标方法名称
          */
         private String targetMethod;
+        /**
+         * 调用方方法完整签名："methodName(ParamType1, ParamType2)"（不含类名，不含返回类型）
+         * 例："listUsers(Integer, Integer)"
+         * 落表到 ci_method_call.caller_signature 时前面拼上类名
+         */
+        private String callerSignature;
+        /**
+         * 被调方方法完整签名："methodName(ParamType1, ParamType2)"（MVP 阶段不带参数，等于 targetMethod）
+         */
+        private String targetSignature;
         /**
          * 完整的调用代码行表达式
          */

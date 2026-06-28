@@ -1,12 +1,16 @@
 package com.company.codeinsight.modules.knowledge;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.company.codeinsight.common.exception.BusinessException;
 import com.company.codeinsight.modules.draft.entity.DraftWorkspace;
 import com.company.codeinsight.modules.draft.entity.KnowledgeDraft;
+import com.company.codeinsight.modules.draft.enums.DraftStatus;
 import com.company.codeinsight.modules.draft.mapper.DraftWorkspaceMapper;
 import com.company.codeinsight.modules.draft.mapper.KnowledgeDraftMapper;
 import com.company.codeinsight.modules.knowledge.entity.KnowledgeVersion;
 import com.company.codeinsight.modules.knowledge.service.KnowledgeService;
+import com.company.codeinsight.modules.push.enums.PushMethod;
+import com.company.codeinsight.modules.push.service.PushService;
 import com.company.codeinsight.modules.repository.entity.CodeRepository;
 import com.company.codeinsight.modules.repository.service.CodeRepositoryService;
 import com.company.codeinsight.modules.task.entity.DecompileTask;
@@ -33,6 +37,9 @@ public class KnowledgeServiceTest {
     private KnowledgeService knowledgeService;
 
     @Autowired
+    private PushService pushService;
+
+    @Autowired
     private DecompileTaskMapper taskMapper;
 
     @Autowired
@@ -45,7 +52,7 @@ public class KnowledgeServiceTest {
     private KnowledgeDraftMapper draftMapper;
 
     @Test
-    public void testKnowledgeVersionAndPush() throws Exception {
+    public void testKnowledgeVersionCreateAndExport() throws Exception {
         Long taskId = 666L;
 
         // 1. 创建 Repository 与 Task
@@ -60,7 +67,7 @@ public class KnowledgeServiceTest {
         task.setId(taskId);
         task.setSystemId(1L);
         task.setRepositoryId(repo.getId());
-        task.setStatus("PENDING");
+        task.setStatus("CONFIRMED");
         task.setType("INITIAL");
         task.setProgress(0);
         taskMapper.insert(task);
@@ -84,7 +91,7 @@ public class KnowledgeServiceTest {
         draft.setFilePath("MockDraft.md");
         draft.setModuleName("订单模块");
         draft.setContentUri(tempFile.toURI().toString());
-        draft.setStatus("CONFIRMED");
+        draft.setStatus(DraftStatus.CONFIRMED.name());
         draft.setHash("hashabc");
         draft.setCreatedAt(LocalDateTime.now());
         draft.setUpdatedAt(LocalDateTime.now());
@@ -95,14 +102,14 @@ public class KnowledgeServiceTest {
         Assertions.assertNotNull(version);
         Assertions.assertEquals("v1.0.0", version.getVersionNum());
         Assertions.assertEquals("DRAFT", version.getStatus());
+        Assertions.assertEquals("GIT", version.getPushMethod());
 
-        // 4. 模拟 Git 推送
-        knowledgeService.pushToGit(version.getId());
-        
-        // 推送后状态应该变成 PUSHED
-        KnowledgeVersion pushedVersion = versionMapperSelect(version.getId());
-        Assertions.assertEquals("PUSHED", pushedVersion.getStatus());
-        Assertions.assertNotNull(pushedVersion.getTargetCommit());
+        // 4. 推送任务入队（Redis 不可用时抛出 BusinessException）
+        BusinessException ex = Assertions.assertThrows(BusinessException.class, () -> {
+            pushService.enqueuePush(version.getId(), PushMethod.GIT);
+        });
+        Assertions.assertTrue(ex.getMessage().contains("Redis") || ex.getMessage().contains("推送"),
+                "Should fail due to Redis not available in test");
 
         // 5. 导出 ZIP
         byte[] zipBytes = knowledgeService.exportZip(version.getId());
@@ -132,7 +139,7 @@ public class KnowledgeServiceTest {
         task.setId(taskId);
         task.setSystemId(1L);
         task.setRepositoryId(repo.getId());
-        task.setStatus("PENDING");
+        task.setStatus("CONFIRMED");
         task.setType("INITIAL");
         task.setProgress(0);
         taskMapper.insert(task);
@@ -146,6 +153,7 @@ public class KnowledgeServiceTest {
         ws.setUpdatedAt(LocalDateTime.now());
         workspaceMapper.insert(ws);
 
+        // 创建包含 `- [ ]` 待确认项的草稿
         File tempFile = File.createTempFile("MockDraft", ".md");
         tempFile.deleteOnExit();
         Files.writeString(tempFile.toPath(), "# 待确认内容\n- [ ] 并发事务锁机制");
@@ -155,24 +163,28 @@ public class KnowledgeServiceTest {
         draft.setFilePath("MockDraft.md");
         draft.setModuleName("订单模块");
         draft.setContentUri(tempFile.toURI().toString());
-        draft.setStatus("CONFIRMED");
+        draft.setStatus(DraftStatus.CONFIRMED.name());
         draft.setHash("hashabc");
         draft.setCreatedAt(LocalDateTime.now());
         draft.setUpdatedAt(LocalDateTime.now());
         draftMapper.insert(draft);
 
         KnowledgeVersion version = knowledgeService.createVersion(taskId, "v2.0.0", "Tester");
-        
-        Assertions.assertThrows(com.company.codeinsight.common.exception.BusinessException.class, () -> {
-            knowledgeService.pushToGit(version.getId());
+        Assertions.assertNotNull(version);
+
+        // 校验1: 草稿中有 `- [ ]` 待确认项 → enqueuePush 应抛出 BusinessException
+        Assertions.assertThrows(BusinessException.class, () -> {
+            pushService.enqueuePush(version.getId(), PushMethod.GIT);
         });
 
-        draft.setStatus("AI_GENERATED");
+        // 修复内容但改为非 CONFIRMED 状态
+        draft.setStatus(DraftStatus.DRAFT.name());
         draftMapper.updateById(draft);
         Files.writeString(tempFile.toPath(), "# 已解决待确认项");
-        
-        Assertions.assertThrows(com.company.codeinsight.common.exception.BusinessException.class, () -> {
-            knowledgeService.pushToGit(version.getId());
+
+        // 校验2: 草稿状态不是 CONFIRMED → enqueuePush 应抛出 BusinessException
+        Assertions.assertThrows(BusinessException.class, () -> {
+            pushService.enqueuePush(version.getId(), PushMethod.GIT);
         });
     }
 }

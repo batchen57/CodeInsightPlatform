@@ -3,9 +3,11 @@ package com.company.codeinsight.modules.prompt.service;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.IService;
 import com.company.codeinsight.modules.prompt.dto.PromptTestResultDto;
+import com.company.codeinsight.modules.prompt.dto.PromptTestStreamEventDto;
 import com.company.codeinsight.modules.prompt.entity.DecompilePrompt;
 
 import java.util.Map;
+import java.util.function.Consumer;
 
 /**
  * 提示词模板管理服务接口
@@ -15,8 +17,14 @@ public interface DecompilePromptService extends IService<DecompilePrompt> {
 
     /**
      * 分页、条件查询提示词模板列表
+     *
+     * @param current    页码（从 1 开始）
+     * @param size       每页条数
+     * @param name       模板名称模糊关键字（可为 null）
+     * @param status     状态过滤：0-禁用 / 1-启用（可为 null）
+     * @param promptType 提示词用途过滤：{@code MODULARIZE} / {@code DOCUMENT_GENERATION}（可为 null 表示全部）
      */
-    Page<DecompilePrompt> listPromptsPage(int current, int size, String name, Integer status);
+    Page<DecompilePrompt> listPromptsPage(int current, int size, String name, Integer status, String promptType);
 
     /**
      * 克隆复制指定 ID 提示词模板以创建一条全新副本
@@ -49,5 +57,26 @@ public interface DecompilePromptService extends IService<DecompilePrompt> {
      * @return 试跑报告数据传输对象
      */
     PromptTestResultDto testRun(Long id, String sampleCode, Long modelId);
+
+    /**
+     * 解析任务运行时指定类型的提示词正文（用于流水线各阶段）
+     * <p>
+     * 解析顺序：
+     * <ol>
+     *     <li>任务记录中显式保存的提示词版本（{@code modularizePromptVersion} 或 {@code documentPromptVersion}）</li>
+     *     <li>任务未指定 → 取同 {@code prompt_type} 下 is_default=1 且 status=1 的默认版本</li>
+     *     <li>都不存在 → 返回 null，由调用方按各自阶段的 classpath 兜底处理</li>
+     * </ol>
+     *
+     * @param task         任务实体（用于读取显式版本号）
+     * @param promptType   提示词用途：{@code MODULARIZE} 或 {@code DOCUMENT_GENERATION}
+     * @return 提示词正文；找不到返回 null
+     */
+    String resolveTaskPromptContent(com.company.codeinsight.modules.task.entity.DecompileTask task, String promptType);
+
+    /**
+     * 流式试跑提示词模板，按内容增量和结束事件输出。
+     */
+    void testRunStream(Long id, String sampleCode, Long modelId, Consumer<PromptTestStreamEventDto> eventConsumer);
 }
 

@@ -1,8 +1,15 @@
 package com.company.codeinsight.modules.token.mapper;
 
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
+import com.company.codeinsight.modules.model.dto.AiModelMetricSummary;
+import com.company.codeinsight.modules.model.dto.AiModelMetricTrendPoint;
 import com.company.codeinsight.modules.token.entity.TokenUsageAudit;
 import org.apache.ibatis.annotations.Mapper;
+import org.apache.ibatis.annotations.Param;
+import org.apache.ibatis.annotations.Select;
+
+import java.time.LocalDateTime;
+import java.util.List;
 
 /**
  * Token 用量审计持久层 Mapper 接口
@@ -10,5 +17,35 @@ import org.apache.ibatis.annotations.Mapper;
  */
 @Mapper
 public interface TokenUsageAuditMapper extends BaseMapper<TokenUsageAudit> {
+
+    @Select("""
+        SELECT
+            model_name AS modelName,
+            COUNT(*) AS totalCalls,
+            COALESCE(SUM(total_tokens), 0) AS totalTokens,
+            COALESCE(SUM(cost), 0) AS totalCost
+        FROM ci_token_usage_audit
+        GROUP BY model_name
+        """)
+    List<AiModelMetricSummary> selectModelMetricSummaries();
+
+    @Select("""
+        SELECT
+            TO_CHAR(created_at::date, 'YYYY-MM-DD') AS date,
+            COUNT(*) AS calls,
+            COALESCE(SUM(total_tokens), 0) AS tokens,
+            COALESCE(SUM(cost), 0) AS cost
+        FROM ci_token_usage_audit
+        WHERE model_name = #{modelName}
+          AND created_at >= #{startAt}
+          AND created_at < #{endAt}
+        GROUP BY created_at::date
+        ORDER BY created_at::date ASC
+        """)
+    List<AiModelMetricTrendPoint> selectModelMetricTrend(
+        @Param("modelName") String modelName,
+        @Param("startAt") LocalDateTime startAt,
+        @Param("endAt") LocalDateTime endAt
+    );
 }
 

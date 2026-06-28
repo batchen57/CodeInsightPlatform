@@ -114,7 +114,7 @@ public class EnvMatchDecompileTest {
         System.out.println("Created Prompt ID: " + promptId);
 
         // 4. Create Decompile Task
-        DecompileTask task = decompileTaskService.createInitialTask(systemId, repoId, 1, null);
+        DecompileTask task = decompileTaskService.createInitialTask(systemId, repoId, 1L, 1L, null, null, null);
         taskId = task.getId();
         System.out.println("Created Task ID: " + taskId);
 

@@ -1,0 +1,42 @@
+/* AI 模型管理页 - 拖拽排序样式 */
+
+.ci-model-row-draggable {
+  transition: background-color 0.25s ease, opacity 0.25s ease;
+}
+
+.ci-model-row-dragging {
+  opacity: 0.45;
+  background-color: #f3f4f6 !important;
+}
+
+.ci-model-row-drag-over td {
+  background-color: var(--premium-primary-soft) !important;
+  border-top: 2px solid var(--premium-primary) !important;
+  transition: none !important;
+}
+
+.ci-model-metric-summary {
+  padding: 14px;
+  border: 1px solid #edf1f7;
+  border-radius: 8px;
+  background: linear-gradient(180deg, #fbfcff 0%, #f7f9fc 100%);
+}
+
+.ci-model-metric-section {
+  padding-top: 4px;
+}
+
+.ci-model-metric-section-title {
+  margin-bottom: 12px;
+  color: #111827;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.ci-model-mini-chart {
+  min-height: 184px;
+  padding: 12px 12px 6px;
+  border: 1px solid #edf1f7;
+  border-radius: 8px;
+  background: #fff;
+}

@@ -1,15 +1,18 @@
 import { createHashRouter } from 'react-router-dom';
 import BasicLayout from '../layouts/BasicLayout';
+import RequireAuth from './RequireAuth';
 import Dashboard from '../pages/dashboard';
 import Systems from '../pages/systems';
 import Prompts from '../pages/prompts';
 import Tasks from '../pages/tasks';
 import TaskDetail from '../pages/tasks/detail';
+import HierarchyReview from '../pages/tasks/hierarchy-review';
 import Drafts from '../pages/drafts';
 import Push from '../pages/push';
 import TokenAudit from '../pages/token-audit';
 import Logs from '../pages/logs';
 import ModelConfig from '../pages/model/config';
+import Login from '../pages/login';
 
 /**
  * 全局 React 路由配置映射表
@@ -18,8 +21,16 @@ import ModelConfig from '../pages/model/config';
  */
 export const router = createHashRouter([
   {
+    path: '/login',
+    element: <Login />,
+  },
+  {
     path: '/',
-    element: <BasicLayout />, // 公共菜单及排版布局
+    element: (
+      <RequireAuth>
+        <BasicLayout />
+      </RequireAuth>
+    ), // 公共菜单及排版布局
     children: [
       {
         path: '', // 默认首页：工作台 Dashboard 看板
@@ -40,6 +51,10 @@ export const router = createHashRouter([
       {
         path: 'tasks', // 扫描分析任务列表
         element: <Tasks />,
+      },
+      {
+        path: 'tasks/hierarchy-review', // 模块层级调试专用页
+        element: <HierarchyReview />,
       },
       {
         path: 'tasks/:id', // 任务执行详情与流程监控

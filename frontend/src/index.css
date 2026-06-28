@@ -598,32 +598,6 @@ pre,
   font-weight: 700;
 }
 
-.ci-prompt-name-cell {
-  display: grid;
-  min-width: 0;
-  justify-items: start;
-  gap: 5px;
-}
-
-.ci-prompt-name-link {
-  display: block;
-  width: 100%;
-  max-width: 100%;
-  overflow: hidden;
-  text-align: left;
-}
-
-.ci-prompt-name-link > span {
-  display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.ci-prompt-row-actions {
-  white-space: nowrap;
-}
-
 .ci-selected-row > td {
   background: #eef6ff !important;
 }
@@ -1849,30 +1823,6 @@ body {
   min-height: 620px;
 }
 
-.ci-prompt-library .ant-card-body {
-  display: flex;
-  flex-direction: column;
-}
-
-.ci-prompt-library .ant-table-wrapper {
-  flex: 1;
-}
-
-.ci-prompt-library .ant-table-cell-fix-right {
-  background: #ffffff;
-}
-
-.ci-prompt-library .ant-table-tbody > tr:hover > .ant-table-cell-fix-right,
-.ci-prompt-library .ci-selected-row > .ant-table-cell-fix-right {
-  background: #f7f8ff !important;
-}
-
-.ci-prompt-lab {
-  position: sticky;
-  top: 88px;
-  align-self: flex-start;
-}
-
 .ci-card-toolbar {
   grid-template-columns: minmax(200px, 1fr) auto auto;
   gap: 10px;
@@ -1989,10 +1939,6 @@ body {
 @media (max-width: 1180px) {
   .ci-dashboard-layout {
     grid-template-columns: 1fr;
-  }
-
-  .ci-prompt-lab {
-    position: static;
   }
 
   .ci-split-workspace .ci-workspace-card {
@@ -2315,3 +2261,180 @@ body {
   }
 }
 
+/* ==========================================================================
+   Hierarchy tree (模块层级复核 TreeView)
+   ========================================================================== */
+
+.ci-hierarchy-tree-container {
+  background: rgba(255, 255, 255, 0.96);
+  border: 1px solid var(--ci-line);
+  border-radius: 14px;
+  box-shadow: var(--ci-shadow-soft);
+  padding: 4px 0;
+}
+
+.ci-hierarchy-tree {
+  padding: 4px 8px;
+  background: transparent;
+}
+
+/* 让树节点占满整行并保持 flex 布局 */
+.ci-hierarchy-tree .ant-tree-treenode {
+  width: 100%;
+  padding: 2px 0;
+  align-items: center;
+}
+
+.ci-hierarchy-tree .ant-tree-node-content-wrapper {
+  flex: 1;
+  min-width: 0;
+  padding: 0 4px;
+}
+
+/* 树节点悬停背景 */
+.ci-hierarchy-tree .ant-tree-treenode:hover {
+  background: #f7f9fd;
+  border-radius: 8px;
+}
+
+/* 树节点拖拽放置指示 */
+.ci-hierarchy-tree .ant-tree-drop-indicator {
+  background: var(--ci-blue) !important;
+}
+
+/* ---------- 节点标题行 ---------- */
+
+.ci-tree-node-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 3px 6px 3px 2px;
+  flex-wrap: nowrap;
+  width: 100%;
+  min-width: 0;
+}
+
+/* 拖拽手柄 */
+.ci-tree-drag-handle {
+  flex-shrink: 0;
+  color: #bcc7d6;
+  font-size: 13px;
+  cursor: grab;
+  transition: color 0.2s;
+  padding: 2px;
+}
+
+.ci-tree-drag-handle:hover {
+  color: var(--ci-blue);
+}
+
+.ci-tree-drag-handle:active {
+  cursor: grabbing;
+}
+
+/* 类型标签 */
+.ci-tree-node-tag {
+  flex-shrink: 0;
+  margin: 0 !important;
+  font-size: 11px !important;
+  line-height: 20px !important;
+  padding-inline: 6px !important;
+}
+
+/* 名称输入 */
+.ci-tree-name-input {
+  flex: 0 1 240px;
+  min-width: 130px;
+}
+
+.ci-tree-name-input .ant-input {
+  height: 28px;
+  font-size: 13px;
+}
+
+/* 关键词 / 类路径 Select */
+.ci-tree-keyword-select,
+.ci-tree-classpath-select {
+  flex: 1 1 0;
+  min-width: 140px;
+  max-width: 340px;
+}
+
+.ci-tree-keyword-select .ant-select-selector,
+.ci-tree-classpath-select .ant-select-selector {
+  min-height: 28px !important;
+  font-size: 12px !important;
+}
+
+/* 操作按钮区 */
+.ci-tree-node-actions {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 0;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.ci-hierarchy-tree .ant-tree-treenode:hover .ci-tree-node-actions {
+  opacity: 1;
+}
+
+.ci-tree-node-actions .ant-btn-link {
+  padding: 2px 4px;
+  height: auto;
+  min-height: auto;
+  font-size: 13px;
+  color: #94a3b8;
+}
+
+.ci-tree-node-actions .ant-btn-link:hover {
+  color: var(--ci-blue);
+}
+
+.ci-tree-node-actions .ant-btn-dangerous.ant-btn-link:hover {
+  color: var(--ci-red);
+}
+
+/* ---------- 响应式 ---------- */
+
+@media (max-width: 992px) {
+  .ci-tree-node-title {
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+
+  .ci-tree-name-input {
+    flex: 1 1 180px;
+  }
+
+  .ci-tree-keyword-select,
+  .ci-tree-classpath-select {
+    flex: 1 1 100%;
+    max-width: none;
+  }
+}
+
+@media (max-width: 767px) {
+  .ci-hierarchy-tree-container {
+    border-radius: 10px;
+    padding: 2px 0;
+  }
+
+  .ci-hierarchy-tree {
+    padding: 2px 4px;
+  }
+
+  .ci-tree-node-title {
+    padding: 4px 4px 4px 0;
+  }
+
+  .ci-tree-name-input {
+    flex: 1 1 100%;
+  }
+
+  .ci-tree-node-actions {
+    opacity: 1;
+  }
+}

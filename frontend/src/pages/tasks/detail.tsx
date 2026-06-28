@@ -1,25 +1,32 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Alert, Button, Card, Col, Descriptions, Progress, Row, Space, Steps, Statistic, Tag, Typography, message } from 'antd';
+import React, { useCallback, useEffect, useState } from 'react';
+import { Alert, Button, Card, Col, Descriptions, Modal, Progress, Row, Space, Steps, Statistic, Tag, Timeline, Typography, message } from 'antd';
 import {
   ArrowLeftOutlined,
   CheckCircleOutlined,
   CloseCircleOutlined,
-  CodeOutlined,
   EditOutlined,
+  FileSearchOutlined,
   PlayCircleOutlined,
   ReloadOutlined,
+  SwapOutlined,
 } from '@ant-design/icons';
 import { useNavigate, useParams } from 'react-router-dom';
-import { getTask, retryTask, startTask, terminateTask } from '../../api/task';
+import { getTask, getTaskExecutionLog, getTaskLogSummary, retryTask, startTask, terminateTask } from '../../api/task';
 import { getSystem } from '../../api/system';
-import type { System, Task } from '../../types';
+import type { PipelineStageStat, System, Task, TaskLogSummary } from '../../types';
+
+/** 构造携带当前任务上下文（systemId + taskId）的复核页跳转链接 */
+const buildDraftsHref = (task: Task) => `/drafts?systemId=${task.systemId}&taskId=${task.id}`;
+
 
 const { Text, Title } = Typography;
 
 // 运行中的核心状态列表
-const runningStatuses = ['PENDING', 'PULLING_CODE', 'PARSING_CODE', 'SPLITTING_TASK', 'AI_ANALYZING', 'GENERATING_DOC', 'PUSHING'];
+// 包含 MODULE_HIERARCHY_REVIEW：处于人工调试断点时也要轮询状态，提交保存并继续后会跳到 GENERATING_DOC
+const runningStatuses = ['PENDING', 'PULLING_CODE', 'PARSING_CODE', 'SPLITTING_TASK', 'AI_ANALYZING', 'MODULE_HIERARCHY_REVIEW', 'GENERATING_DOC', 'PUSHING'];
 
 // 任务执行管道阶段步骤索引与展示元数据配置说明
+// 「模块层级复核」位于「AI 分析」与「生成文档」之间（step 5），是 MODULE_HIERARCHY_REVIEW 状态对应的可视化阶段
 const statusMeta: Record<string, { color: string; label: string; step: number }> = {
   DRAFT: { color: 'default', label: '草稿', step: -1 },
   PENDING: { color: 'blue', label: '排队中', step: 0 },
@@ -27,12 +34,14 @@ const statusMeta: Record<string, { color: string; label: string; step: number }>
   PARSING_CODE: { color: 'cyan', label: '解析代码', step: 2 },
   SPLITTING_TASK: { color: 'purple', label: '任务切片', step: 3 },
   AI_ANALYZING: { color: 'orange', label: 'AI 分析中', step: 4 },
-  GENERATING_DOC: { color: 'gold', label: '生成文档', step: 5 },
-  PENDING_REVIEW: { color: 'magenta', label: '待复核', step: 6 },
-  REVIEWING: { color: 'geekblue', label: '复核中', step: 6 },
-  CONFIRMED: { color: 'green', label: '已确认', step: 6 },
-  PUSHING: { color: 'purple', label: '推送中', step: 6 },
-  PUSHED: { color: 'green', label: '已推送', step: 6 },
+  MODULE_HIERARCHY: { color: 'gold', label: '模块层级提炼', step: 4 },
+  MODULE_HIERARCHY_REVIEW: { color: 'geekblue', label: '模块层级复核', step: 5 },
+  GENERATING_DOC: { color: 'gold', label: '生成文档', step: 6 },
+  PENDING_REVIEW: { color: 'magenta', label: '待复核', step: 7 },
+  REVIEWING: { color: 'geekblue', label: '复核中', step: 7 },
+  CONFIRMED: { color: 'green', label: '已确认', step: 7 },
+  PUSHING: { color: 'purple', label: '推送中', step: 7 },
+  PUSHED: { color: 'green', label: '已推送', step: 7 },
   FAILED: { color: 'red', label: '失败', step: -1 },
   CANCELLED: { color: 'default', label: '已取消', step: -1 },
 };
@@ -55,7 +64,72 @@ const TaskDetail: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
 
-  // 获取任务详情及关联的系统基本元数据
+  // 卡片执行日志内容
+  const [cardLogContent, setCardLogContent] = useState('');
+
+  const loadCardLog = useCallback(async () => {
+    if (!taskId) return;
+    try {
+      const content = await getTaskExecutionLog(taskId);
+      setCardLogContent(content || '');
+    } catch {
+      setCardLogContent('');
+    }
+  }, [taskId]);
+
+  // 任务加载时 + 运行中轮询时刷新卡片日志
+  useEffect(() => {
+    loadCardLog();
+  }, [loadCardLog]);
+
+  useEffect(() => {
+    if (!task || !runningStatuses.includes(task.status)) return;
+    const timer = window.setInterval(loadCardLog, 2500);
+    return () => window.clearInterval(timer);
+  }, [loadCardLog, task]);
+
+  // 结构化日志摘要：阶段耗时、文件/切片计数、AI 成功/失败数、Mock 标记、当前进度
+  const [summary, setSummary] = useState<TaskLogSummary | null>(null);
+
+  const loadSummary = useCallback(async () => {
+    if (!taskId) return;
+    try {
+      const data = await getTaskLogSummary(taskId);
+      setSummary(data);
+    } catch {
+      // 静默失败：保留上一次成功拉到的摘要，避免运行中一闪而过
+    }
+  }, [taskId]);
+
+  // 与 raw 卡片日志同步轮询，避免额外定时器漂移
+  useEffect(() => {
+    loadSummary();
+  }, [loadSummary]);
+
+  useEffect(() => {
+    if (!task || !runningStatuses.includes(task.status)) return;
+    const timer = window.setInterval(loadSummary, 2500);
+    return () => window.clearInterval(timer);
+  }, [loadSummary, task]);
+
+  // 执行日志弹窗
+  const [logModalOpen, setLogModalOpen] = useState(false);
+  const [execLogContent, setExecLogContent] = useState('');
+  const [logLoading, setLogLoading] = useState(false);
+
+  const openExecLog = async () => {
+    if (!taskId) return;
+    setLogModalOpen(true);
+    setLogLoading(true);
+    try {
+      const content = await getTaskExecutionLog(taskId);
+      setExecLogContent(content || '(暂无日志)');
+    } catch {
+      setExecLogContent('(加载失败)');
+    } finally {
+      setLogLoading(false);
+    }
+  };
   const fetchTaskDetails = useCallback(
     async (showLoading = true) => {
       if (!taskId) {
@@ -112,32 +186,59 @@ const TaskDetail: React.FC = () => {
 
   const meta = task ? statusMeta[task.status] ?? { color: 'default', label: task.status, step: -1 } : null;
 
-  /**
-   * 依据当前任务状态及基本属性，动态拼接控制台输出的模拟状态日志
-   */
-  const logLines = useMemo(() => {
-    if (!task) {
-      return [];
-    }
-    const base = [
-      `[task:${task.id}] type=${task.type} status=${task.status}`,
-      `[system:${task.systemId}] ${system?.name ?? '正在加载系统元数据'}`,
-      `[progress] 已完成 ${task.progress}%`,
-    ];
-    if (task.status === 'DRAFT') {
-      return [...base, '[next] 启动任务后将进入执行队列'];
-    }
-    if (runningStatuses.includes(task.status)) {
-      return [...base, '[worker] 执行管道运行中，进度正在刷新'];
-    }
+/** 把单个阶段统计转成 antd Timeline 的 item 配置 */
+const timelineItem = (s: PipelineStageStat) => {
+  const color =
+    s.status === 'done' ? 'green'
+    : s.status === 'running' ? 'blue'
+    : s.status === 'error' ? 'red'
+    : 'gray';
+  const suffix =
+    s.status === 'running' ? ' · 进行中'
+    : s.status === 'pending' ? ' · 待开始'
+    : s.status === 'error' ? ' · 异常'
+    : s.status === 'skipped' ? ' · 已跳过'
+    : '';
+  const duration = s.durationMs && s.durationMs > 0
+    ? `耗时 ${(s.durationMs / 1000).toFixed(1)} 秒`
+    : '—';
+  return {
+    color,
+    children: (
+      <Space direction="vertical" size={0}>
+        <Text strong>{s.label}{suffix}</Text>
+        <Text type="secondary" style={{ fontSize: 12 }}>{duration}</Text>
+      </Space>
+    ),
+  };
+};
+
+  // 友好提示：失败时不暴露具体异常，仅指向"查看完整日志"
+  const friendlyHint = (() => {
+    if (!task) return '';
     if (task.status === 'FAILED') {
-      return [...base, `[error] ${task.errorReason || '未知失败'}`];
+      return '任务失败，请查看完整日志';
     }
-    if (['PENDING_REVIEW', 'REVIEWING', 'CONFIRMED', 'PUSHED'].includes(task.status)) {
-      return [...base, '[result] Markdown 草稿已生成，可进入复核或版本推送'];
+    if (['PUSHED', 'CANCELLED', 'ARCHIVED'].includes(task.status)) {
+      const sec = task.durationMs ? (task.durationMs / 1000).toFixed(1) : '0.0';
+      return `任务已结束 · 累计耗时 ${sec} 秒`;
     }
-    return base;
-  }, [system?.name, task]);
+    if (['PENDING_REVIEW', 'REVIEWING', 'CONFIRMED'].includes(task.status)) {
+      const sec = task.durationMs ? (task.durationMs / 1000).toFixed(1) : '0.0';
+      return `等待人工复核 · 累计耗时 ${sec} 秒`;
+    }
+    const done = summary?.pipeline?.filter((s) => s.status === 'done' || s.status === 'skipped').length ?? 0;
+    const total = summary?.pipeline?.length ?? 8;
+    const sec = task.durationMs ? (task.durationMs / 1000).toFixed(1) : '0.0';
+    return `正在：${meta?.label ?? task.status} · 已完成 ${done}/${total} 阶段 · 累计 ${sec} 秒`;
+  })();
+
+  // 当前进行中的阶段中文名（用于 Timeline 中高亮提示）
+  const currentStageLabel = summary?.pipeline?.find((s) => s.status === 'running')?.label ?? '';
+
+  // Mock 模式 / 真实模型文案
+  const aiModeLabel = summary?.aiMock ? 'Mock 模式' : '真实模型';
+  const aiModeColor = summary?.aiMock ? 'gold' : 'geekblue';
 
   if (loading) {
     return <Card loading style={{ minHeight: 420 }} />;
@@ -204,10 +305,13 @@ const TaskDetail: React.FC = () => {
               </Button>
             )}
             {['PENDING_REVIEW', 'REVIEWING', 'CONFIRMED'].includes(task.status) && (
-              <Button type="primary" icon={<EditOutlined />} onClick={() => navigate('/drafts')}>
+              <Button type="primary" icon={<EditOutlined />} onClick={() => navigate(buildDraftsHref(task))}>
                 复核草稿
               </Button>
             )}
+            <Button icon={<FileSearchOutlined />} onClick={() => navigate(`/logs?taskId=${task.id}`)}>
+              查看日志
+            </Button>
           </Space>
         </div>
       </Card>
@@ -224,11 +328,28 @@ const TaskDetail: React.FC = () => {
             { title: '静态解析' },
             { title: '切片' },
             { title: 'AI 分析' },
+            { title: '模块层级复核' },
             { title: '生成文档' },
             { title: '复核' },
           ]}
         />
       </Card>
+
+      {/* 模块层级复核提示：统一跳转到「模块层级复核」专用页面处理 */}
+      {task.status === 'MODULE_HIERARCHY_REVIEW' && (
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message="模块层级需要人工复核"
+          description="AI 已完成模块层级提炼，需要您复核并确认模块与功能结构。请点击下方按钮前往「模块层级复核」页面集中处理。"
+          action={
+            <Button type="primary" icon={<SwapOutlined />} onClick={() => navigate('/tasks/hierarchy-review')}>
+              前往模块层级复核
+            </Button>
+          }
+        />
+      )}
 
       {/* 草稿就绪提示横幅 */}
       {['PENDING_REVIEW', 'REVIEWING', 'CONFIRMED'].includes(task.status) && (
@@ -238,7 +359,7 @@ const TaskDetail: React.FC = () => {
           message="知识草稿已就绪"
           description="生成的 Markdown 已进入平台草稿区，仍需人工复核后才能成为确认的知识版本。"
           action={
-            <Button type="primary" icon={<CheckCircleOutlined />} onClick={() => navigate('/drafts')}>
+            <Button type="primary" icon={<CheckCircleOutlined />} onClick={() => navigate(buildDraftsHref(task))}>
               打开复核
             </Button>
           }
@@ -246,7 +367,19 @@ const TaskDetail: React.FC = () => {
       )}
 
       {/* 任务失败错误提示框 */}
-      {task.errorReason && <Alert type="error" showIcon message="执行错误" description={task.errorReason} />}
+      {task.errorReason && (
+        <Alert
+          type="error"
+          showIcon
+          message="执行错误"
+          description={task.errorReason}
+          action={
+            <Button size="small" icon={<FileSearchOutlined />} onClick={() => navigate(`/logs?taskId=${task.id}`)}>
+              查看日志
+            </Button>
+          }
+        />
+      )}
 
       <Row gutter={[16, 16]}>
         {/* 左侧：任务静态指标表格 */}
@@ -271,10 +404,107 @@ const TaskDetail: React.FC = () => {
           </Card>
         </Col>
 
-        {/* 右侧：模拟终端控制台日志输出 */}
+        {/* 右侧：执行日志卡片（结构化概览；无异常堆栈） */}
         <Col xs={24} xl={12}>
-          <Card title="执行日志" extra={<CodeOutlined />} style={{ height: '100%' }}>
-            <pre className="ci-terminal">{logLines.join('\n')}</pre>
+          <Card
+            title="执行日志"
+            extra={
+              <Space size={4} wrap>
+                <Tag color={aiModeColor}>{aiModeLabel}</Tag>
+                <Tag color="purple">{summary?.modelName || task.modelName || '未指定模型'}</Tag>
+                <Button size="small" icon={<FileSearchOutlined />} onClick={openExecLog}>
+                  查看完整日志
+                </Button>
+              </Space>
+            }
+            style={{ height: '100%' }}
+            styles={{ body: { padding: '12px 16px' } }}
+          >
+            {/* 1. 状态条 + 友好提示 */}
+            <Space style={{ width: '100%', justifyContent: 'space-between', marginBottom: 8 }} wrap>
+              <Space size={6}>
+                <Tag color={meta.color}>{meta.label}</Tag>
+                {currentStageLabel && <Text type="secondary" style={{ fontSize: 12 }}>当前：{currentStageLabel}</Text>}
+              </Space>
+              <Text type="secondary" style={{ fontSize: 12 }}>{friendlyHint}</Text>
+            </Space>
+            <Progress
+              percent={summary?.progress ?? task.progress}
+              size="small"
+              status={task.status === 'FAILED' ? 'exception' : 'active'}
+            />
+
+            {/* 2. 4 列 KPI：扫描文件 / 代码切片 / AI 成功 / AI 失败 */}
+            <div className="ci-kpi-grid" style={{ marginTop: 12 }}>
+              <Card size="small" className="ci-stat-card">
+                <Statistic
+                  title="扫描文件"
+                  value={
+                    summary
+                      ? `${Math.max(summary.current.chunkIndex, 0)} / ${summary.counters.totalFiles || summary.current.totalFiles}`
+                      : 0
+                  }
+                  valueStyle={{ fontSize: 20 }}
+                />
+              </Card>
+              <Card size="small" className="ci-stat-card">
+                <Statistic
+                  title="代码切片（已处理/总数）"
+                  value={
+                    summary
+                      ? `${(summary.counters.chunksAnalyzed + summary.counters.chunksFailed)} / ${summary.counters.totalChunks}`
+                      : '0 / 0'
+                  }
+                  valueStyle={{ fontSize: 20 }}
+                />
+              </Card>
+              <Card size="small" className="ci-stat-card">
+                <Statistic
+                  title="AI 成功"
+                  value={summary?.aiCalls.success ?? 0}
+                  valueStyle={{ color: '#16a34a', fontSize: 20 }}
+                  prefix={<CheckCircleOutlined />}
+                />
+              </Card>
+              <Card size="small" className="ci-stat-card">
+                <Statistic
+                  title="AI 失败"
+                  value={summary?.aiCalls.failed ?? 0}
+                  valueStyle={{
+                    color: (summary?.aiCalls.failed ?? 0) > 0 ? '#dc2626' : undefined,
+                    fontSize: 20,
+                  }}
+                  prefix={<CloseCircleOutlined />}
+                />
+              </Card>
+            </div>
+
+            {/* 3. 失败/完成友好提示（仅一行，不暴露堆栈） */}
+            {task.status === 'FAILED' && (
+              <Alert
+                type="warning"
+                showIcon
+                style={{ marginTop: 12 }}
+                message="任务失败，请查看完整日志"
+                description={summary?.lastError ? `原因：${summary.lastError}` : undefined}
+                action={
+                  <Button size="small" icon={<FileSearchOutlined />} onClick={openExecLog}>
+                    查看完整日志
+                  </Button>
+                }
+              />
+            )}
+            {['PUSHED', 'CONFIRMED'].includes(task.status) && (
+              <Alert type="success" showIcon style={{ marginTop: 12 }} message="任务已完成" />
+            )}
+
+            {/* 4. 阶段 Timeline */}
+            {summary?.pipeline && summary.pipeline.length > 0 && (
+              <Timeline
+                style={{ marginTop: 12 }}
+                items={summary.pipeline.map((s) => timelineItem(s))}
+              />
+            )}
           </Card>
         </Col>
       </Row>
@@ -296,6 +526,70 @@ const TaskDetail: React.FC = () => {
           </Card>
         </div>
       )}
+
+      <Modal
+        title={`执行日志 — 任务 #${task.id}`}
+        open={logModalOpen}
+        onCancel={() => setLogModalOpen(false)}
+        width={960}
+        footer={<Button onClick={() => setLogModalOpen(false)}>关闭</Button>}
+        destroyOnClose
+      >
+        {/* 顶部粘性信息条：Mock / 模型 / 总耗时 / 状态 / 日志 URI */}
+        <div
+          style={{
+            position: 'sticky',
+            top: 0,
+            background: '#fff',
+            zIndex: 1,
+            padding: '8px 0',
+            borderBottom: '1px solid #f0f0f0',
+            marginBottom: 8,
+          }}
+        >
+          <Space wrap>
+            <Tag color={aiModeColor}>{aiModeLabel}</Tag>
+            <Tag color="purple">模型：{summary?.modelName || task.modelName || '未指定'}</Tag>
+            <Tag color="blue">
+              总耗时 {(((summary?.durationMs ?? task.durationMs) || 0) / 1000).toFixed(1)} 秒
+            </Tag>
+            <Tag color={meta.color}>{meta.label}</Tag>
+            <Text type="secondary" copyable={{ text: task.logUri || `local://storage/tasks/${task.id}.log` }}>
+              日志 URI：{task.logUri || `local://storage/tasks/${task.id}.log`}
+            </Text>
+            <Button
+              size="small"
+              icon={<ReloadOutlined />}
+              onClick={openExecLog}
+              disabled={logLoading}
+            >
+              刷新
+            </Button>
+          </Space>
+        </div>
+
+        {logLoading ? (
+          <Card loading style={{ minHeight: 200 }} />
+        ) : (
+          <pre
+            className="ci-terminal"
+            style={{
+              fontSize: 12,
+              maxHeight: 480,
+              overflow: 'auto',
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-all',
+              margin: 0,
+              background: '#1e1e1e',
+              color: '#d4d4d4',
+              padding: 12,
+              borderRadius: 4,
+            }}
+          >
+            {execLogContent || cardLogContent || '(暂无日志)'}
+          </pre>
+        )}
+      </Modal>
     </div>
   );
 };

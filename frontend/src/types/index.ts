@@ -6,6 +6,10 @@ export interface System {
   status: number; // 0-停用, 1-启用
   createdAt: string;
   updatedAt: string;
+  // 以下字段由 /systems 聚合接口返回，list 才有
+  repositoryCount?: number;
+  knowledgeVersionCount?: number;
+  lastDecompileAt?: string;
 }
 
 export interface Repository {
@@ -20,6 +24,8 @@ export interface Repository {
   excludeFileTypes?: string;
   lastCommitId?: string;
   lastDecompileAt?: string;
+  /** 仓库级入口扫描配置，新建任务时默认带出，任务可单独覆盖 */
+  entryScanConfig?: EntryScanConfig;
   createdAt: string;
   updatedAt: string;
 }
@@ -31,6 +37,8 @@ export interface Prompt {
   version: number;
   status: number; // 0-禁用, 1-启用
   isDefault: number; // 0-否, 1-是
+  /** 提示词用途：MODULARIZE-模块提取 / DOCUMENT_GENERATION-文档生成 */
+  promptType?: 'MODULARIZE' | 'DOCUMENT_GENERATION' | string;
   createdAt: string;
   updatedAt: string;
 }
@@ -39,7 +47,12 @@ export interface Task {
   id: number;
   systemId: number;
   repositoryId: number;
+  /** 已废弃，请使用 modularizePromptVersion / documentPromptVersion */
   promptVersion?: number;
+  /** 模块提取提示词版本（对应 ci_prompt.prompt_type=MODULARIZE） */
+  modularizePromptVersion?: number;
+  /** 文档生成提示词版本（对应 ci_prompt.prompt_type=DOCUMENT_GENERATION） */
+  documentPromptVersion?: number;
   modelName?: string;
   status: string;
   type: 'INITIAL' | 'INCREMENTAL';
@@ -49,8 +62,124 @@ export interface Task {
   durationMs: number;
   startedAt?: string;
   endedAt?: string;
+  entryScanConfig?: EntryScanConfig;
+  /** 是否启用模块层级调试（人工复核断点）；undefined 时按 TRUE 处理 */
+  requireHierarchyReview?: boolean;
   createdAt: string;
   updatedAt: string;
+}
+
+/**
+ * 任务流水线中单个阶段的统计摘要（来自 GET /tasks/{id}/log/summary）。
+ * 前端"执行日志"卡片渲染 Timeline 时使用。
+ */
+export interface PipelineStageStat {
+  key: string;
+  label: string;
+  status: 'pending' | 'running' | 'done' | 'skipped' | 'error';
+  durationMs: number;
+  startedAt?: string;
+  endedAt?: string;
+}
+
+/**
+ * 任务执行日志的结构化摘要（来自 GET /tasks/{id}/log/summary）。
+ * 同时驱动反编译任务页的"执行日志"卡片与"查看完整日志"模态框顶栏。
+ */
+export interface TaskLogSummary {
+  taskId: number;
+  status: string;
+  progress: number;
+  durationMs: number;
+  startedAt?: string;
+  endedAt?: string;
+  modelName?: string;
+  /** 是否启用 AI 本地 Mock（来自后端 code-insight.ai.mock） */
+  aiMock: boolean;
+  pipeline: PipelineStageStat[];
+  counters: {
+    totalFiles: number;
+    totalChunks: number;
+    chunksByType: { FILE: number; CLASS: number; METHOD: number; DIFF: number };
+    chunksAnalyzed: number;
+    chunksFailed: number;
+    chunksPending: number;
+  };
+  aiCalls: { total: number; success: number; failed: number };
+  /** 当前正在处理的进度索引；-1 表示未知 */
+  current: {
+    fileIndex: number;
+    totalFiles: number;
+    chunkIndex: number;
+    totalChunks: number;
+    moduleIndex: number;
+    moduleTotal: number;
+  };
+  /** 失败原因的单行摘要（无堆栈），失败时用于"执行日志"卡片友好提示 */
+  lastError?: string;
+}
+
+/**
+ * 任务级入口扫描配置（仅在该任务创建时生效，不影响仓库）
+ * include 规则"或"逻辑：任一列表非空即视为启用配置驱动，全部为空走默认 Controller/JOB/MQ 兜底
+ * exclude 规则"或"逻辑：任一命中即从候选中排除
+ */
+export interface EntryScanConfig {
+  /** 入口识别 - 注解（类的 annotations 含任一即匹配） */
+  includeAnnotations?: string[];
+  /** 入口识别 - 类路径 Ant 模式（FQ 与任一模式匹配即识别） */
+  includeClasspaths?: string[];
+  /** 入口识别 - 继承/实现（extendsClass 或 implementsList 含任一即识别） */
+  includeExtends?: string[];
+  /** 排除 - 类路径 Ant 模式 */
+  excludeClasspaths?: string[];
+  /** 排除 - 包路径（FQ 点分隔前缀匹配） */
+  excludePackages?: string[];
+  /** 排除 - 注解 */
+  excludeAnnotations?: string[];
+}
+
+/** 模块层级（人工复核断点编辑对象），与后端 ModuleHierarchy DTO 对应 */
+export interface ModuleHierarchy {
+  taskId?: number;
+  systemId?: number;
+  modules?: Record<string, ModuleNode>;
+}
+
+export interface ModuleNode {
+  id: string;
+  moduleName: string;
+  keywords?: string[];
+  subModules?: Record<string, SubModuleNode>;
+}
+
+export interface SubModuleNode {
+  id: string;
+  subModuleName: string;
+  keywords?: string[];
+  functions?: Record<string, FunctionNode>;
+}
+
+export interface FunctionNode {
+  id: string;
+  functionName: string;
+  /** 入口类全限定名集合（仅在内存维护，不会写入提示词） */
+  classPaths?: string[];
+}
+
+export interface PushTask {
+  id: number;
+  versionId: number;
+  pushMethod: string;
+  status: string;
+  retryCount: number;
+  maxRetries: number;
+  targetInfo: string;
+  errorMessage?: string;
+  enqueuedAt: string;
+  startedAt?: string;
+  completedAt?: string;
+  createdAt: string;
 }
 
 export interface KnowledgeDraft {
@@ -108,18 +237,69 @@ export interface ApiResponse<T> {
   data: T;
 }
 
+export interface LoginRequest {
+  username: string;
+  password: string;
+  token: string;
+}
+
+export interface LoginResponse {
+  token: string;
+  username: string;
+  displayName: string;
+  role: string;
+  expiresInSeconds: number;
+}
+
 export interface AiModel {
   id: number;
   name: string;
   identifier: string;
   provider: string;
   apiKey?: string;
+  hasApiKey?: boolean;
   baseUrl?: string;
   isDefault: 'true' | 'false';
   capabilities?: string;
   description?: string;
   sortOrder: number;
+  status?: number; // 0-停用 1-启用（未返回时按启用处理）
   createdAt?: string;
   updatedAt?: string;
+}
+
+export interface AiModelPreset {
+  id: number;
+  name: string;
+  identifier: string;
+  provider: string;
+  baseUrl?: string;
+  capabilities?: string;
+  description?: string;
+  sortOrder: number;
+  status?: number;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface AiModelMetricSummary {
+  modelName: string;
+  totalCalls: number;
+  totalTokens: number;
+  totalCost: number;
+}
+
+export interface AiModelMetricTrendPoint {
+  date: string;
+  calls: number;
+  tokens: number;
+  cost: number;
+}
+
+export interface AiModelTestResult {
+  success: boolean;
+  durationMs: number;
+  message: string;
+  responseSummary?: string;
 }
 

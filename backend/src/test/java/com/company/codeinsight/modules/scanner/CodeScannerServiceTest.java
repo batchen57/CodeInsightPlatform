@@ -39,9 +39,12 @@ public class CodeScannerServiceTest {
         repositoryService.save(repo);
 
         // 执行扫描
-        File dir = codeScannerService.pullAndScan(999L, repo.getId());
+        com.company.codeinsight.modules.scanner.model.ScanResult result = codeScannerService.pullAndScan(999L, repo.getId(), null);
+        File dir = result.getProjectDir();
         Assertions.assertNotNull(dir);
         Assertions.assertTrue(dir.exists());
+        Assertions.assertFalse(result.getIncrementalContext().isIncremental(),
+                "传 null 走 INITIAL 路径，增量上下文应为全量");
 
         // 验证快照是否写入数据库
         List<CodeFileSnapshot> snapshots = codeScannerService.getSnapshotsByTaskId(999L);

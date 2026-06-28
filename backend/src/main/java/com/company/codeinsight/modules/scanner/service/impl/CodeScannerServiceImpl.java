@@ -6,11 +6,22 @@ import com.company.codeinsight.modules.repository.entity.CodeRepository;
 import com.company.codeinsight.modules.repository.mapper.CodeRepositoryMapper;
 import com.company.codeinsight.modules.scanner.entity.CodeFileSnapshot;
 import com.company.codeinsight.modules.scanner.mapper.CodeFileSnapshotMapper;
+import com.company.codeinsight.modules.scanner.model.IncrementalContext;
+import com.company.codeinsight.modules.scanner.model.ScanResult;
 import com.company.codeinsight.modules.scanner.service.CodeScannerService;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.ibatis.session.ExecutorType;
+import org.apache.ibatis.session.SqlSession;
+import org.apache.ibatis.session.SqlSessionFactory;
 import org.eclipse.jgit.api.Git;
 import org.eclipse.jgit.api.CloneCommand;
+import org.eclipse.jgit.diff.DiffEntry;
+import org.eclipse.jgit.diff.DiffFormatter;
+import org.eclipse.jgit.lib.ObjectId;
+import org.eclipse.jgit.lib.ObjectReader;
+import org.eclipse.jgit.treewalk.CanonicalTreeParser;
 import org.eclipse.jgit.transport.UsernamePasswordCredentialsProvider;
+import org.eclipse.jgit.util.io.NullOutputStream;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -18,15 +29,14 @@ import org.springframework.util.DigestUtils;
 import org.springframework.util.StringUtils;
 
 import java.io.File;
-import java.io.FileInputStream;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * 代码拉取与扫描服务实现类
@@ -42,6 +52,12 @@ public class CodeScannerServiceImpl implements CodeScannerService {
     @Autowired
     private CodeFileSnapshotMapper snapshotMapper;
 
+    @Autowired
+    private SqlSessionFactory sqlSessionFactory;
+
+    /** 快照批量写入大小，减少 DB 往返次数 */
+    private static final int SNAPSHOT_BATCH_SIZE = 500;
+
     // 对象存储的本地物理暂存根路径
     @Value("${code-insight.storage.local-path:./storage}")
     private String localStoragePath;
@@ -54,10 +70,11 @@ public class CodeScannerServiceImpl implements CodeScannerService {
      *
      * @param taskId       当前分析任务 ID
      * @param repositoryId 关联的代码库配置 ID
-     * @return 存放扫描代码的本地目标临时文件夹对象
+     * @param taskType     任务类型：INITIAL-全量（默认），INCREMENTAL-基于 git diff 的增量
+     * @return {@link ScanResult} 含本地项目目录与本次扫描的增量上下文
      */
     @Override
-    public File pullAndScan(Long taskId, Long repositoryId) {
+    public ScanResult pullAndScan(Long taskId, Long repositoryId, String taskType) {
         CodeRepository repo = repositoryMapper.selectById(repositoryId);
         if (repo == null) {
             throw new BusinessException("未找到关联的代码库配置");
@@ -70,6 +87,12 @@ public class CodeScannerServiceImpl implements CodeScannerService {
 
         String commitId = "MOCK_COMMIT_" + System.currentTimeMillis();
         boolean gitPullSuccess = false;
+        // 仅在走远程 Git 成功克隆分支里持有句柄，本地目录与 Mock 降级分支保持为 null
+        Git gitHandle = null;
+        // 增量/全量决策的输出：声明在 if 外以便在末尾组装 IncrementalContext 时引用
+        boolean performFullScan = true;
+        Set<String> changedPaths = null;  // ADD / MODIFY / COPY / RENAME-新路径
+        Set<String> deletedPaths = null;  // DELETE / RENAME-旧路径
 
         // 检查配置的 GitUrl 是否为本地已存在的绝对或相对路径
         File localSourceDir = new File(repo.getGitUrl());
@@ -97,11 +120,12 @@ public class CodeScannerServiceImpl implements CodeScannerService {
                     cloneCommand.setCredentialsProvider(new UsernamePasswordCredentialsProvider(repo.getUsername(), repo.getPassword()));
                 }
 
-                try (Git git = cloneCommand.call()) {
-                    commitId = git.getRepository().resolve("HEAD").getName();
-                    gitPullSuccess = true;
-                    log.info("Git 克隆成功, Commit ID: {}", commitId);
-                }
+                // 不再使用 try-with-resources：增量分支需要在同一句柄上执行 git diff，
+                // 算完 DiffEntry 后再统一关闭
+                gitHandle = cloneCommand.call();
+                commitId = gitHandle.getRepository().resolve("HEAD").getName();
+                gitPullSuccess = true;
+                log.info("Git 克隆成功, Commit ID: {}", commitId);
             } catch (Exception e) {
                 log.warn("JGit 克隆仓库失败 ({}), 启动本地 Mock 代码生成以便离线跑通闭环", e.getMessage());
                 try {
@@ -116,22 +140,190 @@ public class CodeScannerServiceImpl implements CodeScannerService {
         }
 
         if (gitPullSuccess) {
-            // 更新 Repository 的最近一次拉取元数据
+            // === 1. 计算本次扫描的文件范围（增量或全量） ===
+            boolean isIncremental = "INCREMENTAL".equalsIgnoreCase(taskType);
+            boolean hasBaseline = StringUtils.hasText(repo.getLastCommitId());
+
+            if (isIncremental && gitHandle != null && hasBaseline) {
+                try {
+                    DiffOutcome diff = computeIncrementalDiff(gitHandle, repo.getLastCommitId(), "HEAD");
+                    changedPaths = diff.changed;
+                    deletedPaths = diff.deleted;
+                    log.info("增量扫描 — 变更 {} 个文件，删除 {} 个文件（基线 {} → HEAD {}）",
+                            changedPaths.size(), deletedPaths.size(), repo.getLastCommitId(), commitId);
+                } catch (Exception diffEx) {
+                    // 基线 commit 在新 history 中不可解析（force-push / rebase），
+                    // 降级为全量扫描，不让流水线因增量分支异常而中断
+                    log.warn("增量 diff 识别失败（{}），降级为全量扫描", diffEx.getMessage());
+                    changedPaths = null;
+                    deletedPaths = null;
+                }
+            } else if (isIncremental && !hasBaseline) {
+                log.warn("增量任务无基线 commitId (repositoryId={})，降级为全量扫描", repositoryId);
+            } else if (isIncremental && gitHandle == null) {
+                log.warn("增量任务未持有 Git 句柄（本地路径或 Mock 降级），降级为全量扫描");
+            }
+
+            performFullScan = !isIncremental || changedPaths == null;
+
+            // === 2. 清理/重建 snapshot 索引 ===
+            if (performFullScan) {
+                // 全量：清空当前任务全部旧 snapshot
+                snapshotMapper.delete(new LambdaQueryWrapper<CodeFileSnapshot>().eq(CodeFileSnapshot::getTaskId, taskId));
+            } else {
+                // 增量：仅清掉「本次需要重写」+「本次被删除」的文件
+                if (!changedPaths.isEmpty()) {
+                    snapshotMapper.delete(new LambdaQueryWrapper<CodeFileSnapshot>()
+                            .eq(CodeFileSnapshot::getTaskId, taskId)
+                            .in(CodeFileSnapshot::getFilePath, changedPaths));
+                }
+                if (!deletedPaths.isEmpty()) {
+                    snapshotMapper.delete(new LambdaQueryWrapper<CodeFileSnapshot>()
+                            .eq(CodeFileSnapshot::getTaskId, taskId)
+                            .in(CodeFileSnapshot::getFilePath, deletedPaths));
+                }
+            }
+
+            // === 3. 递归扫描目录，生成新 snapshot（批量缓冲写入） ===
+            List<CodeFileSnapshot> batchBuffer = new ArrayList<>();
+            int[] totalInserted = {0};
+            if (performFullScan) {
+                scanDirectory(targetDir, targetDir, repo, taskId, batchBuffer, null, totalInserted);
+            } else {
+                scanDirectory(targetDir, targetDir, repo, taskId, batchBuffer, changedPaths, totalInserted);
+            }
+            // 刷出缓冲区剩余快照
+            if (!batchBuffer.isEmpty()) {
+                totalInserted[0] += flushSnapshotBatch(batchBuffer);
+            }
+
+            // === 4. 更新 Repository 的最近一次拉取元数据（无论全量还是增量都要刷新） ===
             repo.setLastCommitId(commitId);
             repo.setLastDecompileAt(LocalDateTime.now());
             repositoryMapper.updateById(repo);
 
-            // 清理当前任务上一次生成的旧 snapshot 快照索引记录
-            snapshotMapper.delete(new LambdaQueryWrapper<CodeFileSnapshot>().eq(CodeFileSnapshot::getTaskId, taskId));
-
-            // 开始深度递归扫描目录，收集符合条件的源文件
-            List<CodeFileSnapshot> snapshots = new ArrayList<>();
-            scanDirectory(targetDir, targetDir, repo, taskId, snapshots);
-
-            log.info("目录扫描完成，共生成快照记录数: {}", snapshots.size());
+            if (performFullScan) {
+                log.info("全量扫描完成，共生成快照记录数: {}", totalInserted[0]);
+            } else {
+                log.info("增量扫描完成，更新快照 {} 个（已删 {} 个），其余文件未变动", totalInserted[0], deletedPaths.size());
+            }
         }
 
-        return targetDir;
+        // Git 句柄在所有 diff 算完之后再关闭（不论是否走增量）
+        if (gitHandle != null) {
+            try {
+                gitHandle.close();
+            } catch (Exception closeEx) {
+                log.warn("关闭 Git 句柄失败: {}", closeEx.getMessage());
+            }
+        }
+
+        // 组装给下游的增量上下文；performFullScan 走 fullScan()，否则把 changed/deleted 透传
+        IncrementalContext ctx = performFullScan
+                ? IncrementalContext.fullScan()
+                : IncrementalContext.incremental(changedPaths, deletedPaths);
+        return new ScanResult(targetDir, ctx);
+    }
+
+    /**
+     * 计算 {@code oldRef} 与 {@code newRef} 之间的文件级 diff。
+     * <p>
+     * RENAME 拆解为「旧路径进 deleted + 新路径进 changed」处理；COPY 与 MODIFY 一并视为 changed。
+     * 任意 ref 在当前 history 中无法解析时抛异常，由调用方决定降级策略。
+     * <p>
+     * 使用 {@link DiffFormatter} 而非 {@link org.eclipse.jgit.api.DiffCommand}：
+     * DiffCommand 在 6.8 尚未暴露 rename detection API，DiffFormatter.setDetectRenames(true)
+     * 可以让 ADD/DELETE 在文本相似度高于阈值时被合并为 RENAME。
+     */
+    private DiffOutcome computeIncrementalDiff(Git git, String oldRef, String newRef) throws Exception {
+        ObjectId oldTreeId = git.getRepository().resolve(oldRef + "^{tree}");
+        ObjectId newTreeId = git.getRepository().resolve(newRef + "^{tree}");
+        if (oldTreeId == null || newTreeId == null) {
+            throw new IllegalStateException("无法解析 ref: old=" + oldRef + " new=" + newRef);
+        }
+
+        try (ObjectReader reader = git.getRepository().newObjectReader();
+             // NullOutputStream 丢弃 patch 文本，我们只需要 DiffEntry 列表
+             DiffFormatter formatter = new DiffFormatter(NullOutputStream.INSTANCE)) {
+            CanonicalTreeParser oldIter = new CanonicalTreeParser();
+            CanonicalTreeParser newIter = new CanonicalTreeParser();
+            oldIter.reset(reader, oldTreeId);
+            newIter.reset(reader, newTreeId);
+
+            formatter.setRepository(git.getRepository());
+            // 开启 JGit 内置 rename detection：相似度高于 RenameDetector 默认阈值（50%）即合并为 RENAME
+            formatter.setDetectRenames(true);
+            // scan 会立即执行 file-level diff 并把 RENAME 折叠进结果
+            List<DiffEntry> entries = formatter.scan(oldIter, newIter);
+
+            Set<String> changed = new HashSet<>();
+            Set<String> deleted = new HashSet<>();
+            for (DiffEntry entry : entries) {
+                switch (entry.getChangeType()) {
+                    case ADD:
+                    case MODIFY:
+                    case COPY:
+                        if (entry.getNewPath() != null) {
+                            changed.add(entry.getNewPath());
+                        }
+                        break;
+                    case DELETE:
+                        if (entry.getOldPath() != null) {
+                            deleted.add(entry.getOldPath());
+                        }
+                        break;
+                    case RENAME:
+                        if (entry.getOldPath() != null) {
+                            deleted.add(entry.getOldPath());
+                        }
+                        if (entry.getNewPath() != null) {
+                            changed.add(entry.getNewPath());
+                        }
+                        break;
+                    default:
+                        break;
+                }
+            }
+            return new DiffOutcome(changed, deleted);
+        }
+    }
+
+    /**
+     * 增量扫描 diff 结果的简单容器：变更集（新路径）+ 删除集（旧路径）
+     */
+    private static final class DiffOutcome {
+        final Set<String> changed;
+        final Set<String> deleted;
+        DiffOutcome(Set<String> changed, Set<String> deleted) {
+            this.changed = changed;
+            this.deleted = deleted;
+        }
+    }
+
+    /**
+     * 批量写入缓冲区中的快照记录，使用 JDBC batch 模式减少 DB 往返。
+     *
+     * @return 实际写入的条数
+     */
+    private int flushSnapshotBatch(List<CodeFileSnapshot> batch) {
+        if (batch.isEmpty()) return 0;
+        int count = batch.size();
+        try {
+            try (SqlSession sqlSession = sqlSessionFactory.openSession(ExecutorType.BATCH)) {
+                CodeFileSnapshotMapper mapper = sqlSession.getMapper(CodeFileSnapshotMapper.class);
+                for (CodeFileSnapshot s : batch) {
+                    mapper.insert(s);
+                }
+                sqlSession.flushStatements();
+                sqlSession.commit();
+            }
+        } catch (Exception e) {
+            log.error("批量写入快照失败，丢失 {} 条记录", count, e);
+            count = 0;
+        } finally {
+            batch.clear();
+        }
+        return count;
     }
 
     /**
@@ -145,13 +337,19 @@ public class CodeScannerServiceImpl implements CodeScannerService {
     /**
      * 递归遍历扫描文件夹，分析黑白名单规则过滤文件
      *
-     * @param baseDir    任务临时存放根目录（作为计算相对路径的基准）
-     * @param currentDir 当前正在遍历的子目录
-     * @param repo       代码库配置实体（包含排除规则）
-     * @param taskId     任务 ID
-     * @param snapshots  收集结果的快照列表容器
+     * @param baseDir       任务临时存放根目录（作为计算相对路径的基准）
+     * @param currentDir    当前正在遍历的子目录
+     * @param repo          代码库配置实体（包含排除规则）
+     * @param taskId        任务 ID
+     * @param batchBuffer   快照批量写入缓冲区，攒满 {@link #SNAPSHOT_BATCH_SIZE} 条后触发批量 INSERT
+     * @param pathFilter    非空时只处理相对路径命中该集合的文件（增量场景下使用）；
+     *                      目录级短路：若子树中没有任何匹配文件则跳过递归。
+     *                      传 null 表示不过滤（按全量行为走）。
+     * @param totalInserted [0] 累计已写入的快照总数，由 {@link #flushSnapshotBatch} 回填
      */
-    private void scanDirectory(File baseDir, File currentDir, CodeRepository repo, Long taskId, List<CodeFileSnapshot> snapshots) {
+    private void scanDirectory(File baseDir, File currentDir, CodeRepository repo, Long taskId,
+                               List<CodeFileSnapshot> batchBuffer, Set<String> pathFilter,
+                               int[] totalInserted) {
         File[] files = currentDir.listFiles();
         if (files == null) return;
 
@@ -182,10 +380,15 @@ public class CodeScannerServiceImpl implements CodeScannerService {
                 if (file.getName().startsWith(".") || file.getName().equals("target") || file.getName().equals("node_modules")) {
                     isExcluded = true;
                 }
-                // 若不被排除，递归向下进行目录扫描
-                if (!isExcluded) {
-                    scanDirectory(baseDir, file, repo, taskId, snapshots);
+                if (isExcluded) {
+                    continue;
                 }
+                // 增量模式下：若该目录下没有任何命中 pathFilter 的文件，直接跳过整个子树
+                if (pathFilter != null && !subtreeHasMatch(pathFilter, relativePath)) {
+                    continue;
+                }
+                // 递归向下进行目录扫描
+                scanDirectory(baseDir, file, repo, taskId, batchBuffer, pathFilter, totalInserted);
             } else {
                 // 2. 检查文件类型后缀过滤
                 boolean isExcluded = false;
@@ -197,29 +400,53 @@ public class CodeScannerServiceImpl implements CodeScannerService {
                         break;
                     }
                 }
+                if (isExcluded) {
+                    continue;
+                }
+                // 增量模式下：仅当文件相对路径命中 git diff 变更集时才落快照
+                if (pathFilter != null && !pathFilter.contains(relativePath)) {
+                    continue;
+                }
                 // 如果未被排除，创建文件级别的物理快照与数据库记录
-                if (!isExcluded) {
-                    try {
-                        createFileSnapshot(baseDir, file, relativePath, taskId, ext, snapshots);
-                    } catch (Exception e) {
-                        log.error("保存文件快照失败: {}", file.getAbsolutePath(), e);
-                    }
+                try {
+                    createFileSnapshot(baseDir, file, relativePath, taskId, ext, batchBuffer, totalInserted);
+                } catch (Exception e) {
+                    log.error("保存文件快照失败: {}", file.getAbsolutePath(), e);
                 }
             }
         }
     }
 
     /**
-     * 创建文件物理快照并持久化至快照库中
-     *
-     * @param baseDir      根文件夹
-     * @param file         目标待备份文件对象
-     * @param relativePath 计算好的项目内相对路径
-     * @param taskId       任务 ID
-     * @param ext          文件扩展名
-     * @param snapshots    快照记录容器
+     * 增量模式辅助：判断 {@code pathFilter} 中是否存在位于给定目录子树下的文件。
+     * 用于 {@link #scanDirectory} 在目录级短路跳过整个子树，避免无谓递归。
      */
-    private void createFileSnapshot(File baseDir, File file, String relativePath, Long taskId, String ext, List<CodeFileSnapshot> snapshots) throws IOException {
+    private static boolean subtreeHasMatch(Set<String> pathFilter, String dirRelativePath) {
+        if (pathFilter == null || pathFilter.isEmpty()) {
+            return true;
+        }
+        String prefix = dirRelativePath.endsWith("/") ? dirRelativePath : dirRelativePath + "/";
+        for (String p : pathFilter) {
+            if (p.equals(dirRelativePath) || p.startsWith(prefix)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 创建文件物理快照并持久化至快照库中（批量缓冲写入模式）
+     *
+     * @param baseDir       根文件夹
+     * @param file          目标待备份文件对象
+     * @param relativePath  计算好的项目内相对路径
+     * @param taskId        任务 ID
+     * @param ext           文件扩展名
+     * @param batchBuffer   批量写入缓冲区，攒满后自动触发 {@link #flushSnapshotBatch}
+     * @param totalInserted [0] 累计已写入快照数
+     */
+    private void createFileSnapshot(File baseDir, File file, String relativePath, Long taskId, String ext,
+                                     List<CodeFileSnapshot> batchBuffer, int[] totalInserted) throws IOException {
         byte[] contentBytes = Files.readAllBytes(file.toPath());
         // 计算文件内容的 MD5 值作为文件指纹，用来做增量对比及版本哈希校验
         String md5 = DigestUtils.md5DigestAsHex(contentBytes);
@@ -229,23 +456,21 @@ public class CodeScannerServiceImpl implements CodeScannerService {
             lineCount = (int) Files.lines(file.toPath()).count();
         } catch (Exception ignored) {}
 
-        // 将文件内容持久化到系统本地暂存的对象存储物理盘中 (即 storage/task_{taskId}/{relativePath})
-        Path storePath = Paths.get(localStoragePath, "task_" + taskId, relativePath);
-        Files.createDirectories(storePath.getParent());
-        Files.write(storePath, contentBytes);
-
-        // 创建数据库索引记录并插入数据库表 ci_code_file_snapshot
+        // 直接引用 temp_repos/ 下的源文件，不再额外复制到 storage/（节省磁盘空间，文件在 pipeline 生命周期内始终存在）
+        // 创建数据库索引记录，先入缓冲区，攒够一批再批量写入
         CodeFileSnapshot snapshot = new CodeFileSnapshot();
         snapshot.setTaskId(taskId);
         snapshot.setFilePath(relativePath);
         snapshot.setFileType(ext);
         snapshot.setLineCount(lineCount);
         snapshot.setFileHash(md5);
-        snapshot.setContentUri(storePath.toAbsolutePath().toUri().toString());
+        snapshot.setContentUri(file.toURI().toString());
         snapshot.setCreatedAt(LocalDateTime.now());
 
-        snapshotMapper.insert(snapshot);
-        snapshots.add(snapshot);
+        batchBuffer.add(snapshot);
+        if (batchBuffer.size() >= SNAPSHOT_BATCH_SIZE) {
+            totalInserted[0] += flushSnapshotBatch(batchBuffer);
+        }
     }
 
     /**

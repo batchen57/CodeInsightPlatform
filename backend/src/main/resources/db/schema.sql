@@ -8,13 +8,22 @@ CREATE TABLE IF NOT EXISTS ci_system (
     owner VARCHAR(50) NOT NULL,
     status SMALLINT DEFAULT 1 NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    deleted_at TIMESTAMP
 );
+-- 1.0.1 系统软删除字段（兼容旧库，必须在 COMMENT 之前）
+ALTER TABLE ci_system ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP;
+
 COMMENT ON TABLE ci_system IS '系统管理表';
 COMMENT ON COLUMN ci_system.name IS '系统名称';
 COMMENT ON COLUMN ci_system.description IS '系统描述';
 COMMENT ON COLUMN ci_system.owner IS '系统负责人';
 COMMENT ON COLUMN ci_system.status IS '启用状态：0-停用，1-启用';
+COMMENT ON COLUMN ci_system.deleted_at IS '逻辑删除时间，NULL=未删除';
+
+-- 1.1 系统软删除字段（兼容旧库）
+ALTER TABLE ci_system ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP;
+COMMENT ON COLUMN ci_system.deleted_at IS '逻辑删除时间，NULL=未删除';
 
 -- 2. 代码库配置表
 CREATE TABLE IF NOT EXISTS ci_repository (
@@ -29,8 +38,15 @@ CREATE TABLE IF NOT EXISTS ci_repository (
     exclude_file_types VARCHAR(200),
     last_commit_id VARCHAR(100),
     last_decompile_at TIMESTAMP,
+    entry_scan_config TEXT,
+    push_git_url VARCHAR(500),
+    push_branch VARCHAR(100),
+    push_username VARCHAR(100),
+    push_password VARCHAR(255),
+    push_target_folder VARCHAR(255) DEFAULT 'docs/code-insight',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    deleted_at TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_repo_system_id ON ci_repository (system_id);
 COMMENT ON TABLE ci_repository IS '代码库配置表';
@@ -44,6 +60,23 @@ COMMENT ON COLUMN ci_repository.exclude_dirs IS '排除目录，逗号分隔';
 COMMENT ON COLUMN ci_repository.exclude_file_types IS '排除文件类型，逗号分隔';
 COMMENT ON COLUMN ci_repository.last_commit_id IS '最后确认 Commit ID';
 COMMENT ON COLUMN ci_repository.last_decompile_at IS '最后反编译时间';
+ALTER TABLE ci_repository ADD COLUMN IF NOT EXISTS entry_scan_config TEXT;
+COMMENT ON COLUMN ci_repository.entry_scan_config IS '仓库级入口扫描配置 JSON：含 includeAnnotations/includeClasspaths/includeExtends 与 excludeClasspaths/excludePackages/excludeAnnotations；新建任务时默认带出，任务可覆盖';
+
+-- 2.1 代码库软删除字段
+ALTER TABLE ci_repository ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP;
+COMMENT ON COLUMN ci_repository.deleted_at IS '逻辑删除时间，NULL=未删除';
+
+ALTER TABLE ci_repository ADD COLUMN IF NOT EXISTS push_git_url VARCHAR(500);
+ALTER TABLE ci_repository ADD COLUMN IF NOT EXISTS push_branch VARCHAR(100);
+ALTER TABLE ci_repository ADD COLUMN IF NOT EXISTS push_username VARCHAR(100);
+ALTER TABLE ci_repository ADD COLUMN IF NOT EXISTS push_password VARCHAR(255);
+ALTER TABLE ci_repository ADD COLUMN IF NOT EXISTS push_target_folder VARCHAR(255) DEFAULT 'docs/code-insight';
+COMMENT ON COLUMN ci_repository.push_git_url IS '推送目标 Git 仓库地址（为空则使用 git_url）';
+COMMENT ON COLUMN ci_repository.push_branch IS '推送目标分支（为空则默认 docs-code-insight）';
+COMMENT ON COLUMN ci_repository.push_username IS '推送 Git 凭证用户名';
+COMMENT ON COLUMN ci_repository.push_password IS '推送 Git 凭证密码/Token';
+COMMENT ON COLUMN ci_repository.push_target_folder IS '文档在仓库中的目标文件夹路径';
 
 -- 3. 提示词模板表
 CREATE TABLE IF NOT EXISTS ci_prompt (
@@ -53,6 +86,7 @@ CREATE TABLE IF NOT EXISTS ci_prompt (
     version INT DEFAULT 1 NOT NULL,
     status SMALLINT DEFAULT 1 NOT NULL,
     is_default SMALLINT DEFAULT 0 NOT NULL,
+    prompt_type VARCHAR(32) DEFAULT 'MODULARIZE' NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
 );
@@ -62,6 +96,14 @@ COMMENT ON COLUMN ci_prompt.content IS '提示词内容';
 COMMENT ON COLUMN ci_prompt.version IS '版本号';
 COMMENT ON COLUMN ci_prompt.status IS '状态：0-禁用，1-启用';
 COMMENT ON COLUMN ci_prompt.is_default IS '是否默认：0-否，1-是';
+ALTER TABLE ci_prompt ADD COLUMN IF NOT EXISTS prompt_type VARCHAR(32) DEFAULT 'MODULARIZE' NOT NULL;
+COMMENT ON COLUMN ci_prompt.prompt_type IS '提示词用途：MODULARIZE-模块提取（用于 AI_ANALYZING / MODULE_HIERARCHY 阶段），DOCUMENT_GENERATION-文档生成（用于 GENERATING_DOC 阶段）';
+
+-- 3.1 提示词类型迁移：兼容历史 schema（无 prompt_type 列时补齐）
+
+-- 3.2 同一 prompt_type 下只允许一条 is_default=1 的记录（约束已默认提示词唯一）
+CREATE UNIQUE INDEX IF NOT EXISTS uk_ci_prompt_type_default
+    ON ci_prompt (prompt_type) WHERE is_default = 1;
 
 -- 4. 反编译任务表
 CREATE TABLE IF NOT EXISTS ci_task (
@@ -69,6 +111,8 @@ CREATE TABLE IF NOT EXISTS ci_task (
     system_id BIGINT NOT NULL,
     repository_id BIGINT NOT NULL,
     prompt_version INT,
+    modularize_prompt_version INT,
+    document_prompt_version INT,
     model_name VARCHAR(100),
     status VARCHAR(50) NOT NULL,
     type VARCHAR(50) DEFAULT 'INITIAL' NOT NULL,
@@ -78,15 +122,27 @@ CREATE TABLE IF NOT EXISTS ci_task (
     duration_ms BIGINT DEFAULT 0 NOT NULL,
     started_at TIMESTAMP,
     ended_at TIMESTAMP,
+    entry_scan_config TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_task_system_id ON ci_task (system_id);
 CREATE INDEX IF NOT EXISTS idx_task_status ON ci_task (status);
+ALTER TABLE ci_task ADD COLUMN IF NOT EXISTS modularize_prompt_version INT;
+ALTER TABLE ci_task ADD COLUMN IF NOT EXISTS document_prompt_version INT;
+ALTER TABLE ci_task ADD COLUMN IF NOT EXISTS modularize_prompt_id BIGINT;
+ALTER TABLE ci_task ADD COLUMN IF NOT EXISTS document_prompt_id BIGINT;
+COMMENT ON COLUMN ci_task.modularize_prompt_id IS '模块提取提示词 ID（按主键查 ci_prompt，替代已废弃的 modularize_prompt_version）';
+COMMENT ON COLUMN ci_task.document_prompt_id IS '文档生成提示词 ID（按主键查 ci_prompt，替代已废弃的 document_prompt_version）';
+ALTER TABLE ci_task ADD COLUMN IF NOT EXISTS model_name VARCHAR(100);
+ALTER TABLE ci_task ADD COLUMN IF NOT EXISTS entry_scan_config TEXT;
+ALTER TABLE ci_task ADD COLUMN IF NOT EXISTS require_hierarchy_review BOOLEAN DEFAULT TRUE NOT NULL;
 COMMENT ON TABLE ci_task IS '反编译任务表';
 COMMENT ON COLUMN ci_task.system_id IS '关联系统ID';
 COMMENT ON COLUMN ci_task.repository_id IS '关联仓库ID';
-COMMENT ON COLUMN ci_task.prompt_version IS '使用的提示词版本';
+COMMENT ON COLUMN ci_task.prompt_version IS '使用的提示词版本（已废弃，请使用 modularize_prompt_version / document_prompt_version）';
+COMMENT ON COLUMN ci_task.modularize_prompt_version IS '模块提取提示词版本（AI_ANALYZING / MODULE_HIERARCHY 阶段使用，对应 ci_prompt.prompt_type=MODULARIZE）';
+COMMENT ON COLUMN ci_task.document_prompt_version IS '文档生成提示词版本（GENERATING_DOC 阶段使用，对应 ci_prompt.prompt_type=DOCUMENT_GENERATION）';
 COMMENT ON COLUMN ci_task.status IS '任务状态';
 COMMENT ON COLUMN ci_task.type IS '任务类型：INITIAL-全量/初始化，INCREMENTAL-增量';
 COMMENT ON COLUMN ci_task.progress IS '进度百分比：0-100';
@@ -201,22 +257,30 @@ COMMENT ON COLUMN ci_draft_workspace.status IS '状态：ACTIVE, COMPLETED, ARCH
 CREATE TABLE IF NOT EXISTS ci_knowledge_draft (
     id BIGSERIAL PRIMARY KEY,
     workspace_id BIGINT NOT NULL,
+    parent_id BIGINT,
     file_path VARCHAR(255) NOT NULL,
     module_name VARCHAR(100) NOT NULL,
     content_uri VARCHAR(255) NOT NULL,
-    status VARCHAR(50) NOT NULL,
+    status VARCHAR(50) DEFAULT 'DRAFT' NOT NULL,
+    sort_order INT DEFAULT 0 NOT NULL,
     hash VARCHAR(100) NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
 );
+-- 在线追加列（兼容已有数据库）
+ALTER TABLE ci_knowledge_draft ADD COLUMN IF NOT EXISTS parent_id BIGINT;
+ALTER TABLE ci_knowledge_draft ADD COLUMN IF NOT EXISTS sort_order INT DEFAULT 0 NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_draft_workspace_id ON ci_knowledge_draft (workspace_id);
 CREATE INDEX IF NOT EXISTS idx_draft_status ON ci_knowledge_draft (status);
+CREATE INDEX IF NOT EXISTS idx_draft_parent_id ON ci_knowledge_draft (parent_id);
 COMMENT ON TABLE ci_knowledge_draft IS 'Markdown知识草稿表';
 COMMENT ON COLUMN ci_knowledge_draft.workspace_id IS '关联草稿工作区ID';
+COMMENT ON COLUMN ci_knowledge_draft.parent_id IS '父级草稿ID（自引用，用于构建模块目录树）';
 COMMENT ON COLUMN ci_knowledge_draft.file_path IS '模块/文件 Markdown 路径';
 COMMENT ON COLUMN ci_knowledge_draft.module_name IS '模块名称';
 COMMENT ON COLUMN ci_knowledge_draft.content_uri IS '草稿内容在存储中的地址';
-COMMENT ON COLUMN ci_knowledge_draft.status IS '草稿状态';
+COMMENT ON COLUMN ci_knowledge_draft.status IS '草稿状态：DRAFT / EDITING / CONFIRMED / REJECTED / PUSHED / ARCHIVED（与 ci_task.status 解耦）';
+COMMENT ON COLUMN ci_knowledge_draft.sort_order IS '同级排序权重（升序）';
 COMMENT ON COLUMN ci_knowledge_draft.hash IS '草稿内容的 MD5 Hash';
 
 -- 10. 草稿修订历史表
@@ -241,13 +305,17 @@ CREATE TABLE IF NOT EXISTS ci_draft_review_comment (
     draft_id BIGINT NOT NULL,
     author VARCHAR(50) NOT NULL,
     comment TEXT NOT NULL,
+    type VARCHAR(20) DEFAULT 'NORMAL' NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
 );
+-- 在线追加列（兼容已有数据库）
+ALTER TABLE ci_draft_review_comment ADD COLUMN IF NOT EXISTS type VARCHAR(20) DEFAULT 'NORMAL' NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_comment_draft_id ON ci_draft_review_comment (draft_id);
 COMMENT ON TABLE ci_draft_review_comment IS '草稿评审意见表';
 COMMENT ON COLUMN ci_draft_review_comment.draft_id IS '关联草稿ID';
 COMMENT ON COLUMN ci_draft_review_comment.author IS '评审人';
 COMMENT ON COLUMN ci_draft_review_comment.comment IS '评审意见';
+COMMENT ON COLUMN ci_draft_review_comment.type IS '意见类型：NORMAL=通用意见 / PASS=通过意见 / REJECT=驳回意见';
 
 -- 12. 草稿代码来源引用表
 CREATE TABLE IF NOT EXISTS ci_draft_source_reference (
@@ -279,6 +347,7 @@ CREATE TABLE IF NOT EXISTS ci_knowledge_version (
     prompt_version INT,
     model_name VARCHAR(100),
     status VARCHAR(50) NOT NULL,
+    push_method VARCHAR(20) DEFAULT 'GIT',
     confirmed_by VARCHAR(50) NOT NULL,
     confirmed_at TIMESTAMP NOT NULL,
     pushed_at TIMESTAMP,
@@ -286,6 +355,7 @@ CREATE TABLE IF NOT EXISTS ci_knowledge_version (
 );
 CREATE INDEX IF NOT EXISTS idx_version_system_id ON ci_knowledge_version (system_id);
 CREATE INDEX IF NOT EXISTS idx_version_number ON ci_knowledge_version (version_num);
+ALTER TABLE ci_knowledge_version ADD COLUMN IF NOT EXISTS push_method VARCHAR(20) DEFAULT 'GIT';
 COMMENT ON TABLE ci_knowledge_version IS '知识版本表';
 COMMENT ON COLUMN ci_knowledge_version.system_id IS '关联系统ID';
 COMMENT ON COLUMN ci_knowledge_version.repository_id IS '关联代码库ID';
@@ -298,9 +368,39 @@ COMMENT ON COLUMN ci_knowledge_version.target_commit IS '推送后的提交 Comm
 COMMENT ON COLUMN ci_knowledge_version.prompt_version IS '所用提示词版本';
 COMMENT ON COLUMN ci_knowledge_version.model_name IS '所用 AI 模型名称';
 COMMENT ON COLUMN ci_knowledge_version.status IS '状态：DRAFT, PUSHING, PUSHED, FAILED';
+COMMENT ON COLUMN ci_knowledge_version.push_method IS '推送方式: GIT=Git推送, S3=对象存储';
 COMMENT ON COLUMN ci_knowledge_version.confirmed_by IS '确认人';
 COMMENT ON COLUMN ci_knowledge_version.confirmed_at IS '确认时间';
 COMMENT ON COLUMN ci_knowledge_version.pushed_at IS '推送时间';
+
+-- 13.5. 推送任务审计表
+CREATE TABLE IF NOT EXISTS ci_push_task (
+    id BIGSERIAL PRIMARY KEY,
+    version_id BIGINT NOT NULL,
+    push_method VARCHAR(20) NOT NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+    retry_count INT DEFAULT 0 NOT NULL,
+    max_retries INT DEFAULT 3 NOT NULL,
+    target_info TEXT,
+    error_message TEXT,
+    enqueued_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    started_at TIMESTAMP,
+    completed_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_push_task_version_id ON ci_push_task (version_id);
+CREATE INDEX IF NOT EXISTS idx_push_task_status ON ci_push_task (status);
+COMMENT ON TABLE ci_push_task IS '知识推送任务审计表';
+COMMENT ON COLUMN ci_push_task.version_id IS '关联的知识版本ID';
+COMMENT ON COLUMN ci_push_task.push_method IS '推送方式: GIT 或 S3';
+COMMENT ON COLUMN ci_push_task.status IS '推送状态: PENDING, PROCESSING, SUCCESS, FAILED';
+COMMENT ON COLUMN ci_push_task.retry_count IS '重试次数';
+COMMENT ON COLUMN ci_push_task.max_retries IS '最大重试次数';
+COMMENT ON COLUMN ci_push_task.target_info IS '推送目标摘要信息(JSON)';
+COMMENT ON COLUMN ci_push_task.error_message IS '失败原因';
+COMMENT ON COLUMN ci_push_task.enqueued_at IS '入队时间';
+COMMENT ON COLUMN ci_push_task.started_at IS '开始执行时间';
+COMMENT ON COLUMN ci_push_task.completed_at IS '完成时间';
 
 -- 14. Token使用审计表
 CREATE TABLE IF NOT EXISTS ci_token_usage_audit (
@@ -374,9 +474,13 @@ CREATE TABLE IF NOT EXISTS ci_model (
     capabilities VARCHAR(255),
     description VARCHAR(500),
     sort_order INT DEFAULT 0 NOT NULL,
+    status SMALLINT DEFAULT 1 NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
 );
+-- 16.0.1 AI 模型状态字段（兼容旧库，必须在 COMMENT 之前）
+ALTER TABLE ci_model ADD COLUMN IF NOT EXISTS status SMALLINT DEFAULT 1 NOT NULL;
+
 COMMENT ON TABLE ci_model IS 'AI模型配置表';
 COMMENT ON COLUMN ci_model.name IS '模型显示名称';
 COMMENT ON COLUMN ci_model.identifier IS '模型调用ID';
@@ -387,8 +491,152 @@ COMMENT ON COLUMN ci_model.is_default IS '是否默认模型：true/false';
 COMMENT ON COLUMN ci_model.capabilities IS '支持能力，逗号分隔 (text,image,video)';
 COMMENT ON COLUMN ci_model.description IS '功能描述';
 COMMENT ON COLUMN ci_model.sort_order IS '排序权重';
+COMMENT ON COLUMN ci_model.status IS '启用状态：0-停用，1-启用';
 
--- 17. 迁移或兼容性字段维护
+-- 16.1 AI 模型状态字段（兼容旧库）
+ALTER TABLE ci_model ADD COLUMN IF NOT EXISTS status SMALLINT DEFAULT 1 NOT NULL;
+
+-- 17. AI模型预设模板表
+CREATE TABLE IF NOT EXISTS ci_model_preset (
+    id BIGSERIAL PRIMARY KEY,
+    name VARCHAR(100) NOT NULL,
+    identifier VARCHAR(100) NOT NULL,
+    provider VARCHAR(100) NOT NULL,
+    base_url VARCHAR(255),
+    capabilities VARCHAR(255),
+    description VARCHAR(500),
+    sort_order INT DEFAULT 0 NOT NULL,
+    status SMALLINT DEFAULT 1 NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uk_model_preset_identifier ON ci_model_preset (identifier);
+CREATE INDEX IF NOT EXISTS idx_model_preset_status_sort ON ci_model_preset (status, sort_order);
+COMMENT ON TABLE ci_model_preset IS 'AI模型预设模板表';
+COMMENT ON COLUMN ci_model_preset.name IS '预设显示名称';
+COMMENT ON COLUMN ci_model_preset.identifier IS '模型调用ID';
+COMMENT ON COLUMN ci_model_preset.provider IS '技术供应商';
+COMMENT ON COLUMN ci_model_preset.base_url IS 'Endpoint URL (接口地址)';
+COMMENT ON COLUMN ci_model_preset.capabilities IS '支持能力，逗号分隔 (text,image,video)';
+COMMENT ON COLUMN ci_model_preset.description IS '模板说明';
+COMMENT ON COLUMN ci_model_preset.sort_order IS '排序权重';
+COMMENT ON COLUMN ci_model_preset.status IS '启用状态：0-停用，1-启用';
+
+INSERT INTO ci_model_preset (name, provider, identifier, base_url, capabilities, description, sort_order, status)
+VALUES
+    ('Gemini 2.0 Pro', 'Google', 'gemini-2.0-pro-exp-02-05', 'https://generativelanguage.googleapis.com', 'text,image,video', 'Google 顶尖多模态模型，支持原生视频理解。', 10, 1),
+    ('Qwen-VL-Max', 'Alibaba', 'qwen-vl-max', 'https://dashscope.aliyuncs.com/compatible-mode/v1', 'text,image,video', '通义千问视觉大模型，视频理解能力强。', 20, 1),
+    ('DeepSeek Chat', 'DeepSeek', 'deepseek-chat', 'https://api.deepseek.com', 'text', '深度求索高性能模型，代码分析极具性价比。', 30, 1),
+    ('GPT-4o', 'OpenAI', 'gpt-4o', 'https://api.openai.com/v1', 'text,image,video', 'OpenAI 旗舰全能模型，推理能力卓越。', 40, 1),
+    ('MiniMax-M2.7', 'MiniMax', 'MiniMax-M2.7', 'https://api.minimaxi.chat/v1', 'text,image', '国产多模态模型，支持图片理解与代码环境分析。', 50, 1),
+    ('MiniMax-M3', 'MiniMax', 'MiniMax-M3', 'https://api.minimaxi.chat/v1', 'text,image,video', 'MiniMax 旗舰模型，适合长上下文代码洞察。', 60, 1)
+ON CONFLICT (identifier) DO UPDATE SET
+    name = EXCLUDED.name,
+    provider = EXCLUDED.provider,
+    base_url = EXCLUDED.base_url,
+    capabilities = EXCLUDED.capabilities,
+    description = EXCLUDED.description,
+    sort_order = EXCLUDED.sort_order,
+    status = EXCLUDED.status,
+    updated_at = CURRENT_TIMESTAMP;
+
+-- 18. 迁移或兼容性字段维护
 ALTER TABLE ci_task ADD COLUMN IF NOT EXISTS model_name VARCHAR(100);
+
+-- 18. 方法调用链路表（AST 静态分析结果）
+CREATE TABLE IF NOT EXISTS ci_method_call (
+    id BIGSERIAL PRIMARY KEY,
+    task_id BIGINT NOT NULL,
+    file_path VARCHAR(500) NOT NULL,
+    class_name VARCHAR(255),
+    caller_method VARCHAR(255),
+    dependency_name VARCHAR(255),
+    target_method VARCHAR(255),
+    expression VARCHAR(1000),
+    line_number INT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_method_call_task_id ON ci_method_call (task_id);
+CREATE INDEX IF NOT EXISTS idx_method_call_class ON ci_method_call (task_id, class_name, caller_method);
+COMMENT ON TABLE ci_method_call IS '方法调用链路表（AST 静态分析）';
+COMMENT ON COLUMN ci_method_call.task_id IS '关联任务ID';
+COMMENT ON COLUMN ci_method_call.file_path IS '源文件相对路径';
+COMMENT ON COLUMN ci_method_call.class_name IS 'Java 类名';
+COMMENT ON COLUMN ci_method_call.caller_method IS '调用方方法名';
+COMMENT ON COLUMN ci_method_call.dependency_name IS '被调依赖的类型名';
+COMMENT ON COLUMN ci_method_call.target_method IS '被调用的目标方法名';
+COMMENT ON COLUMN ci_method_call.expression IS '调用表达式原始文本';
+COMMENT ON COLUMN ci_method_call.line_number IS '源文件行号';
+
+-- 18.1 ci_method_call 增加方法完整签名列（按方法粒度反查调用链用）
+ALTER TABLE ci_method_call ADD COLUMN IF NOT EXISTS caller_signature VARCHAR(500);
+ALTER TABLE ci_method_call ADD COLUMN IF NOT EXISTS target_signature VARCHAR(500);
+CREATE INDEX IF NOT EXISTS idx_method_call_caller_sig ON ci_method_call (task_id, caller_signature);
+CREATE INDEX IF NOT EXISTS idx_method_call_target_sig ON ci_method_call (task_id, target_signature);
+COMMENT ON COLUMN ci_method_call.caller_signature IS '调用方方法完整签名：className#methodName(ParamType1,ParamType2)';
+COMMENT ON COLUMN ci_method_call.target_signature IS '被调方方法完整签名：className#methodName(ParamType1,ParamType2)';
+
+-- 19. 模块层级表（AI 提炼入口的业务归属，DTO 持久化）
+CREATE TABLE IF NOT EXISTS ci_module_hierarchy (
+    id BIGSERIAL PRIMARY KEY,
+    task_id BIGINT NOT NULL,
+    system_id BIGINT NOT NULL,
+    level VARCHAR(20) NOT NULL,
+    parent_id BIGINT,
+    node_id VARCHAR(10),
+    name VARCHAR(255) NOT NULL,
+    keywords TEXT,
+    class_paths TEXT,
+    method_signatures TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_module_hierarchy_task ON ci_module_hierarchy (task_id);
+CREATE INDEX IF NOT EXISTS idx_module_hierarchy_parent ON ci_module_hierarchy (parent_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uk_module_hierarchy_task_node ON ci_module_hierarchy (task_id, node_id);
+COMMENT ON TABLE ci_module_hierarchy IS '模块层级表（AI 提炼的业务归属 DTO 落表）';
+COMMENT ON COLUMN ci_module_hierarchy.level IS '层级：MODULE / SUB_MODULE / FUNCTION';
+COMMENT ON COLUMN ci_module_hierarchy.parent_id IS '上级节点 ID（module.parent_id = NULL）';
+COMMENT ON COLUMN ci_module_hierarchy.node_id IS '5位 Base62 ID（m/s/f 前缀），同任务内唯一';
+COMMENT ON COLUMN ci_module_hierarchy.name IS '模块/子模块/功能名称';
+COMMENT ON COLUMN ci_module_hierarchy.keywords IS '关键词 JSON 数组字符串';
+COMMENT ON COLUMN ci_module_hierarchy.class_paths IS '入口类全限定名集合（仅 FUNCTION 级）JSON 数组';
+ALTER TABLE ci_module_hierarchy ADD COLUMN IF NOT EXISTS method_signatures TEXT;
+COMMENT ON COLUMN ci_module_hierarchy.method_signatures IS '该功能涉及的方法签名 JSON 数组（仅 FUNCTION 级），如 ["listUsers(Integer,Integer)","createUser(UserDTO)"]；用于阶段 2 按方法签名粒度反查调用链';
+
+-- 20. 任务级入口扫描配置（每任务独立，配置只跟任务绑定）
+ALTER TABLE ci_task ADD COLUMN IF NOT EXISTS entry_scan_config TEXT;
+COMMENT ON COLUMN ci_task.entry_scan_config IS '入口扫描配置 JSON：含 includeAnnotations/includeClasspaths/includeExtends 三类入口规则与 excludeClasspaths/excludePackages/excludeAnnotations 三类排除规则，null 时走默认 Controller/JOB/MQ 兜底';
+
+-- 21. 是否启用模块层级调试（人工复核断点）
+ALTER TABLE ci_task ADD COLUMN IF NOT EXISTS require_hierarchy_review BOOLEAN DEFAULT TRUE NOT NULL;
+COMMENT ON COLUMN ci_task.require_hierarchy_review IS '是否启用模块层级调试断点：TRUE-模块层级提炼完成后停在 MODULE_HIERARCHY_REVIEW 等待人工调试；FALSE-跳过断点直接进入 GENERATING_DOC。默认 TRUE';
+
+-- 22. 任务分别记录"模块提取提示词版本"与"文档生成提示词版本"
+ALTER TABLE ci_task ADD COLUMN IF NOT EXISTS modularize_prompt_version INT;
+COMMENT ON COLUMN ci_task.modularize_prompt_version IS '模块提取提示词版本（AI_ANALYZING / MODULE_HIERARCHY 阶段使用）';
+ALTER TABLE ci_task ADD COLUMN IF NOT EXISTS document_prompt_version INT;
+COMMENT ON COLUMN ci_task.document_prompt_version IS '文档生成提示词版本（GENERATING_DOC 阶段使用）';
+
+-- === 草稿状态词汇迁移（兼容历史数据） ===
+-- 历史草稿曾使用与 ci_task 共享的字面值（AI_GENERATED / PENDING_REVIEW / REVIEWING / REVISED），
+-- 自 v0.2 起统一收敛到 DraftStatus 枚举（DRAFT / EDITING / CONFIRMED / REJECTED / PUSHED / ARCHIVED）。
+-- 以下 UPDATE 在每次启动时幂等执行：第二次起所有命中行已为新值，0 行受影响。
+UPDATE ci_knowledge_draft
+   SET status = 'DRAFT'
+ WHERE status IN ('AI_GENERATED', 'PENDING_REVIEW');
+
+UPDATE ci_knowledge_draft
+   SET status = 'EDITING'
+ WHERE status IN ('REVIEWING', 'REVISED');
+
+-- CONFIRMED / PUSHED / ARCHIVED 字面值不变。
+
+-- === v0.3 移除 REJECTED 状态 ===
+-- 复核流程不再使用驳回机制，复核人通过直接编辑修改草稿。
+-- 历史 REJECTED 草稿视同 DRAFT（待复核），下次启动后端时由本 UPDATE 幂等迁移。
+UPDATE ci_knowledge_draft
+   SET status = 'DRAFT'
+ WHERE status = 'REJECTED';
 
 

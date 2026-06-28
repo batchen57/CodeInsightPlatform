@@ -2,10 +2,11 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import { Alert, Button, Card, Descriptions, Form, Input, Modal, Select, Space, Table, Tag, Typography, message } from 'antd';
 import { CloudUploadOutlined, DownloadOutlined, PlusOutlined, PullRequestOutlined, ReloadOutlined } from '@ant-design/icons';
-import { createVersion, listVersions, pushVersion, type KnowledgeVersion } from '../../api/knowledge';
+import { createVersion, listVersions, pushVersion, listPushTasks, type KnowledgeVersion, type PushTask } from '../../api/knowledge';
 import { listSystems } from '../../api/system';
 import { listTasks } from '../../api/task';
 import type { System, Task } from '../../types';
+import { getCurrentOperator } from '../../api/auth';
 
 const { Text } = Typography;
 
@@ -14,6 +15,18 @@ const statusMeta: Record<string, { color: string; label: string }> = {
   PUSHING: { color: 'processing', label: '推送中' },
   PUSHED: { color: 'success', label: '已推送' },
   FAILED: { color: 'error', label: '失败' },
+};
+
+const pushTaskStatusMeta: Record<string, { color: string; label: string }> = {
+  PENDING: { color: 'default', label: '排队中' },
+  PROCESSING: { color: 'processing', label: '执行中' },
+  SUCCESS: { color: 'success', label: '成功' },
+  FAILED: { color: 'error', label: '失败' },
+};
+
+const pushMethodLabel: Record<string, string> = {
+  GIT: 'Git 推送',
+  S3: 'S3 推送',
 };
 
 const taskStatusLabel: Record<string, string> = {
@@ -41,6 +54,8 @@ const Push: React.FC = () => {
   const [mrModalOpen, setMrModalOpen] = useState(false);
   const [activeVersion, setActiveVersion] = useState<KnowledgeVersion | null>(null);
   const [mrForm] = Form.useForm();
+  const [pushTasks, setPushTasks] = useState<Map<number, PushTask[]>>(new Map());
+  const [pushingVersions, setPushingVersions] = useState<Set<number>>(new Set());
 
   useEffect(() => {
     listSystems({ current: 1, size: 100, status: 1 }).then((data) => setSystems(data.records));
@@ -64,6 +79,34 @@ const Push: React.FC = () => {
     fetchVersions();
   }, [fetchVersions]);
 
+  // Auto-refresh push tasks for versions currently in PUSHING status
+  useEffect(() => {
+    if (pushingVersions.size === 0) return;
+    const interval = setInterval(async () => {
+      const newTasks = new Map(pushTasks);
+      let hasActive = false;
+      for (const versionId of pushingVersions) {
+        try {
+          const tasks = await listPushTasks(versionId);
+          newTasks.set(versionId, tasks);
+          // Check if any task is still active
+          const hasPending = tasks.some(
+            (t) => t.status === 'PENDING' || t.status === 'PROCESSING'
+          );
+          if (hasPending) hasActive = true;
+        } catch {
+          // ignore fetch errors
+        }
+      }
+      setPushTasks(newTasks);
+      if (!hasActive) {
+        setPushingVersions(new Set());
+        fetchVersions(); // refresh version list to get final status
+      }
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [pushingVersions, pushTasks, fetchVersions]);
+
   const openVersionModal = async () => {
     if (!selectedSystemId) {
       message.warning('请先选择系统再创建版本');
@@ -76,22 +119,43 @@ const Push: React.FC = () => {
 
   const handleCreateVersion = async () => {
     const values = await versionForm.validateFields();
-    await createVersion(values.taskId, values.versionNum, 'Admin');
+    await createVersion(values.taskId, values.versionNum, getCurrentOperator());
     message.success('知识版本已创建');
     setVersionModalOpen(false);
     versionForm.resetFields();
     fetchVersions();
   };
 
-  const handlePushGit = async (versionId: number) => {
-    message.loading({ content: '正在执行推送前校验并推送 Git...', key: 'pushing' });
-    try {
-      await pushVersion(versionId);
-      message.success({ content: '知识已推送到 Git', key: 'pushing' });
-      fetchVersions();
-    } catch {
-      message.error({ content: '推送失败', key: 'pushing' });
-    }
+  const handlePush = async (versionId: number, method: string = 'GIT') => {
+    const version = versions.find((v) => v.id === versionId);
+    const methodLabel = pushMethodLabel[method] || method;
+    Modal.confirm({
+      title: `推送版本（${methodLabel}）？`,
+      content: (
+        <div>
+          <p style={{ marginBottom: 6 }}>
+            即将通过 <Text strong>{methodLabel}</Text> 推送版本 <Text strong>{version?.versionNum ?? `#${versionId}`}</Text>。
+            此操作不可撤销。
+          </p>
+          <p style={{ marginBottom: 0, fontSize: 12, color: '#818aa0' }}>
+            推送任务将进入队列异步执行。推送后该任务将被锁定，无法继续修改。
+          </p>
+        </div>
+      ),
+      okText: '加入推送队列',
+      cancelText: '取消',
+      onOk: async () => {
+        message.loading({ content: '推送任务加入队列...', key: 'pushing' });
+        try {
+          await pushVersion(versionId, method);
+          message.success({ content: '推送任务已加入队列，后台异步执行中', key: 'pushing', duration: 3 });
+          setPushingVersions((prev) => new Set(prev).add(versionId));
+          fetchVersions();
+        } catch {
+          message.error({ content: '推送任务提交失败', key: 'pushing' });
+        }
+      },
+    });
   };
 
   const handleDownloadZip = (versionId: number) => {
@@ -112,35 +176,68 @@ const Push: React.FC = () => {
       title: '版本',
       dataIndex: 'versionNum',
       key: 'versionNum',
+      width: 100,
       render: (text: string) => <Text strong>{text}</Text>,
     },
     {
-      title: '状态',
+      title: '版本状态',
       dataIndex: 'status',
       key: 'status',
+      width: 90,
       render: (status: string) => {
         const meta = statusMeta[status] ?? { color: 'default', label: status };
         return <Tag color={meta.color}>{meta.label}</Tag>;
       },
     },
-    { title: '源分支', dataIndex: 'sourceBranch', key: 'sourceBranch' },
+    {
+      title: '推送方式',
+      dataIndex: 'pushMethod',
+      key: 'pushMethod',
+      width: 90,
+      render: (method: string) => pushMethodLabel[method] || method || 'GIT',
+    },
+    {
+      title: '队列状态',
+      key: 'pushTaskStatus',
+      width: 100,
+      render: (_: unknown, record: KnowledgeVersion) => {
+        const tasks = pushTasks.get(record.id);
+        if (!tasks || tasks.length === 0) return <Text type="secondary">-</Text>;
+        const latest = tasks[0];
+        const meta = pushTaskStatusMeta[latest.status] ?? { color: 'default', label: latest.status };
+        return (
+          <Space size={4}>
+            <Tag color={meta.color}>{meta.label}</Tag>
+            {latest.retryCount > 0 && (
+              <Text type="secondary" style={{ fontSize: 11 }}>
+                ({latest.retryCount}/{latest.maxRetries})
+              </Text>
+            )}
+          </Space>
+        );
+      },
+    },
+    { title: '源分支', dataIndex: 'sourceBranch', key: 'sourceBranch', width: 90 },
     {
       title: '源 Commit',
       dataIndex: 'sourceCommit',
       key: 'sourceCommit',
+      width: 100,
       render: (commit: string) => <Text code>{commit?.substring(0, 8) || '-'}</Text>,
     },
     {
       title: '目标 Commit',
       dataIndex: 'targetCommit',
       key: 'targetCommit',
+      width: 100,
       render: (commit: string | null) => (commit ? <Text code>{commit.substring(0, 8)}</Text> : <Text type="secondary">-</Text>),
     },
-    { title: '确认人', dataIndex: 'confirmedBy', key: 'confirmedBy' },
+    { title: '确认人', dataIndex: 'confirmedBy', key: 'confirmedBy', width: 80 },
     {
       title: '推送时间',
       dataIndex: 'pushedAt',
       key: 'pushedAt',
+      width: 150,
       render: (text: string | null) => (text ? new Date(text).toLocaleString() : '-'),
     },
     {
@@ -148,29 +245,42 @@ const Push: React.FC = () => {
       key: 'action',
       width: 260,
       fixed: 'right' as const,
-      render: (_: unknown, record: KnowledgeVersion) => (
-        <Space size={8}>
-          {record.status === 'DRAFT' || record.status === 'FAILED' ? (
-            <Button type="primary" size="small" icon={<CloudUploadOutlined />} onClick={() => handlePushGit(record.id)}>
-              推送 Git
+      render: (_: unknown, record: KnowledgeVersion) => {
+        const isPushing = pushingVersions.has(record.id);
+        return (
+          <Space size={8}>
+            {record.status === 'DRAFT' || record.status === 'FAILED' ? (
+              <Button
+                type="primary"
+                size="small"
+                icon={<CloudUploadOutlined />}
+                loading={isPushing}
+                onClick={() => handlePush(record.id, 'GIT')}
+              >
+                推送 Git
+              </Button>
+            ) : record.status === 'PUSHING' ? (
+              <Button size="small" loading disabled>
+                推送中...
+              </Button>
+            ) : (
+              <Button
+                size="small"
+                icon={<PullRequestOutlined />}
+                onClick={() => {
+                  setActiveVersion(record);
+                  setMrModalOpen(true);
+                }}
+              >
+                创建 MR
+              </Button>
+            )}
+            <Button size="small" icon={<DownloadOutlined />} onClick={() => handleDownloadZip(record.id)}>
+              ZIP
             </Button>
-          ) : (
-            <Button
-              size="small"
-              icon={<PullRequestOutlined />}
-              onClick={() => {
-                setActiveVersion(record);
-                setMrModalOpen(true);
-              }}
-            >
-              创建 MR
-            </Button>
-          )}
-          <Button size="small" icon={<DownloadOutlined />} onClick={() => handleDownloadZip(record.id)}>
-            ZIP
-          </Button>
-        </Space>
-      ),
+          </Space>
+        );
+      },
     },
   ];
 

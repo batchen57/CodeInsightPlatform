@@ -97,6 +97,8 @@ public class TaskStateMachineServiceImpl implements TaskStateMachineService {
             case PARSING_CODE -> task.setProgress(30);
             case SPLITTING_TASK -> task.setProgress(50);
             case AI_ANALYZING -> task.setProgress(70);
+            case MODULE_HIERARCHY -> task.setProgress(85);
+            case MODULE_HIERARCHY_REVIEW -> task.setProgress(88);
             case GENERATING_DOC -> task.setProgress(90);
             case PENDING_REVIEW -> task.setProgress(100);
             case CONFIRMED -> task.setProgress(100);
@@ -111,8 +113,8 @@ public class TaskStateMachineServiceImpl implements TaskStateMachineService {
                 task.getSystemId(),
                 task.getId(),
                 "TASK_TRANSIT",
-                "任务状态变更: " + currentStatus + " -> " + targetStatus + (errorReason != null ? "，原因: " + errorReason : ""),
-                null,
+                "任务状态变更: " + currentStatus + " -> " + targetStatus,
+                errorReason,
                 true
         );
     }
@@ -138,7 +140,9 @@ public class TaskStateMachineServiceImpl implements TaskStateMachineService {
             case PULLING_CODE -> target == TaskStatus.PARSING_CODE || target == TaskStatus.FAILED || target == TaskStatus.CANCELLED;
             case PARSING_CODE -> target == TaskStatus.SPLITTING_TASK || target == TaskStatus.FAILED || target == TaskStatus.CANCELLED;
             case SPLITTING_TASK -> target == TaskStatus.AI_ANALYZING || target == TaskStatus.FAILED || target == TaskStatus.CANCELLED;
-            case AI_ANALYZING -> target == TaskStatus.GENERATING_DOC || target == TaskStatus.FAILED || target == TaskStatus.CANCELLED;
+            case AI_ANALYZING -> target == TaskStatus.MODULE_HIERARCHY || target == TaskStatus.GENERATING_DOC || target == TaskStatus.FAILED || target == TaskStatus.CANCELLED;
+            case MODULE_HIERARCHY -> target == TaskStatus.MODULE_HIERARCHY_REVIEW || target == TaskStatus.GENERATING_DOC || target == TaskStatus.FAILED || target == TaskStatus.CANCELLED;
+            case MODULE_HIERARCHY_REVIEW -> target == TaskStatus.GENERATING_DOC || target == TaskStatus.FAILED || target == TaskStatus.CANCELLED;
             case GENERATING_DOC -> target == TaskStatus.PENDING_REVIEW || target == TaskStatus.FAILED || target == TaskStatus.CANCELLED;
             case PENDING_REVIEW -> target == TaskStatus.REVIEWING || target == TaskStatus.CONFIRMED || target == TaskStatus.FAILED || target == TaskStatus.CANCELLED;
             case REVIEWING -> target == TaskStatus.CONFIRMED || target == TaskStatus.PENDING_REVIEW || target == TaskStatus.CANCELLED;

@@ -20,13 +20,6 @@ public interface KnowledgeService {
     KnowledgeVersion createVersion(Long taskId, String versionNum, String confirmedBy);
 
     /**
-     * 推送指定的知识版本文件到代码仓库的目标 Git 分支上
-     *
-     * @param versionId 知识版本 ID
-     */
-    void pushToGit(Long versionId);
-
-    /**
      * 将该版本对应的所有 Markdown 知识文档压缩并导出为 ZIP 二进制流
      *
      * @param versionId 知识版本 ID
