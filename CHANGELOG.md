@@ -4,6 +4,59 @@
 
 ---
 
+## [v0.1.4] - 2026-06-28
+
+### 🔄 增量扫描（INCREMENTAL）全链路贯通
+
+基于 Git Diff 的增量扫描从「标签」变为「真正生效」，流水线在 `ci_task.type = INCREMENTAL` 时按 `git diff <repo.lastCommit>..HEAD` 识别变更/删除文件，下游 5 个阶段只对变更文件做处理，未变文件的产物原样保留。
+
+- **核心抽象**：
+  - 新增 [IncrementalContext.java](backend/src/main/java/com/company/codeinsight/modules/scanner/model/IncrementalContext.java)：不可变上下文，封装 `changedPaths` / `deletedPaths`，提供 `isPathChanged / isPathDeleted / isPathUnchanged` 判定方法；`IncrementalContext.fullScan()` 走全量分支。
+  - 新增 [ScanResult.java](backend/src/main/java/com/company/codeinsight/modules/scanner/model/ScanResult.java)：`pullAndScan` 的返回值 = `projectDir + IncrementalContext`。
+- **扫描器 ([CodeScannerServiceImpl.java](backend/src/main/java/com/company/codeinsight/modules/scanner/service/impl/CodeScannerServiceImpl.java))**：
+  - 接口 `pullAndScan(taskId, repositoryId, taskType)` 新增第三个参数；返回类型由 `File` 改为 `ScanResult`。
+  - 拆开 Git 句柄的 `try-with-resources`，保留句柄到 `DiffFormatter.scan()` 算完再统一关闭。
+  - 使用 `DiffFormatter(NullOutputStream.INSTANCE) + setDetectRenames(true)` 走 JGit 6.8 的重命名识别（RENAME 拆为「旧路径进 deleted + 新路径进 changed」）。
+  - 全量：清空 `ci_file_snapshot` 中 `taskId` 全部记录后扫全树；增量：仅删 `changedPaths + deletedPaths` 的 snapshot，按 `subtreeHasMatch` 在目录级短路跳过未变子树。
+  - 始终刷新 `repo.lastCommitId` / `lastDecompileAt`，下次增量即可生效。
+- **下游 4 个服务接口加重载，向后兼容**（旧方法委托到新方法 + `IncrementalContext.fullScan()`）：
+  - `MethodCallService.persistAstForTask(taskId, projectDir, ctx)`：[MethodCallServiceImpl.java](backend/src/main/java/com/company/codeinsight/modules/callchain/service/impl/MethodCallServiceImpl.java) 删变更 + 删除文件的旧调用链；仅对 `changedPaths` 中 .java 重解析。
+  - `CodeChunkService.chunkAndEstimate(taskId, snapshots, ctx)`：[CodeChunkServiceImpl.java](backend/src/main/java/com/company/codeinsight/modules/chunk/service/impl/CodeChunkServiceImpl.java) 抽出 `chunkOneSnapshot(taskId, snapshot)` 给全量/增量共用。
+  - `ModuleHierarchyService.buildAndPersist(taskId, projectDir, ctx)`：[ModuleHierarchyServiceImpl.java](backend/src/main/java/com/company/codeinsight/modules/hierarchy/service/impl/ModuleHierarchyServiceImpl.java) 跳过未变入口的 AI 调用；新增 `purgeDeletedClassPaths` + public `deriveFqcnFromPath`，按 Maven 路径推 FQ 类名从 `function.classPaths` 移除被删引用。
+  - `AiSummaryService.generateDraftDocument(taskId, chunks, promptContent, ctx)`：[AiSummaryServiceImpl.java](backend/src/main/java/com/company/codeinsight/modules/ai/service/impl/AiSummaryServiceImpl.java) 新增 `moduleTouchedByChange`，仅对「function.classPaths 命中变更 FQ」的模块重跑 AI；其余模块的旧草稿保留。
+- **降级路径**（不会让流水线挂在增量分支，警告 + 落全量）：
+  - 无 `repo.lastCommitId` 基线（首次增量）。
+  - 本地路径或 Mock 降级（无 Git 句柄）。
+  - `resolve(ref + "^{tree}")` 失败（force-push / rebase）。
+- **流水线编排**：[DecompileTaskServiceImpl.runPipeline()](backend/src/main/java/com/company/codeinsight/modules/task/service/impl/DecompileTaskServiceImpl.java) 收 `ScanResult`，从 `getIncrementalContext()` 取 ctx 并向四个下游透传；日志多打 `scanMode / changed files / deleted files`。
+- **测试**：[CodeScannerServiceTest.java](backend/src/test/java/com/company/codeinsight/modules/scanner/CodeScannerServiceTest.java) 适配 `ScanResult` 返回类型，并断言 `null` 走 INITIAL 时 `incremental` 应为 false。
+
+### 🔗 复核节点跳转直达
+
+任务列表「打开复核」、任务详情「复核草稿」按钮不再裸跳 `/drafts`，而是带上下文：
+
+- **跳转链路**：[tasks/detail.tsx](frontend/src/pages/tasks/detail.tsx) 新增 `buildDraftsHref(task)` 工具，生成 `/drafts?systemId=X&taskId=Y`。
+- **接收方**：[drafts/index.tsx](frontend/src/pages/drafts/index.tsx) 解析 URL 上的 `systemId` / `taskId`，跳过默认选第一项/优先高亮 REVIEWING 任务的逻辑，直接锁定到指定任务的复核数据；查完工作区后清理 URL 参数（`replace: true`），避免后续系统切换时仍强行跳回原任务。
+
+### 📚 文档同步
+
+- **[README.md](README.md)**：状态机补 `MODULE_HIERARCHY` / `MODULE_HIERARCHY_REVIEW`；业务流程图拆出 INITIAL / INCREMENTAL 两条入口；新增「增量扫描」章节（5 行阶段对照表 + 4 处降级路径）；模块清单从「13 个」纠正为 16 个；测试类计数 14 → 27；新增 v0.1.3 登录认证、模块层级人工复核等核心能力描述。
+- **[CLAUDE.md](CLAUDE.md)**：测试类计数 14 → 27；后端模块分层列出 16 个领域模块名；状态机同步；新增「增量扫描（INCREMENTAL 任务）」小节，把 `IncrementalContext` / `ScanResult` 的位置 + 5 阶段对照表写入；`SecurityConfig` 现状明确为 `anyRequest().permitAll()` + 前端 `useAuthStore + RequireAuth` 仅 UI 级守卫；本地路径修正为 `C:\project\codeInsight\CodeInsightPlatform`。
+
+### 🛠️ 内部优化
+
+- **目录级短路**：`scanDirectory(..., pathFilter)` 在进入目录前用 `subtreeHasMatch` 判断「该目录下是否有命中文件」，无则 `continue`，避免大仓库增量跑时绝大多数未变子树被无谓遍历。
+- **降级优先级**：增量模式下不存在的 `pathFilter` 路径由「抛错」改为「跳过」，与现有「白名单即视作全量」的口径一致。
+- **复用 FQ 推导规则**：`deriveFqcnFromPath` 提到 `ModuleHierarchyServiceImpl` 的 `public static`，让 AI 草稿阶段无需重写一份路径→FQ 转换。
+
+### ⚠️ 已知遗留
+
+- **增量模式不主动删除被删文件对应的旧草稿**：保留以备审计；后续可在 UI 上基于 `filePath in deletedPaths` 增加过滤提示，或在 `generateDraftDocument` 增量分支里加一条「清理孤儿草稿」逻辑。
+- **`createIncrementalTask` 暂无前置校验**：当前若仓库没跑过全量，运行时降级为全量并刷新基线；下一步可以在创建任务时直接拒绝并提示「请先跑一次全量建立基线」。
+- **沙盒环境 PG 不可达**：`mvn test` 因 DataSource 初始化失败无法本地起，可改用 `mvn -DskipTests compile` / `mvn test-compile` 验证。
+
+---
+
 ## [v0.1.3] - 2026-06-27
 
 ### 🔐 登录认证模块上线
