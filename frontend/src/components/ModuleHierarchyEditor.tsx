@@ -1,9 +1,7 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Button,
-  Card,
-  Divider,
   Empty,
   Input,
   Popconfirm,
@@ -16,9 +14,12 @@ import {
 } from 'antd';
 import {
   DeleteOutlined,
+  HolderOutlined,
   LoadingOutlined,
   PlusOutlined,
 } from '@ant-design/icons';
+import Tree from 'antd/es/tree';
+import type { DataNode, TreeProps } from 'antd/es/tree';
 import {
   getModuleHierarchy,
   replaceModuleHierarchy,
@@ -27,6 +28,10 @@ import {
 import type { FunctionNode, ModuleHierarchy, ModuleNode, SubModuleNode } from '../types';
 
 const { Text } = Typography;
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
 
 export interface ModuleHierarchyEditorProps {
   taskId: number;
@@ -38,14 +43,69 @@ export interface ModuleHierarchyEditorProps {
   renderAlert?: () => React.ReactNode;
 }
 
-/**
- * 模块层级调试编辑器（无 Drawer 包装，可被任务详情页 / 复核页直接渲染）
- *
- * - 拉取 getModuleHierarchy → 编辑树 → 提交时调用 replaceModuleHierarchy + resumeModuleHierarchyReview
- * - 功能节点的 classPaths 与模块 / 子模块 / 功能名一样，**整体落表 ci_module_hierarchy**：
- *   服务重启后会由 loadByTaskId 从 DB 重建 DTO，不会丢失
- * - 父组件可自定义「保存并继续」按钮（renderSubmit），便于把动作条放到页头/页脚等位置
- */
+interface EditorDataNode extends DataNode {
+  nodeType: 'MODULE' | 'SUB_MODULE' | 'FUNCTION';
+  /** 方便 allowDrop / onDrop 判断兄弟关系 */
+  parentModuleId?: string;
+  parentSubModuleId?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/** 收集 hierarchy 中所有节点 id（用于新增时避让） */
+function collectAllNodeIds(h: ModuleHierarchy): string[] {
+  const ids: string[] = [];
+  for (const mod of Object.values(h.modules ?? {})) {
+    ids.push(mod.id);
+    for (const sub of Object.values(mod.subModules ?? {})) {
+      ids.push(sub.id);
+      for (const fn of Object.values(sub.functions ?? {})) {
+        ids.push(fn.id);
+      }
+    }
+  }
+  return ids;
+}
+
+/** 根据 nodeKey 在 hierarchy 中定位节点，返回其所在容器引用信息 */
+function findNodeLocation(
+  h: ModuleHierarchy,
+  nodeKey: string,
+): {
+  type: 'MODULE' | 'SUB_MODULE' | 'FUNCTION';
+  moduleId?: string;
+  subModuleId?: string;
+} | null {
+  if (h.modules?.[nodeKey]) return { type: 'MODULE' };
+  for (const [modId, mod] of Object.entries(h.modules ?? {})) {
+    if (mod.subModules?.[nodeKey]) return { type: 'SUB_MODULE', moduleId: modId };
+    for (const [subId, sub] of Object.entries(mod.subModules ?? {})) {
+      if (sub.functions?.[nodeKey]) return { type: 'FUNCTION', moduleId: modId, subModuleId: subId };
+    }
+  }
+  return null;
+}
+
+/** 生成候选 ID：4 位 Base36 + m/s/f 前缀 */
+function generateCandidateId(prefix: 'm' | 's' | 'f', existing: string[]): string {
+  const used = new Set(
+    existing
+      .filter((id) => id?.startsWith(prefix) && id.length === 6)
+      .map((id) => id.substring(1)),
+  );
+  for (let counter = 0; counter < 36 ** 4; counter++) {
+    const body = counter.toString(36).padStart(4, '0');
+    if (!used.has(body)) return `${prefix}${body}`;
+  }
+  return `${prefix}0000`;
+}
+
+// ---------------------------------------------------------------------------
+// Main component
+// ---------------------------------------------------------------------------
+
 const ModuleHierarchyEditor: React.FC<ModuleHierarchyEditorProps> = ({
   taskId,
   onSubmitted,
@@ -55,13 +115,21 @@ const ModuleHierarchyEditor: React.FC<ModuleHierarchyEditorProps> = ({
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [hierarchy, setHierarchy] = useState<ModuleHierarchy | null>(null);
+  const [expandedKeys, setExpandedKeys] = useState<React.Key[]>([]);
+  const hierarchyRef = useRef<ModuleHierarchy | null>(null);
 
-  // 加载当前任务的模块层级
+  // 同步 ref，确保 onDrop 等回调读到最新 hierarchy
+  useEffect(() => {
+    hierarchyRef.current = hierarchy;
+  }, [hierarchy]);
+
+  // 加载当前任务模块层级
   useEffect(() => {
     if (taskId == null) return;
     let cancelled = false;
     setLoading(true);
     setHierarchy(null);
+    setExpandedKeys([]);
     getModuleHierarchy(taskId)
       .then((data) => {
         if (cancelled) return;
@@ -78,7 +146,9 @@ const ModuleHierarchyEditor: React.FC<ModuleHierarchyEditorProps> = ({
     };
   }, [taskId]);
 
-  const setModule = (moduleId: string, next: ModuleNode | null) => {
+  // --------------- Mutation helpers ---------------
+
+  const updateModule = useCallback((moduleId: string, next: ModuleNode | null) => {
     setHierarchy((prev) => {
       if (!prev) return prev;
       const modules = { ...(prev.modules ?? {}) };
@@ -89,87 +159,109 @@ const ModuleHierarchyEditor: React.FC<ModuleHierarchyEditorProps> = ({
       }
       return { ...prev, modules };
     });
-  };
+  }, []);
 
-  const setSubModule = (moduleId: string, subId: string, next: SubModuleNode | null) => {
-    setHierarchy((prev) => {
-      if (!prev) return prev;
-      const m = prev.modules?.[moduleId];
-      if (!m) return prev;
-      const subs = { ...(m.subModules ?? {}) };
-      if (next === null) {
-        delete subs[subId];
-      } else {
-        subs[subId] = next;
-      }
-      return { ...prev, modules: { ...prev.modules, [moduleId]: { ...m, subModules: subs } } };
-    });
-  };
+  const updateSubModule = useCallback(
+    (moduleId: string, subId: string, next: SubModuleNode | null) => {
+      setHierarchy((prev) => {
+        if (!prev) return prev;
+        const m = prev.modules?.[moduleId];
+        if (!m) return prev;
+        const subs = { ...(m.subModules ?? {}) };
+        if (next === null) {
+          delete subs[subId];
+        } else {
+          subs[subId] = next;
+        }
+        return {
+          ...prev,
+          modules: { ...prev.modules, [moduleId]: { ...m, subModules: subs } },
+        };
+      });
+    },
+    [],
+  );
 
-  const setFunction = (moduleId: string, subId: string, fnId: string, next: FunctionNode | null) => {
-    setHierarchy((prev) => {
-      if (!prev) return prev;
-      const m = prev.modules?.[moduleId];
-      const sm = m?.subModules?.[subId];
-      if (!m || !sm) return prev;
-      const fns = { ...(sm.functions ?? {}) };
-      if (next === null) {
-        delete fns[fnId];
-      } else {
-        fns[fnId] = next;
-      }
-      const newSm = { ...sm, functions: fns };
-      return {
-        ...prev,
-        modules: { ...prev.modules, [moduleId]: { ...m, subModules: { ...m.subModules, [subId]: newSm } } },
-      };
-    });
-  };
+  const updateFunction = useCallback(
+    (moduleId: string, subId: string, fnId: string, next: FunctionNode | null) => {
+      setHierarchy((prev) => {
+        if (!prev) return prev;
+        const m = prev.modules?.[moduleId];
+        const sm = m?.subModules?.[subId];
+        if (!m || !sm) return prev;
+        const fns = { ...(sm.functions ?? {}) };
+        if (next === null) {
+          delete fns[fnId];
+        } else {
+          fns[fnId] = next;
+        }
+        return {
+          ...prev,
+          modules: {
+            ...prev.modules,
+            [moduleId]: {
+              ...m,
+              subModules: {
+                ...m.subModules,
+                [subId]: { ...sm, functions: fns },
+              },
+            },
+          },
+        };
+      });
+    },
+    [],
+  );
 
-  // 新增节点 ID：4 位 Base36 + m/s/f 前缀；后端做最终校验
-  const generateCandidateId = (prefix: 'm' | 's' | 'f', existing: string[]): string => {
-    const used = new Set(existing.filter((id) => id?.startsWith(prefix) && id.length === 6).map((id) => id.substring(1)));
-    let body = '';
-    for (let counter = 0; counter < 36 ** 4; counter++) {
-      const v = counter.toString(36).padStart(4, '0');
-      if (!used.has(v)) {
-        body = v;
-        break;
-      }
-    }
-    if (!body) body = '0000';
-    return `${prefix}${body}`;
-  };
-
-  const addModule = () => {
+  const addModule = useCallback(() => {
     setHierarchy((prev) => {
       if (!prev) return prev;
       const existingIds = Object.keys(prev.modules ?? {});
       const newId = generateCandidateId('m', existingIds);
-      const newModule: ModuleNode = { id: newId, moduleName: '新模块', keywords: [], subModules: {} };
-      return { ...prev, modules: { ...(prev.modules ?? {}), [newId]: newModule } };
+      const newMod: ModuleNode = {
+        id: newId,
+        moduleName: '新模块',
+        keywords: [],
+        subModules: {},
+      };
+      // 自动展开新模块
+      setExpandedKeys((keys) => [...keys, newId]);
+      return { ...prev, modules: { ...(prev.modules ?? {}), [newId]: newMod } };
     });
-  };
+  }, []);
 
-  const addSubModule = (moduleId: string) => {
+  const addSubModule = useCallback((moduleId: string) => {
     setHierarchy((prev) => {
       if (!prev) return prev;
       const m = prev.modules?.[moduleId];
       if (!m) return prev;
       const existingIds = Object.keys(m.subModules ?? {});
       const newId = generateCandidateId('s', existingIds);
-      const newSm: SubModuleNode = { id: newId, subModuleName: '新子模块', keywords: [], functions: {} };
+      const newSm: SubModuleNode = {
+        id: newId,
+        subModuleName: '新子模块',
+        keywords: [],
+        functions: {},
+      };
+      // 展开父模块以显示新增子模块
+      setExpandedKeys((keys) => {
+        if (!keys.includes(moduleId)) return [...keys, moduleId];
+        return keys;
+      });
       return {
         ...prev,
         modules: {
           ...prev.modules,
-          [moduleId]: { ...m, subModules: { ...(m.subModules ?? {}), [newId]: newSm } },
+          [moduleId]: {
+            ...m,
+            subModules: { ...(m.subModules ?? {}), [newId]: newSm },
+          },
         },
       };
     });
-  };
+  }, []);
 
-  const addFunction = (moduleId: string, subId: string) => {
+  const addFunction = useCallback((moduleId: string, subId: string) => {
     setHierarchy((prev) => {
       if (!prev) return prev;
       const m = prev.modules?.[moduleId];
@@ -177,7 +269,18 @@ const ModuleHierarchyEditor: React.FC<ModuleHierarchyEditorProps> = ({
       if (!m || !sm) return prev;
       const existingIds = Object.keys(sm.functions ?? {});
       const newId = generateCandidateId('f', existingIds);
-      const newFn: FunctionNode = { id: newId, functionName: '新功能', classPaths: [] };
+      const newFn: FunctionNode = {
+        id: newId,
+        functionName: '新功能',
+        classPaths: [],
+      };
+      // 展开父模块与子模块以显示新增功能
+      setExpandedKeys((keys) => {
+        const next = new Set(keys);
+        next.add(moduleId);
+        next.add(subId);
+        return Array.from(next);
+      });
       return {
         ...prev,
         modules: {
@@ -186,15 +289,383 @@ const ModuleHierarchyEditor: React.FC<ModuleHierarchyEditorProps> = ({
             ...m,
             subModules: {
               ...m.subModules,
-              [subId]: { ...sm, functions: { ...(sm.functions ?? {}), [newId]: newFn } },
+              [subId]: {
+                ...sm,
+                functions: { ...(sm.functions ?? {}), [newId]: newFn },
+              },
             },
           },
         },
       };
     });
-  };
+  }, []);
 
-  // 默认保存并继续提交逻辑（父组件未传 renderSubmit 时使用）
+  // --------------- Drag & Drop ---------------
+
+  const allowDrop: TreeProps['allowDrop'] = useCallback(({ dragNode, dropNode, dropPosition }) => {
+    const drag = dragNode as unknown as EditorDataNode;
+    const drop = dropNode as unknown as EditorDataNode;
+    if (!drag || !drop) return false;
+
+    if (dropPosition === 0) {
+      // 放入节点内部：s → m（移动子模块到模块）, f → s（移动功能到子模块）
+      return (
+        (drag.nodeType === 'SUB_MODULE' && drop.nodeType === 'MODULE') ||
+        (drag.nodeType === 'FUNCTION' && drop.nodeType === 'SUB_MODULE')
+      );
+    }
+    // 间隙放置：只能同类型 + 同父节点（排序）
+    if (drag.nodeType !== drop.nodeType) return false;
+    if (drag.nodeType === 'SUB_MODULE') {
+      return drag.parentModuleId === drop.parentModuleId;
+    }
+    if (drag.nodeType === 'FUNCTION') {
+      return drag.parentSubModuleId === drop.parentSubModuleId;
+    }
+    return false;
+  }, []);
+
+  const onDrop: TreeProps['onDrop'] = useCallback((info) => {
+    const h = hierarchyRef.current;
+    if (!h) return;
+
+    const dragNode = info.dragNode as unknown as EditorDataNode;
+    const dropNode = info.node as unknown as EditorDataNode;
+    const dragKey = String(dragNode.key);
+    const dropKey = String(dropNode.key);
+
+    if (dragKey === dropKey) return;
+
+    setHierarchy((prev) => {
+      if (!prev) return prev;
+
+      if (!info.dropToGap) {
+        // ---- 放入节点内部：改变父子关系 ----
+        if (dragNode.nodeType === 'SUB_MODULE' && dropNode.nodeType === 'MODULE') {
+          // 移动子模块到另一个模块
+          const loc = findNodeLocation(prev, dragKey);
+          if (!loc || loc.type !== 'SUB_MODULE' || loc.moduleId === dropKey) return prev;
+          const oldModId = loc.moduleId!;
+          const modules = { ...(prev.modules ?? {}) };
+          const oldMod = { ...modules[oldModId] };
+          const subs = { ...(oldMod.subModules ?? {}) };
+          const moved = subs[dragKey];
+          if (!moved) return prev;
+          delete subs[dragKey];
+          oldMod.subModules = subs;
+          modules[oldModId] = oldMod;
+          const newMod = { ...modules[dropKey] };
+          newMod.subModules = { ...(newMod.subModules ?? {}), [dragKey]: moved };
+          modules[dropKey] = newMod;
+          return { ...prev, modules };
+        }
+        if (dragNode.nodeType === 'FUNCTION' && dropNode.nodeType === 'SUB_MODULE') {
+          // 移动功能到另一个子模块
+          const loc = findNodeLocation(prev, dragKey);
+          if (!loc || loc.type !== 'FUNCTION' || loc.subModuleId === dropKey) return prev;
+          const oldModId = loc.moduleId!;
+          const oldSubId = loc.subModuleId!;
+          const modules = { ...(prev.modules ?? {}) };
+          const oldMod = { ...modules[oldModId] };
+          const oldSubs = { ...(oldMod.subModules ?? {}) };
+          const oldSub = { ...oldSubs[oldSubId] };
+          const fns = { ...(oldSub.functions ?? {}) };
+          const moved = fns[dragKey];
+          if (!moved) return prev;
+          delete fns[dragKey];
+          oldSub.functions = fns;
+          oldSubs[oldSubId] = oldSub;
+          oldMod.subModules = oldSubs;
+          modules[oldModId] = oldMod;
+
+          // 找到目标子模块所在模块
+          const targetModId = dropNode.parentModuleId!;
+          const targetMod = { ...modules[targetModId] };
+          const targetSubs = { ...(targetMod.subModules ?? {}) };
+          const targetSub = { ...targetSubs[dropKey] };
+          targetSub.functions = { ...(targetSub.functions ?? {}), [dragKey]: moved };
+          targetSubs[dropKey] = targetSub;
+          targetMod.subModules = targetSubs;
+          modules[targetModId] = targetMod;
+
+          return { ...prev, modules };
+        }
+        return prev;
+      }
+
+      // ---- 间隙放置：同级排序 ----
+      if (dragNode.nodeType === 'SUB_MODULE' && dropNode.nodeType === 'SUB_MODULE') {
+        const modId = dragNode.parentModuleId!;
+        const modules = { ...(prev.modules ?? {}) };
+        const mod = { ...modules[modId] };
+        const subs = { ...(mod.subModules ?? {}) };
+        const entries = Object.entries(subs);
+        const dragIdx = entries.findIndex(([k]) => k === dragKey);
+        if (dragIdx === -1) return prev;
+        const [moved] = entries.splice(dragIdx, 1);
+        let dropIdx = entries.findIndex(([k]) => k === dropKey);
+        if (dropIdx === -1) return prev;
+        if (info.dropPosition === 1) dropIdx += 1;
+        entries.splice(dropIdx, 0, moved);
+        mod.subModules = Object.fromEntries(entries);
+        modules[modId] = mod;
+        return { ...prev, modules };
+      }
+
+      if (dragNode.nodeType === 'FUNCTION' && dropNode.nodeType === 'FUNCTION') {
+        const modId = dragNode.parentModuleId!;
+        const subId = dragNode.parentSubModuleId!;
+        const modules = { ...(prev.modules ?? {}) };
+        const mod = { ...modules[modId] };
+        const subs = { ...(mod.subModules ?? {}) };
+        const sub = { ...subs[subId] };
+        const fns = { ...(sub.functions ?? {}) };
+        const entries = Object.entries(fns);
+        const dragIdx = entries.findIndex(([k]) => k === dragKey);
+        if (dragIdx === -1) return prev;
+        const [moved] = entries.splice(dragIdx, 1);
+        let dropIdx = entries.findIndex(([k]) => k === dropKey);
+        if (dropIdx === -1) return prev;
+        if (info.dropPosition === 1) dropIdx += 1;
+        entries.splice(dropIdx, 0, moved);
+        sub.functions = Object.fromEntries(entries);
+        subs[subId] = sub;
+        mod.subModules = subs;
+        modules[modId] = mod;
+        return { ...prev, modules };
+      }
+
+      return prev;
+    });
+  }, []);
+
+  // --------------- Tree data ---------------
+
+  const treeData: EditorDataNode[] = useMemo(() => {
+    if (!hierarchy) return [];
+    return Object.values(hierarchy.modules ?? {}).map((mod) => {
+      const subChildren: EditorDataNode[] = Object.values(mod.subModules ?? {}).map((sub) => {
+        const fnChildren: EditorDataNode[] = Object.values(sub.functions ?? {}).map((fn) => ({
+          key: fn.id,
+          title: fn.functionName,
+          nodeType: 'FUNCTION' as const,
+          parentModuleId: mod.id,
+          parentSubModuleId: sub.id,
+          isLeaf: true,
+        }));
+        return {
+          key: sub.id,
+          title: sub.subModuleName,
+          nodeType: 'SUB_MODULE' as const,
+          parentModuleId: mod.id,
+          children: fnChildren,
+        };
+      });
+      return {
+        key: mod.id,
+        title: mod.moduleName,
+        nodeType: 'MODULE' as const,
+        children: subChildren,
+      };
+    });
+  }, [hierarchy]);
+
+  // --------------- titleRender ---------------
+  // 直接使用 hierarchy state（非 ref），确保渲染期间读到最新值
+
+  const titleRender = (nodeData: DataNode) => {
+    const nd = nodeData as EditorDataNode;
+    if (!hierarchy) return <Text type="secondary">—</Text>;
+
+      if (nd.nodeType === 'MODULE') {
+        const mod = hierarchy.modules?.[nd.key as string];
+        if (!mod) return <Text type="secondary">—</Text>;
+        return (
+          <div
+            className="ci-tree-node-title"
+            onMouseDown={(e) => {
+              // 阻止输入框点击冒泡触发树节点拖拽
+              e.stopPropagation();
+            }}
+          >
+            <HolderOutlined className="ci-tree-drag-handle" />
+            <Tag color="purple" className="ci-tree-node-tag">
+              模块
+            </Tag>
+            <Input
+              size="small"
+              className="ci-tree-name-input"
+              value={mod.moduleName}
+              onChange={(e) => updateModule(mod.id, { ...mod, moduleName: e.target.value })}
+              placeholder="模块名（业务领域/场景）"
+              onClick={(e) => e.stopPropagation()}
+            />
+            <Select
+              mode="tags"
+              size="small"
+              className="ci-tree-keyword-select"
+              placeholder="关键词"
+              value={mod.keywords ?? []}
+              onChange={(keywords) => updateModule(mod.id, { ...mod, keywords })}
+              onClick={(e) => e.stopPropagation()}
+              maxTagCount={3}
+              popupMatchSelectWidth={false}
+            />
+            <span className="ci-tree-node-actions">
+              <Tooltip title="新增子模块">
+                <Button
+                  size="small"
+                  type="link"
+                  icon={<PlusOutlined />}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    addSubModule(mod.id);
+                  }}
+                />
+              </Tooltip>
+              <Popconfirm
+                title="确认删除该模块及其所有子节点？"
+                onConfirm={(e) => {
+                  e?.stopPropagation();
+                  updateModule(mod.id, null);
+                }}
+                onCancel={(e) => e?.stopPropagation()}
+              >
+                <Button
+                  size="small"
+                  type="link"
+                  danger
+                  icon={<DeleteOutlined />}
+                  onClick={(e) => e.stopPropagation()}
+                />
+              </Popconfirm>
+            </span>
+          </div>
+        );
+      }
+
+      if (nd.nodeType === 'SUB_MODULE') {
+        const modId = nd.parentModuleId!;
+        const sub = hierarchy.modules?.[modId]?.subModules?.[nd.key as string];
+        if (!sub) return <Text type="secondary">—</Text>;
+        return (
+          <div className="ci-tree-node-title" onMouseDown={(e) => e.stopPropagation()}>
+            <HolderOutlined className="ci-tree-drag-handle" />
+            <Tag color="cyan" className="ci-tree-node-tag">
+              子模块
+            </Tag>
+            <Input
+              size="small"
+              className="ci-tree-name-input"
+              value={sub.subModuleName}
+              onChange={(e) =>
+                updateSubModule(modId, sub.id, { ...sub, subModuleName: e.target.value })
+              }
+              placeholder="子模块名（具体业务功能）"
+              onClick={(e) => e.stopPropagation()}
+            />
+            <Select
+              mode="tags"
+              size="small"
+              className="ci-tree-keyword-select"
+              placeholder="关键词"
+              value={sub.keywords ?? []}
+              onChange={(keywords) => updateSubModule(modId, sub.id, { ...sub, keywords })}
+              onClick={(e) => e.stopPropagation()}
+              maxTagCount={3}
+              popupMatchSelectWidth={false}
+            />
+            <span className="ci-tree-node-actions">
+              <Tooltip title="新增功能">
+                <Button
+                  size="small"
+                  type="link"
+                  icon={<PlusOutlined />}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    addFunction(modId, sub.id);
+                  }}
+                />
+              </Tooltip>
+              <Popconfirm
+                title="确认删除该子模块及其所有功能？"
+                onConfirm={(e) => {
+                  e?.stopPropagation();
+                  updateSubModule(modId, sub.id, null);
+                }}
+                onCancel={(e) => e?.stopPropagation()}
+              >
+                <Button
+                  size="small"
+                  type="link"
+                  danger
+                  icon={<DeleteOutlined />}
+                  onClick={(e) => e.stopPropagation()}
+                />
+              </Popconfirm>
+            </span>
+          </div>
+        );
+      }
+
+      // FUNCTION
+      const modId = nd.parentModuleId!;
+      const subId = nd.parentSubModuleId!;
+      const fn = hierarchy.modules?.[modId]?.subModules?.[subId]?.functions?.[nd.key as string];
+      if (!fn) return <Text type="secondary">—</Text>;
+      return (
+        <div className="ci-tree-node-title" onMouseDown={(e) => e.stopPropagation()}>
+          <HolderOutlined className="ci-tree-drag-handle" />
+          <Tag color="green" className="ci-tree-node-tag">
+            功能
+          </Tag>
+          <Input
+            size="small"
+            className="ci-tree-name-input"
+            value={fn.functionName}
+            onChange={(e) =>
+              updateFunction(modId, subId, fn.id, { ...fn, functionName: e.target.value })
+            }
+            placeholder="业务功能名（动词短语，如「白名单查询」）"
+            onClick={(e) => e.stopPropagation()}
+          />
+          <Tooltip title="入口类全限定名集合；与其它字段一起落表，重启不会丢失。仅在提示词中被剥离。">
+            <Select
+              mode="tags"
+              size="small"
+              className="ci-tree-classpath-select"
+              placeholder="类路径（如 com.example.Controller）"
+              value={fn.classPaths ?? []}
+              onChange={(classPaths) => updateFunction(modId, subId, fn.id, { ...fn, classPaths })}
+              onClick={(e) => e.stopPropagation()}
+              maxTagCount={2}
+              popupMatchSelectWidth={false}
+            />
+          </Tooltip>
+          <span className="ci-tree-node-actions">
+            <Popconfirm
+              title="确认删除该功能节点？"
+              onConfirm={(e) => {
+                e?.stopPropagation();
+                updateFunction(modId, subId, fn.id, null);
+              }}
+              onCancel={(e) => e?.stopPropagation()}
+            >
+              <Button
+                size="small"
+                type="link"
+                danger
+                icon={<DeleteOutlined />}
+                onClick={(e) => e.stopPropagation()}
+              />
+            </Popconfirm>
+          </span>
+        </div>
+      );
+    };
+
+  // --------------- Submit ---------------
+
   const handleSubmit = async () => {
     if (!hierarchy) return;
     setSaving(true);
@@ -208,7 +679,9 @@ const ModuleHierarchyEditor: React.FC<ModuleHierarchyEditorProps> = ({
     }
   };
 
-  const modules = useMemo(() => Object.values(hierarchy?.modules ?? {}), [hierarchy]);
+  // --------------- Render ---------------
+
+  const moduleCount = Object.keys(hierarchy?.modules ?? {}).length;
 
   if (loading) {
     return (
@@ -224,6 +697,7 @@ const ModuleHierarchyEditor: React.FC<ModuleHierarchyEditorProps> = ({
 
   return (
     <div>
+      {/* 顶部说明 */}
       {renderAlert ? (
         renderAlert()
       ) : (
@@ -234,235 +708,94 @@ const ModuleHierarchyEditor: React.FC<ModuleHierarchyEditorProps> = ({
           message="模块层级调试说明"
           description={
             <ul style={{ margin: 0, paddingLeft: 18 }}>
-              <li>支持新增 / 删除模块、子模块、功能节点，并修改名称、关键词。</li>
-              <li>功能节点的「类路径」与其它字段一样整体落表 <Text code>ci_module_hierarchy</Text>（FUNCTION 行 class_paths 列），服务重启不会丢失。</li>
-              <li>「类路径」仅在调用 AI 时被剥离，不会出现在 analyze / module_doc 提示词中；只用于本服务的源码聚合（collectModuleSourceCode）。</li>
-              <li>点击「保存并继续」将落表 ModuleHierarchy 并推进流水线至 GENERATING_DOC。</li>
+              <li>
+                树状展示模块 → 子模块 → 功能；默认仅显示模块，点击箭头展开查看子级。
+              </li>
+              <li>
+                拖拽 <HolderOutlined /> 手柄可移动子模块（放入另一模块）或功能（放入另一子模块），同层间隙放置可排序。
+              </li>
+              <li>
+                功能节点的「类路径」与其它字段一起整体落表 <Text code>ci_module_hierarchy</Text>
+                （FUNCTION 行 class_paths 列），服务重启不会丢失。
+              </li>
+              <li>
+                「类路径」仅在调用 AI 时被剥离，不会出现在 analyze / module_doc 提示词中。
+              </li>
+              <li>
+                点击「保存并继续」将落表 ModuleHierarchy 并推进流水线至 GENERATING_DOC。
+              </li>
             </ul>
           }
         />
       )}
 
-      {renderSubmit && (
-        <div style={{ marginBottom: 12, textAlign: 'right' }}>
-          {renderSubmit(handleSubmit, saving)}
-        </div>
-      )}
-
-      <div style={{ marginBottom: 12 }}>
-        <Button type="dashed" icon={<PlusOutlined />} onClick={addModule}>
-          新增模块
-        </Button>
+      {/* 操作栏 */}
+      <div
+        style={{
+          marginBottom: 12,
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          gap: 8,
+        }}
+      >
+        <Space>
+          <Button type="dashed" icon={<PlusOutlined />} onClick={addModule}>
+            新增模块
+          </Button>
+          {moduleCount > 0 && (
+            <Button
+              size="small"
+              onClick={() => {
+                // 全部展开
+                setExpandedKeys(collectAllNodeIds(hierarchy).filter((id) => !id.startsWith('f')));
+              }}
+            >
+              全部展开
+            </Button>
+          )}
+          {expandedKeys.length > 0 && (
+            <Button size="small" onClick={() => setExpandedKeys([])}>
+              全部折叠
+            </Button>
+          )}
+        </Space>
+        {renderSubmit && renderSubmit(handleSubmit, saving)}
       </div>
 
-      {modules.length === 0 && <Empty description="尚无模块，点击上方按钮新增" />}
-
-      {modules.map((mod) => (
-        <ModuleCard
-          key={mod.id}
-          module={mod}
-          onChangeModule={(next) => setModule(mod.id, next)}
-          onDeleteModule={() => setModule(mod.id, null)}
-          onChangeSub={(subId, next) => setSubModule(mod.id, subId, next)}
-          onAddSub={() => addSubModule(mod.id)}
-          onChangeFn={(subId, fnId, next) => setFunction(mod.id, subId, fnId, next)}
-          onAddFn={(subId) => addFunction(mod.id, subId)}
-        />
-      ))}
+      {/* 树容器 */}
+      {moduleCount === 0 ? (
+        <Empty description="尚无模块，点击上方「新增模块」按钮添加" />
+      ) : (
+        <div className="ci-hierarchy-tree-container">
+          <Tree
+            className="ci-hierarchy-tree"
+            treeData={treeData}
+            titleRender={titleRender}
+            draggable={{
+              icon: false,
+              nodeDraggable: () => true,
+            }}
+            allowDrop={allowDrop}
+            onDrop={onDrop}
+            expandedKeys={expandedKeys}
+            onExpand={(keys) => setExpandedKeys(keys)}
+            blockNode
+            showLine={{ showLeafIcon: false }}
+            motion={{
+              motionName: '',
+              motionAppear: false,
+              onAppearStart: () => ({ height: 0, opacity: 0 }),
+              onAppearActive: () => ({ height: 'auto', opacity: 1 }),
+              onLeaveStart: () => ({ height: 'auto', opacity: 1 }),
+              onLeaveActive: () => ({ height: 0, opacity: 0 }),
+            }}
+            virtual={false}
+          />
+        </div>
+      )}
     </div>
-  );
-};
-
-interface ModuleCardProps {
-  module: ModuleNode;
-  onChangeModule: (next: ModuleNode | null) => void;
-  onDeleteModule: () => void;
-  onChangeSub: (subId: string, next: SubModuleNode | null) => void;
-  onAddSub: () => void;
-  onChangeFn: (subId: string, fnId: string, next: FunctionNode | null) => void;
-  onAddFn: (subId: string) => void;
-}
-
-const ModuleCard: React.FC<ModuleCardProps> = ({
-  module,
-  onChangeModule,
-  onDeleteModule,
-  onChangeSub,
-  onAddSub,
-  onChangeFn,
-  onAddFn,
-}) => {
-  const subList = Object.values(module.subModules ?? {});
-  return (
-    <Card
-      size="small"
-      title={
-        <Space>
-          <Tag color="purple">模块 {module.id}</Tag>
-          <Input
-            size="small"
-            style={{ width: 280 }}
-            value={module.moduleName}
-            onChange={(e) => onChangeModule({ ...module, moduleName: e.target.value })}
-            placeholder="模块名（业务领域/场景）"
-          />
-        </Space>
-      }
-      extra={
-        <Popconfirm title="确认删除该模块及其所有子节点？" onConfirm={onDeleteModule}>
-          <Button size="small" danger type="text" icon={<DeleteOutlined />}>
-            删除模块
-          </Button>
-        </Popconfirm>
-      }
-      style={{ marginBottom: 12 }}
-    >
-      <Space direction="vertical" size={12} style={{ width: '100%' }}>
-        <Space wrap>
-          <Text type="secondary">关键词（仅名词）</Text>
-          <Select
-            mode="tags"
-            size="small"
-            style={{ minWidth: 360 }}
-            placeholder="3-5 个名词"
-            value={module.keywords ?? []}
-            onChange={(keywords) => onChangeModule({ ...module, keywords })}
-          />
-        </Space>
-
-        <Divider style={{ margin: '8px 0' }} />
-
-        <Space style={{ width: '100%', justifyContent: 'space-between' }}>
-          <Text strong>子模块 ({subList.length})</Text>
-          <Button size="small" icon={<PlusOutlined />} onClick={onAddSub}>
-            新增子模块
-          </Button>
-        </Space>
-
-        {subList.length === 0 && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="尚无子模块" />}
-
-        {subList.map((sub) => (
-          <SubModuleCard
-            key={sub.id}
-            sub={sub}
-            onChange={(next) => onChangeSub(sub.id, next)}
-            onDelete={() => onChangeSub(sub.id, null)}
-            onChangeFn={(fnId, next) => onChangeFn(sub.id, fnId, next)}
-            onAddFn={() => onAddFn(sub.id)}
-          />
-        ))}
-      </Space>
-    </Card>
-  );
-};
-
-interface SubModuleCardProps {
-  sub: SubModuleNode;
-  onChange: (next: SubModuleNode | null) => void;
-  onDelete: () => void;
-  onChangeFn: (fnId: string, next: FunctionNode | null) => void;
-  onAddFn: () => void;
-}
-
-const SubModuleCard: React.FC<SubModuleCardProps> = ({ sub, onChange, onDelete, onChangeFn, onAddFn }) => {
-  const fnList = Object.values(sub.functions ?? {});
-  return (
-    <Card
-      size="small"
-      type="inner"
-      title={
-        <Space>
-          <Tag color="cyan">子模块 {sub.id}</Tag>
-          <Input
-            size="small"
-            style={{ width: 240 }}
-            value={sub.subModuleName}
-            onChange={(e) => onChange({ ...sub, subModuleName: e.target.value })}
-            placeholder="子模块名（具体业务功能）"
-          />
-        </Space>
-      }
-      extra={
-        <Popconfirm title="确认删除该子模块及其所有功能？" onConfirm={onDelete}>
-          <Button size="small" danger type="text" icon={<DeleteOutlined />}>
-            删除子模块
-          </Button>
-        </Popconfirm>
-      }
-    >
-      <Space direction="vertical" size={12} style={{ width: '100%' }}>
-        <Space wrap>
-          <Text type="secondary">关键词</Text>
-          <Select
-            mode="tags"
-            size="small"
-            style={{ minWidth: 320 }}
-            placeholder="3-5 个关键词"
-            value={sub.keywords ?? []}
-            onChange={(keywords) => onChange({ ...sub, keywords })}
-          />
-        </Space>
-
-        <Space style={{ width: '100%', justifyContent: 'space-between' }}>
-          <Text strong>功能 ({fnList.length})</Text>
-          <Button size="small" icon={<PlusOutlined />} onClick={onAddFn}>
-            新增功能
-          </Button>
-        </Space>
-
-        {fnList.length === 0 && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="尚无功能" />}
-
-        {fnList.map((fn) => (
-          <FunctionRow
-            key={fn.id}
-            fn={fn}
-            onChange={(next) => onChangeFn(fn.id, next)}
-            onDelete={() => onChangeFn(fn.id, null)}
-          />
-        ))}
-      </Space>
-    </Card>
-  );
-};
-
-interface FunctionRowProps {
-  fn: FunctionNode;
-  onChange: (next: FunctionNode | null) => void;
-  onDelete: () => void;
-}
-
-const FunctionRow: React.FC<FunctionRowProps> = ({ fn, onChange, onDelete }) => {
-  return (
-    <Card size="small" type="inner" style={{ background: '#fafafa' }}>
-      <Space direction="vertical" size={8} style={{ width: '100%' }}>
-        <Space wrap>
-          <Tag color="green">功能 {fn.id}</Tag>
-          <Input
-            size="small"
-            style={{ width: 280 }}
-            value={fn.functionName}
-            onChange={(e) => onChange({ ...fn, functionName: e.target.value })}
-            placeholder="业务功能名（动词短语，如「白名单查询」）"
-          />
-          <Popconfirm title="确认删除该功能节点？" onConfirm={onDelete}>
-            <Button size="small" danger type="text" icon={<DeleteOutlined />}>
-              删除
-            </Button>
-          </Popconfirm>
-        </Space>
-
-        <Tooltip title="入口类全限定名集合；与其它字段一起落表 ci_module_hierarchy.class_paths，重启不会丢失。仅在提示词中被剥离，不会随提示词发往大模型。">
-          <Select
-            mode="tags"
-            size="small"
-            style={{ width: '100%' }}
-            placeholder="入口类路径（如 com.example.Controller，可输入后回车添加）"
-            value={fn.classPaths ?? []}
-            onChange={(classPaths) => onChange({ ...fn, classPaths })}
-          />
-        </Tooltip>
-      </Space>
-    </Card>
   );
 };
 

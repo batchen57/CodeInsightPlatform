@@ -17,6 +17,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -28,6 +29,19 @@ import java.util.regex.Pattern;
 @Slf4j
 @Service
 public class JavaParserServiceImpl implements JavaParserService {
+
+    /**
+     * 任务级解析结果缓存，避免 Stage 2（方法调用链）和 Stage 3（代码切片）对同一文件重复 AST 解析。
+     * key = task_{taskId}/relativePath（从文件绝对路径中提取，与 temp_repos/ 和 storage/ 前缀无关）
+     */
+    private final ConcurrentHashMap<String, ParsedClassInfo> parseCache = new ConcurrentHashMap<>();
+
+    /** 从文件绝对路径中提取缓存 key：task_{taskId}/relativePath，去掉前缀差异 */
+    private static String cacheKey(File file) {
+        String abs = file.getAbsolutePath().replace('\\', '/');
+        int idx = abs.indexOf("/task_");
+        return idx >= 0 ? abs.substring(idx + 1) : abs;
+    }
 
     // 正则表达式：解析包名定义
     private static final Pattern PACKAGE_PATTERN = Pattern.compile("^\\s*package\\s+([\\w.]+);");
@@ -69,6 +83,13 @@ public class JavaParserServiceImpl implements JavaParserService {
     public ParsedClassInfo parseFile(File file) {
         if (file == null || !file.exists() || !file.getName().endsWith(".java")) {
             return null;
+        }
+
+        // 任务级缓存：Stage 2 解析后 Stage 3 直接命中，避免同文件 AST 重复解析
+        String key = cacheKey(file);
+        ParsedClassInfo cached = parseCache.get(key);
+        if (cached != null) {
+            return cached;
         }
 
         ParsedClassInfo classInfo = new ParsedClassInfo();
@@ -231,6 +252,7 @@ public class JavaParserServiceImpl implements JavaParserService {
         // 识别 Java SE 标准入口方法 public static void main(String[] args)
         detectMainMethod(classInfo);
 
+        parseCache.put(key, classInfo);
         return classInfo;
     }
 

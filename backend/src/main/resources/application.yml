@@ -3,3 +3,8 @@ spring:
     active: local
   main:
     banner-mode: "off"
+
+# 全局默认值（各 profile 可通过 application-{profile}.yml 覆盖）
+code-insight:
+  ai:
+    hierarchy-parallelism: 4   # 模块层级 AI 调用并发数，按模型 API 限流调整

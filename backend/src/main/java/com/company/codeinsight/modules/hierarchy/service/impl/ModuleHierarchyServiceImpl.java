@@ -24,10 +24,13 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
+
+import jakarta.annotation.PostConstruct;
 
 import java.io.File;
 import java.nio.file.Files;
@@ -41,6 +44,9 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * 模块层级服务实现
@@ -88,6 +94,21 @@ public class ModuleHierarchyServiceImpl implements ModuleHierarchyService {
     private com.company.codeinsight.modules.prompt.service.DecompilePromptService decompilePromptService;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
+
+    /** AI 调用专用线程池，并发度由 {@code code-insight.ai.hierarchy-parallelism} 控制，避免打爆 LLM API */
+    @Value("${code-insight.ai.hierarchy-parallelism:4}")
+    private int hierarchyParallelism;
+
+    private ExecutorService aiExecutor;
+
+    @PostConstruct
+    public void initAiExecutor() {
+        aiExecutor = Executors.newFixedThreadPool(hierarchyParallelism, r -> {
+            Thread t = new Thread(r, "hierarchy-ai-");
+            t.setDaemon(true);
+            return t;
+        });
+    }
 
     @Override
     @Transactional(rollbackFor = Exception.class)
@@ -144,20 +165,37 @@ public class ModuleHierarchyServiceImpl implements ModuleHierarchyService {
             promptTemplate = promptTemplateLoader.load(MODULARIZE_PROMPT_FALLBACK_PATH);
         }
 
-        // 4. 遍历每个入口
-        int processedByAi = 0;
+        // 4. 收集需处理的入口（增量模式下跳过未变更入口）
         int skippedByIncremental = 0;
+        List<EntryPoint> toProcess = new ArrayList<>();
         for (EntryPoint entry : entries) {
-            try {
-                // 增量模式：仅对变更文件对应的入口重新调 AI，其余入口保留 DTO 中已有数据
-                if (effective.isIncremental() && !effective.isPathChanged(entry.getFilePath())) {
-                    skippedByIncremental++;
-                    continue;
+            if (effective.isIncremental() && !effective.isPathChanged(entry.getFilePath())) {
+                skippedByIncremental++;
+            } else {
+                toProcess.add(entry);
+            }
+        }
+
+        int processedByAi = 0;
+        if (!toProcess.isEmpty()) {
+            // 4a. 并行调用 AI（每个入口独立请求，I/O 密集型，线程池控制并发度为 4）
+            final String finalPrompt = promptTemplate;
+            final EntryPointConfig finalConfig = entryPointConfig;
+            final DecompileTask finalTask = task;
+            final File finalProjectDir = projectDir;
+            List<CompletableFuture<JsonNode>> futures = toProcess.stream()
+                    .map(entry -> CompletableFuture.supplyAsync(
+                            () -> callAiForEntry(finalTask, entry, finalPrompt, finalProjectDir, finalConfig),
+                            aiExecutor))
+                    .toList();
+
+            // 4b. 顺序合并结果到 DTO（共享 hierarchy 需要单线程写入）
+            for (int i = 0; i < futures.size(); i++) {
+                JsonNode inc = futures.get(i).join();
+                if (inc != null) {
+                    mergeEntryResult(hierarchy, toProcess.get(i), inc);
+                    processedByAi++;
                 }
-                processEntry(task, hierarchy, entry, promptTemplate, projectDir, entryPointConfig);
-                processedByAi++;
-            } catch (Exception e) {
-                log.error("processEntry failed for {}: {}", entry.getClassName(), e.getMessage(), e);
             }
         }
 
@@ -304,79 +342,79 @@ public class ModuleHierarchyServiceImpl implements ModuleHierarchyService {
     // ============================ private helpers ============================
 
     /**
-     * 处理单个入口：渲染 prompt → 调 AI → 解析 JSON → 合并到 DTO → 注入 classPaths
+     * 并行阶段：对单个入口渲染 prompt 并调 AI（含重试），返回解析后的 JSON 节点。
+     * 失败时内部已打日志，返回 null。
      */
-    private void processEntry(DecompileTask task, ModuleHierarchy hierarchy,
-                              EntryPoint entry, String promptTemplate, File projectDir,
-                              EntryPointConfig entryPointConfig) {
-        // 只读取入口类自身源码（不做 BFS 依赖展开），AI 看入口类方法签名和注解即可判定业务领域归属
-        String javaCode = entryPointDiscoveryService.readEntrySource(projectDir, entry, entryPointConfig);
-        if (!StringUtils.hasText(javaCode)) {
-            log.warn("入口 {} 无可读源文件或命中排除规则，跳过", entry.getClassName());
-            return;
-        }
-
-        // 业务知识库 + 已有层级（这里用空字符串，DTO 本身就是合并的权威源）
-        String businessKnowledge = readOptionalFile(
-                Paths.get("temp_repos", "task_" + task.getId(), "docs", "code-insight", "meta", "business_knowledge.md")
-        );
-        String existingHierarchyJson = serializeHierarchyToJson(hierarchy);
-
-        String promptInput = promptTemplateLoader.render(promptTemplate, javaCode, businessKnowledge, existingHierarchyJson);
-        if (promptTemplateLoader.hasUnresolvedPlaceholders(promptInput)) {
-            log.warn("Prompt 仍有未替换占位符，跳过入口 {}", entry.getClassName());
-            return;
-        }
-
-        AiSummaryService.AiCallMeta meta = new AiSummaryService.AiCallMeta();
-        meta.setCallStage("MODULE_HIERARCHY");
-        meta.setClassPath(entry.getClassName());
-
-        // 带重试的 AI 调用 + JSON 解析：最多尝试 2 次，解析失败时附加错误信息重试
-        int maxAttempts = 2;
-        String currentPrompt = promptInput;
-        JsonNode inc = null;
-        boolean parsed = false;
-
-        for (int attempt = 1; attempt <= maxAttempts; attempt++) {
-            String aiResponse = aiSummaryService.summarizeWithPrompt(task.getId(), currentPrompt, task.getModelName(), meta);
-            if (!StringUtils.hasText(aiResponse) || "{}".equals(aiResponse.trim())) {
-                if (attempt < maxAttempts) {
-                    log.info("入口 {} AI 返回为空（第 {} 次），重试", entry.getClassName(), attempt);
-                    continue;
-                }
-                log.warn("入口 {} AI 经过 {} 次尝试仍未返回有效响应，跳过", entry.getClassName(), maxAttempts);
-                return;
+    private JsonNode callAiForEntry(DecompileTask task, EntryPoint entry,
+                                    String promptTemplate, File projectDir,
+                                    EntryPointConfig entryPointConfig) {
+        try {
+            String javaCode = entryPointDiscoveryService.readEntrySource(projectDir, entry, entryPointConfig);
+            if (!StringUtils.hasText(javaCode)) {
+                log.warn("入口 {} 无可读源文件或命中排除规则，跳过", entry.getClassName());
+                return null;
             }
 
-            try {
-                String cleaned = stripCodeFence(aiResponse);
-                inc = objectMapper.readTree(cleaned);
-                parsed = true;
-                break;
-            } catch (Exception e) {
-                String errorMsg = e.getMessage();
-                log.warn("入口 {} AI 响应 JSON 解析失败（第 {} 次）: {}", entry.getClassName(), attempt, errorMsg);
-                if (attempt < maxAttempts) {
-                    // 附加错误信息重试，引导 AI 修正输出
-                    currentPrompt = promptInput + "\n\n[系统提示] 上轮输出 JSON 解析失败：" + errorMsg
-                            + "\n请确保输出是合法的 JSON 格式（用 ```json ... ``` 包裹），字段约束见上方模板。";
-                } else {
-                    log.warn("入口 {} AI 响应 JSON 解析已重试 {} 次仍失败，跳过。原始响应前 200 字符: {}",
-                            entry.getClassName(), maxAttempts,
-                            aiResponse.substring(0, Math.min(200, aiResponse.length())));
-                    return;
+            String businessKnowledge = readOptionalFile(
+                    Paths.get("temp_repos", "task_" + task.getId(), "docs", "code-insight", "meta", "business_knowledge.md")
+            );
+            // 注意：并行阶段不传 hierarchy JSON——各入口无法看到其他入口的并发写入，
+            // AI 本身已通过 prompt 中的入口源码即可判定业务领域归属，缺失上下文不影响模块归属准确性
+            String promptInput = promptTemplateLoader.render(promptTemplate, javaCode, businessKnowledge, "{}");
+            if (promptTemplateLoader.hasUnresolvedPlaceholders(promptInput)) {
+                log.warn("Prompt 仍有未替换占位符，跳过入口 {}", entry.getClassName());
+                return null;
+            }
+
+            AiSummaryService.AiCallMeta meta = new AiSummaryService.AiCallMeta();
+            meta.setCallStage("MODULE_HIERARCHY");
+            meta.setClassPath(entry.getClassName());
+
+            int maxAttempts = 2;
+            String currentPrompt = promptInput;
+            for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+                String aiResponse = aiSummaryService.summarizeWithPrompt(task.getId(), currentPrompt, task.getModelName(), meta);
+                if (!StringUtils.hasText(aiResponse) || "{}".equals(aiResponse.trim())) {
+                    if (attempt < maxAttempts) {
+                        log.info("入口 {} AI 返回为空（第 {} 次），重试", entry.getClassName(), attempt);
+                        continue;
+                    }
+                    log.warn("入口 {} AI 经过 {} 次尝试仍未返回有效响应，跳过", entry.getClassName(), maxAttempts);
+                    return null;
+                }
+
+                try {
+                    String cleaned = stripCodeFence(aiResponse);
+                    JsonNode inc = objectMapper.readTree(cleaned);
+                    return inc;
+                } catch (Exception e) {
+                    String errorMsg = e.getMessage();
+                    log.warn("入口 {} AI 响应 JSON 解析失败（第 {} 次）: {}", entry.getClassName(), attempt, errorMsg);
+                    if (attempt < maxAttempts) {
+                        currentPrompt = promptInput + "\n\n[系统提示] 上轮输出 JSON 解析失败：" + errorMsg
+                                + "\n请确保输出是合法的 JSON 格式（用 ```json ... ``` 包裹），字段约束见上方模板。";
+                    } else {
+                        log.warn("入口 {} AI 响应 JSON 解析已重试 {} 次仍失败，跳过。原始响应前 200 字符: {}",
+                                entry.getClassName(), maxAttempts,
+                                aiResponse.substring(0, Math.min(200, aiResponse.length())));
+                        return null;
+                    }
                 }
             }
+        } catch (Exception e) {
+            log.error("callAiForEntry failed for {}: {}", entry.getClassName(), e.getMessage(), e);
         }
+        return null;
+    }
 
-        if (!parsed || inc == null) return;
-
-        // 合并到 DTO
+    /**
+     * 顺序阶段：把 AI 返回的增量 JSON 合并到 DTO 并注入当前入口的 classPath。
+     * 必须单线程调用以保护 {@code hierarchy} 的线程安全。
+     */
+    private void mergeEntryResult(ModuleHierarchy hierarchy, EntryPoint entry, JsonNode inc) {
         Set<String> newlyCreatedFunctionIds = new LinkedHashSet<>();
         mergeIncrementIntoHierarchy(hierarchy, inc, newlyCreatedFunctionIds);
 
-        // 把当前入口 className 注入到本次新增 function 的 classPaths
         for (String fnId : newlyCreatedFunctionIds) {
             FunctionDto fn = findFunctionById(hierarchy, fnId);
             if (fn != null) {
@@ -542,7 +580,7 @@ public class ModuleHierarchyServiceImpl implements ModuleHierarchyService {
             modRow.setClassPaths(null);
             rows.add(modRow);
         }
-        nodeMapper.insert(rows);
+        nodeMapper.batchInsert(rows);
         // 拿到 module 行 ID 后才能填 sub_module.parentId
         Map<String, Long> moduleRowIdByNodeId = new HashMap<>();
         // 重新查一遍（按 nodeId 索引）
@@ -578,7 +616,7 @@ public class ModuleHierarchyServiceImpl implements ModuleHierarchyService {
             }
         }
         if (!subRows.isEmpty()) {
-            nodeMapper.insert(subRows);
+            nodeMapper.batchInsert(subRows);
         }
 
         // 重新查 sub_module 行 ID
@@ -618,7 +656,7 @@ public class ModuleHierarchyServiceImpl implements ModuleHierarchyService {
             }
         }
         if (!fnRows.isEmpty()) {
-            nodeMapper.insert(fnRows);
+            nodeMapper.batchInsert(fnRows);
         }
 
         log.info("persistAll done. taskId={} modules={} subModules={} functions={}",

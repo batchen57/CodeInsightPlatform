@@ -10,6 +10,9 @@ import com.company.codeinsight.modules.scanner.model.IncrementalContext;
 import com.company.codeinsight.modules.scanner.model.ScanResult;
 import com.company.codeinsight.modules.scanner.service.CodeScannerService;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.ibatis.session.ExecutorType;
+import org.apache.ibatis.session.SqlSession;
+import org.apache.ibatis.session.SqlSessionFactory;
 import org.eclipse.jgit.api.Git;
 import org.eclipse.jgit.api.CloneCommand;
 import org.eclipse.jgit.diff.DiffEntry;
@@ -29,8 +32,6 @@ import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -50,6 +51,12 @@ public class CodeScannerServiceImpl implements CodeScannerService {
 
     @Autowired
     private CodeFileSnapshotMapper snapshotMapper;
+
+    @Autowired
+    private SqlSessionFactory sqlSessionFactory;
+
+    /** 快照批量写入大小，减少 DB 往返次数 */
+    private static final int SNAPSHOT_BATCH_SIZE = 500;
 
     // 对象存储的本地物理暂存根路径
     @Value("${code-insight.storage.local-path:./storage}")
@@ -177,12 +184,17 @@ public class CodeScannerServiceImpl implements CodeScannerService {
                 }
             }
 
-            // === 3. 递归扫描目录，生成新 snapshot ===
-            List<CodeFileSnapshot> snapshots = new ArrayList<>();
+            // === 3. 递归扫描目录，生成新 snapshot（批量缓冲写入） ===
+            List<CodeFileSnapshot> batchBuffer = new ArrayList<>();
+            int[] totalInserted = {0};
             if (performFullScan) {
-                scanDirectory(targetDir, targetDir, repo, taskId, snapshots, null);
+                scanDirectory(targetDir, targetDir, repo, taskId, batchBuffer, null, totalInserted);
             } else {
-                scanDirectory(targetDir, targetDir, repo, taskId, snapshots, changedPaths);
+                scanDirectory(targetDir, targetDir, repo, taskId, batchBuffer, changedPaths, totalInserted);
+            }
+            // 刷出缓冲区剩余快照
+            if (!batchBuffer.isEmpty()) {
+                totalInserted[0] += flushSnapshotBatch(batchBuffer);
             }
 
             // === 4. 更新 Repository 的最近一次拉取元数据（无论全量还是增量都要刷新） ===
@@ -191,9 +203,9 @@ public class CodeScannerServiceImpl implements CodeScannerService {
             repositoryMapper.updateById(repo);
 
             if (performFullScan) {
-                log.info("全量扫描完成，共生成快照记录数: {}", snapshots.size());
+                log.info("全量扫描完成，共生成快照记录数: {}", totalInserted[0]);
             } else {
-                log.info("增量扫描完成，更新快照 {} 个（已删 {} 个），其余文件未变动", snapshots.size(), deletedPaths.size());
+                log.info("增量扫描完成，更新快照 {} 个（已删 {} 个），其余文件未变动", totalInserted[0], deletedPaths.size());
             }
         }
 
@@ -289,6 +301,32 @@ public class CodeScannerServiceImpl implements CodeScannerService {
     }
 
     /**
+     * 批量写入缓冲区中的快照记录，使用 JDBC batch 模式减少 DB 往返。
+     *
+     * @return 实际写入的条数
+     */
+    private int flushSnapshotBatch(List<CodeFileSnapshot> batch) {
+        if (batch.isEmpty()) return 0;
+        int count = batch.size();
+        try {
+            try (SqlSession sqlSession = sqlSessionFactory.openSession(ExecutorType.BATCH)) {
+                CodeFileSnapshotMapper mapper = sqlSession.getMapper(CodeFileSnapshotMapper.class);
+                for (CodeFileSnapshot s : batch) {
+                    mapper.insert(s);
+                }
+                sqlSession.flushStatements();
+                sqlSession.commit();
+            }
+        } catch (Exception e) {
+            log.error("批量写入快照失败，丢失 {} 条记录", count, e);
+            count = 0;
+        } finally {
+            batch.clear();
+        }
+        return count;
+    }
+
+    /**
      * 获取指定任务生成的全部代码快照记录
      */
     @Override
@@ -303,13 +341,15 @@ public class CodeScannerServiceImpl implements CodeScannerService {
      * @param currentDir    当前正在遍历的子目录
      * @param repo          代码库配置实体（包含排除规则）
      * @param taskId        任务 ID
-     * @param snapshots     收集结果的快照列表容器
+     * @param batchBuffer   快照批量写入缓冲区，攒满 {@link #SNAPSHOT_BATCH_SIZE} 条后触发批量 INSERT
      * @param pathFilter    非空时只处理相对路径命中该集合的文件（增量场景下使用）；
      *                      目录级短路：若子树中没有任何匹配文件则跳过递归。
      *                      传 null 表示不过滤（按全量行为走）。
+     * @param totalInserted [0] 累计已写入的快照总数，由 {@link #flushSnapshotBatch} 回填
      */
     private void scanDirectory(File baseDir, File currentDir, CodeRepository repo, Long taskId,
-                               List<CodeFileSnapshot> snapshots, Set<String> pathFilter) {
+                               List<CodeFileSnapshot> batchBuffer, Set<String> pathFilter,
+                               int[] totalInserted) {
         File[] files = currentDir.listFiles();
         if (files == null) return;
 
@@ -348,7 +388,7 @@ public class CodeScannerServiceImpl implements CodeScannerService {
                     continue;
                 }
                 // 递归向下进行目录扫描
-                scanDirectory(baseDir, file, repo, taskId, snapshots, pathFilter);
+                scanDirectory(baseDir, file, repo, taskId, batchBuffer, pathFilter, totalInserted);
             } else {
                 // 2. 检查文件类型后缀过滤
                 boolean isExcluded = false;
@@ -369,7 +409,7 @@ public class CodeScannerServiceImpl implements CodeScannerService {
                 }
                 // 如果未被排除，创建文件级别的物理快照与数据库记录
                 try {
-                    createFileSnapshot(baseDir, file, relativePath, taskId, ext, snapshots);
+                    createFileSnapshot(baseDir, file, relativePath, taskId, ext, batchBuffer, totalInserted);
                 } catch (Exception e) {
                     log.error("保存文件快照失败: {}", file.getAbsolutePath(), e);
                 }
@@ -395,16 +435,18 @@ public class CodeScannerServiceImpl implements CodeScannerService {
     }
 
     /**
-     * 创建文件物理快照并持久化至快照库中
+     * 创建文件物理快照并持久化至快照库中（批量缓冲写入模式）
      *
-     * @param baseDir      根文件夹
-     * @param file         目标待备份文件对象
-     * @param relativePath 计算好的项目内相对路径
-     * @param taskId       任务 ID
-     * @param ext          文件扩展名
-     * @param snapshots    快照记录容器
+     * @param baseDir       根文件夹
+     * @param file          目标待备份文件对象
+     * @param relativePath  计算好的项目内相对路径
+     * @param taskId        任务 ID
+     * @param ext           文件扩展名
+     * @param batchBuffer   批量写入缓冲区，攒满后自动触发 {@link #flushSnapshotBatch}
+     * @param totalInserted [0] 累计已写入快照数
      */
-    private void createFileSnapshot(File baseDir, File file, String relativePath, Long taskId, String ext, List<CodeFileSnapshot> snapshots) throws IOException {
+    private void createFileSnapshot(File baseDir, File file, String relativePath, Long taskId, String ext,
+                                     List<CodeFileSnapshot> batchBuffer, int[] totalInserted) throws IOException {
         byte[] contentBytes = Files.readAllBytes(file.toPath());
         // 计算文件内容的 MD5 值作为文件指纹，用来做增量对比及版本哈希校验
         String md5 = DigestUtils.md5DigestAsHex(contentBytes);
@@ -414,23 +456,21 @@ public class CodeScannerServiceImpl implements CodeScannerService {
             lineCount = (int) Files.lines(file.toPath()).count();
         } catch (Exception ignored) {}
 
-        // 将文件内容持久化到系统本地暂存的对象存储物理盘中 (即 storage/task_{taskId}/{relativePath})
-        Path storePath = Paths.get(localStoragePath, "task_" + taskId, relativePath);
-        Files.createDirectories(storePath.getParent());
-        Files.write(storePath, contentBytes);
-
-        // 创建数据库索引记录并插入数据库表 ci_code_file_snapshot
+        // 直接引用 temp_repos/ 下的源文件，不再额外复制到 storage/（节省磁盘空间，文件在 pipeline 生命周期内始终存在）
+        // 创建数据库索引记录，先入缓冲区，攒够一批再批量写入
         CodeFileSnapshot snapshot = new CodeFileSnapshot();
         snapshot.setTaskId(taskId);
         snapshot.setFilePath(relativePath);
         snapshot.setFileType(ext);
         snapshot.setLineCount(lineCount);
         snapshot.setFileHash(md5);
-        snapshot.setContentUri(storePath.toAbsolutePath().toUri().toString());
+        snapshot.setContentUri(file.toURI().toString());
         snapshot.setCreatedAt(LocalDateTime.now());
 
-        snapshotMapper.insert(snapshot);
-        snapshots.add(snapshot);
+        batchBuffer.add(snapshot);
+        if (batchBuffer.size() >= SNAPSHOT_BATCH_SIZE) {
+            totalInserted[0] += flushSnapshotBatch(batchBuffer);
+        }
     }
 
     /**

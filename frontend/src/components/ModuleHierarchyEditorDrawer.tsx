@@ -25,7 +25,7 @@ const ModuleHierarchyEditorDrawer: React.FC<ModuleHierarchyEditorDrawerProps> = 
     <Drawer
       title={taskId ? `模块层级调试 #${taskId}` : '模块层级调试'}
       open={open}
-      width={960}
+      width={1060}
       onClose={onClose}
       destroyOnHidden
       extra={

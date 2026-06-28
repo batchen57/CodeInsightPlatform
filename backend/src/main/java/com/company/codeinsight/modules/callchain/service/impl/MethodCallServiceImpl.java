@@ -8,6 +8,9 @@ import com.company.codeinsight.modules.parser.model.ParsedClassInfo;
 import com.company.codeinsight.modules.parser.service.JavaParserService;
 import com.company.codeinsight.modules.scanner.model.IncrementalContext;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.ibatis.session.ExecutorType;
+import org.apache.ibatis.session.SqlSession;
+import org.apache.ibatis.session.SqlSessionFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -43,6 +46,9 @@ public class MethodCallServiceImpl implements MethodCallService {
 
     @Autowired
     private MethodCallMapper methodCallMapper;
+
+    @Autowired
+    private SqlSessionFactory sqlSessionFactory;
 
     @Autowired
     private JavaParserService javaParserService;
@@ -205,13 +211,21 @@ public class MethodCallServiceImpl implements MethodCallService {
     }
 
     /**
-     * 把缓冲区里的全部记录插入 ci_method_call 表，然后清空缓冲区。
+     * 把缓冲区里的全部记录批量插入 ci_method_call 表（JDBC batch 模式），然后清空缓冲区。
      */
     private void insertBatch(List<MethodCall> buffer) {
+        if (buffer.isEmpty()) return;
         try {
-            for (MethodCall mc : buffer) {
-                methodCallMapper.insert(mc);
+            try (SqlSession sqlSession = sqlSessionFactory.openSession(ExecutorType.BATCH)) {
+                MethodCallMapper mapper = sqlSession.getMapper(MethodCallMapper.class);
+                for (MethodCall mc : buffer) {
+                    mapper.insert(mc);
+                }
+                sqlSession.flushStatements();
+                sqlSession.commit();
             }
+        } catch (Exception e) {
+            log.error("批量写入方法调用链失败，丢失 {} 条记录", buffer.size(), e);
         } finally {
             buffer.clear();
         }
