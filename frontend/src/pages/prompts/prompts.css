@@ -1,0 +1,156 @@
+.ci-prompts-page .ci-prompt-library .ant-card-body {
+  display: flex;
+  flex-direction: column;
+}
+
+.ci-prompts-page .ci-prompt-library .ant-table-wrapper {
+  flex: 1;
+}
+
+.ci-prompts-page .ci-prompt-library .ant-table-cell-fix-right {
+  background: #ffffff;
+}
+
+.ci-prompts-page .ci-prompt-library .ant-table-tbody > tr:hover > .ant-table-cell-fix-right,
+.ci-prompts-page .ci-prompt-library .ci-selected-row > .ant-table-cell-fix-right {
+  background: #f7f8ff !important;
+}
+
+.ci-prompt-name-cell {
+  display: grid;
+  min-width: 0;
+  justify-items: start;
+  gap: 5px;
+}
+
+.ci-prompt-name-link {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  overflow: hidden;
+  text-align: left;
+}
+
+.ci-prompt-name-link > span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ci-prompt-row-actions {
+  white-space: nowrap;
+}
+
+.ci-prompt-expanded {
+  padding: 8px 16px;
+  background: #fcfcfd;
+}
+
+.ci-prompt-expanded-title {
+  margin-bottom: 6px;
+}
+
+.ci-prompt-expanded-content {
+  max-height: 300px;
+  padding: 12px;
+  margin: 0;
+  overflow-y: auto;
+  color: #475467;
+  font-family: "JetBrains Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+  background: #f8f9fb;
+  border: 1px solid #e3e6ed;
+  border-radius: 6px;
+}
+
+.ci-prompt-trial-body,
+.ci-prompt-trial-result {
+  width: 100%;
+}
+
+.ci-prompt-trial-body {
+  margin-top: 16px;
+}
+
+.ci-prompt-collapse-label,
+.ci-prompt-model-row,
+.ci-prompt-result-header {
+  display: flex;
+  align-items: center;
+}
+
+.ci-prompt-collapse-label {
+  justify-content: space-between;
+  width: 100%;
+  padding-right: 8px;
+}
+
+.ci-prompt-model-row {
+  gap: 8px;
+}
+
+.ci-prompt-model-label {
+  min-width: 85px;
+}
+
+.ci-prompt-model-select {
+  flex: 1;
+}
+
+.ci-prompt-field-label {
+  display: block;
+  margin-bottom: 4px;
+}
+
+.ci-prompt-divider {
+  margin: 0;
+}
+
+.ci-prompt-result-shell {
+  width: 100%;
+  overflow: hidden;
+  border: 1px solid #e3e6ed;
+  border-radius: 8px;
+}
+
+.ci-prompt-result-header {
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: #f8f9fb;
+  border-bottom: 1px solid #e3e6ed;
+}
+
+.ci-prompt-result-title {
+  font-size: 13px;
+}
+
+.ci-prompt-result-preview {
+  max-height: 520px;
+  margin: 0;
+  background: #ffffff;
+  border: none;
+  border-radius: 0;
+}
+
+.ci-prompt-result-preview-streaming::after {
+  display: inline-block;
+  width: 7px;
+  height: 15px;
+  margin-left: 3px;
+  vertical-align: -2px;
+  background: #3863b9;
+  content: "";
+  animation: ci-prompt-stream-caret 0.9s steps(2, start) infinite;
+}
+
+@keyframes ci-prompt-stream-caret {
+  50% {
+    opacity: 0;
+  }
+}
+
+.ci-prompt-form {
+  margin-top: 16px;
+}

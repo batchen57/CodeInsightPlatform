@@ -598,32 +598,6 @@ pre,
   font-weight: 700;
 }
 
-.ci-prompt-name-cell {
-  display: grid;
-  min-width: 0;
-  justify-items: start;
-  gap: 5px;
-}
-
-.ci-prompt-name-link {
-  display: block;
-  width: 100%;
-  max-width: 100%;
-  overflow: hidden;
-  text-align: left;
-}
-
-.ci-prompt-name-link > span {
-  display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.ci-prompt-row-actions {
-  white-space: nowrap;
-}
-
 .ci-selected-row > td {
   background: #eef6ff !important;
 }
@@ -1849,30 +1823,6 @@ body {
   min-height: 620px;
 }
 
-.ci-prompt-library .ant-card-body {
-  display: flex;
-  flex-direction: column;
-}
-
-.ci-prompt-library .ant-table-wrapper {
-  flex: 1;
-}
-
-.ci-prompt-library .ant-table-cell-fix-right {
-  background: #ffffff;
-}
-
-.ci-prompt-library .ant-table-tbody > tr:hover > .ant-table-cell-fix-right,
-.ci-prompt-library .ci-selected-row > .ant-table-cell-fix-right {
-  background: #f7f8ff !important;
-}
-
-.ci-prompt-lab {
-  position: sticky;
-  top: 88px;
-  align-self: flex-start;
-}
-
 .ci-card-toolbar {
   grid-template-columns: minmax(200px, 1fr) auto auto;
   gap: 10px;
@@ -1989,10 +1939,6 @@ body {
 @media (max-width: 1180px) {
   .ci-dashboard-layout {
     grid-template-columns: 1fr;
-  }
-
-  .ci-prompt-lab {
-    position: static;
   }
 
   .ci-split-workspace .ci-workspace-card {

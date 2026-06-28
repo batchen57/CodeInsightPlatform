@@ -2,7 +2,11 @@ package com.company.codeinsight.modules.system.mapper;
 
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import com.company.codeinsight.modules.system.entity.SystemApplication;
+import com.company.codeinsight.modules.system.vo.SystemSummaryVO;
 import org.apache.ibatis.annotations.Mapper;
+import org.apache.ibatis.annotations.Param;
+
+import java.util.List;
 
 /**
  * 业务系统应用持久层 Mapper 接口
@@ -10,5 +14,13 @@ import org.apache.ibatis.annotations.Mapper;
  */
 @Mapper
 public interface SystemApplicationMapper extends BaseMapper<SystemApplication> {
+
+    /**
+     * 一次性返回系统列表及 3 个聚合指标（代码库数 / 知识版本数 / 最近扫描时间）
+     * 对应 XML：SystemApplicationMapper.xml
+     */
+    List<SystemSummaryVO> listSystemsWithSummary(@Param("name") String name,
+                                                 @Param("owner") String owner,
+                                                 @Param("status") Integer status);
 }
 

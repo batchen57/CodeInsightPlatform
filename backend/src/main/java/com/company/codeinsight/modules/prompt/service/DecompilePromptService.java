@@ -3,9 +3,11 @@ package com.company.codeinsight.modules.prompt.service;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.IService;
 import com.company.codeinsight.modules.prompt.dto.PromptTestResultDto;
+import com.company.codeinsight.modules.prompt.dto.PromptTestStreamEventDto;
 import com.company.codeinsight.modules.prompt.entity.DecompilePrompt;
 
 import java.util.Map;
+import java.util.function.Consumer;
 
 /**
  * 提示词模板管理服务接口
@@ -71,5 +73,10 @@ public interface DecompilePromptService extends IService<DecompilePrompt> {
      * @return 提示词正文；找不到返回 null
      */
     String resolveTaskPromptContent(com.company.codeinsight.modules.task.entity.DecompileTask task, String promptType);
+
+    /**
+     * 流式试跑提示词模板，按内容增量和结束事件输出。
+     */
+    void testRunStream(Long id, String sampleCode, Long modelId, Consumer<PromptTestStreamEventDto> eventConsumer);
 }
 

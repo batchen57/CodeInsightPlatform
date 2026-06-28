@@ -26,3 +26,7 @@ export const updateSystem = (id: number, data: Partial<System>): Promise<System>
 export const changeSystemStatus = (id: number, status: number): Promise<void> => {
   return request.put(`/systems/${id}/status`, null, { params: { status } });
 };
+
+export const deleteSystem = (id: number): Promise<void> => {
+  return request.delete(`/systems/${id}`);
+};

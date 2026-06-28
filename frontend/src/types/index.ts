@@ -6,6 +6,10 @@ export interface System {
   status: number; // 0-停用, 1-启用
   createdAt: string;
   updatedAt: string;
+  // 以下字段由 /systems 聚合接口返回，list 才有
+  repositoryCount?: number;
+  knowledgeVersionCount?: number;
+  lastDecompileAt?: string;
 }
 
 export interface Repository {
@@ -168,18 +172,69 @@ export interface ApiResponse<T> {
   data: T;
 }
 
+export interface LoginRequest {
+  username: string;
+  password: string;
+  token: string;
+}
+
+export interface LoginResponse {
+  token: string;
+  username: string;
+  displayName: string;
+  role: string;
+  expiresInSeconds: number;
+}
+
 export interface AiModel {
   id: number;
   name: string;
   identifier: string;
   provider: string;
   apiKey?: string;
+  hasApiKey?: boolean;
   baseUrl?: string;
   isDefault: 'true' | 'false';
   capabilities?: string;
   description?: string;
   sortOrder: number;
+  status?: number; // 0-停用 1-启用（未返回时按启用处理）
   createdAt?: string;
   updatedAt?: string;
+}
+
+export interface AiModelPreset {
+  id: number;
+  name: string;
+  identifier: string;
+  provider: string;
+  baseUrl?: string;
+  capabilities?: string;
+  description?: string;
+  sortOrder: number;
+  status?: number;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface AiModelMetricSummary {
+  modelName: string;
+  totalCalls: number;
+  totalTokens: number;
+  totalCost: number;
+}
+
+export interface AiModelMetricTrendPoint {
+  date: string;
+  calls: number;
+  tokens: number;
+  cost: number;
+}
+
+export interface AiModelTestResult {
+  success: boolean;
+  durationMs: number;
+  message: string;
+  responseSummary?: string;
 }
 

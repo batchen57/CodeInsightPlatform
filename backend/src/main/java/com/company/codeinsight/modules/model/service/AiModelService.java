@@ -1,6 +1,9 @@
 package com.company.codeinsight.modules.model.service;
 
 import com.baomidou.mybatisplus.extension.service.IService;
+import com.company.codeinsight.modules.model.dto.AiModelMetricSummary;
+import com.company.codeinsight.modules.model.dto.AiModelMetricTrendPoint;
+import com.company.codeinsight.modules.model.dto.AiModelTestResult;
 import com.company.codeinsight.modules.model.entity.AiModel;
 import java.util.List;
 
@@ -34,5 +37,29 @@ public interface AiModelService extends IService<AiModel> {
      * @return 是否成功
      */
     boolean updateModel(AiModel model);
+
+    /**
+     * 切换大模型启用状态（0-停用，1-启用）
+     * 停用时不影响历史调用记录
+     *
+     * @param id     模型 ID
+     * @param status 目标状态
+     */
+    void changeStatus(Long id, Integer status);
+
+    /**
+     * 按模型标识汇总累计调用次数、Token 与预估成本。
+     */
+    List<AiModelMetricSummary> listMetricSummaries();
+
+    /**
+     * 查询指定模型最近 N 天调用趋势，按自然日补齐空值。
+     */
+    List<AiModelMetricTrendPoint> getMetricTrend(Long id, Integer days);
+
+    /**
+     * 测试模型连接可用性。
+     */
+    AiModelTestResult testModelConnection(Long id);
 }
 

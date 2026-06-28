@@ -386,6 +386,10 @@ button, input, textarea, select { font: inherit; }
   box-shadow: 0 9px 22px rgba(82, 88, 232, 0.24);
 }
 
+.ant-input-affix-wrapper {
+  --ant-input-padding-block: 0 7px 0 !important;
+}
+
 .ant-input,
 .ant-input-affix-wrapper,
 .ant-input-number,

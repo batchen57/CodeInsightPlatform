@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
-import { Avatar, Badge, Button, Layout, Menu, Space, Tag, Tooltip, Typography } from 'antd';
-import { Link, Outlet, useLocation } from 'react-router-dom';
+import { Avatar, Badge, Button, Dropdown, Layout, Menu, Space, Tag, Tooltip, Typography } from 'antd';
+import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
   ApartmentOutlined,
   AuditOutlined,
@@ -14,6 +14,7 @@ import {
   FileSearchOutlined,
   FileTextOutlined,
   HistoryOutlined,
+  LogoutOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
   PlayCircleOutlined,
@@ -21,6 +22,7 @@ import {
   SwapOutlined,
   UserOutlined,
 } from '@ant-design/icons';
+import { useAuthStore } from '../stores/auth';
 
 const { Header, Content, Sider } = Layout;
 const { Text, Title } = Typography;
@@ -127,6 +129,9 @@ const BasicLayout: React.FC = () => {
   const [isMobile, setIsMobile] = useState(false);
   
   const location = useLocation();
+  const navigate = useNavigate();
+  const session = useAuthStore((state) => state.session);
+  const clearSession = useAuthStore((state) => state.clearSession);
   const selectedKey = getSelectedKey(location.pathname);
   
   // 实时估算当前页面配置数据以更新页头标题解释
@@ -134,6 +139,11 @@ const BasicLayout: React.FC = () => {
     () => navigation.find((item) => item.key === selectedKey) ?? navigation[0],
     [selectedKey],
   );
+
+  const handleLogout = () => {
+    clearSession();
+    navigate('/login', { replace: true });
+  };
 
   return (
     <Layout className="ci-shell">
@@ -220,13 +230,27 @@ const BasicLayout: React.FC = () => {
                 <Button type="text" icon={<BellOutlined />} className="ci-icon-button" />
               </Badge>
             </Tooltip>
-            <div className="ci-user" aria-label="当前用户：负责人，开发负责人">
-              <Avatar size={34} icon={<UserOutlined />} className="ci-user-avatar" />
-              <div className="ci-user-copy">
-                <strong>负责人</strong>
-                <span>开发负责人</span>
+            <Dropdown
+              trigger={['click']}
+              menu={{
+                items: [
+                  {
+                    key: 'logout',
+                    icon: <LogoutOutlined />,
+                    label: '退出登录',
+                    onClick: handleLogout,
+                  },
+                ],
+              }}
+            >
+              <div className="ci-user" aria-label={`当前用户：${session?.displayName ?? '负责人'}，${session?.role ?? 'ADMIN'}`}>
+                <Avatar size={34} icon={<UserOutlined />} className="ci-user-avatar" />
+                <div className="ci-user-copy">
+                  <strong>{session?.displayName ?? '负责人'}</strong>
+                  <span>{session?.role === 'ADMIN' ? '平台管理员' : '开发负责人'}</span>
+                </div>
               </div>
-            </div>
+            </Dropdown>
           </Space>
         </Header>
 

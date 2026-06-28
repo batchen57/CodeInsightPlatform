@@ -1,5 +1,6 @@
 package com.company.codeinsight.modules.prompt.controller;
 
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.company.codeinsight.common.exception.BusinessException;
 import com.company.codeinsight.common.response.ApiResponse;
@@ -8,13 +9,23 @@ import com.company.codeinsight.modules.log.service.OperationLogService;
 import com.company.codeinsight.modules.prompt.dto.PromptTestResultDto;
 import com.company.codeinsight.modules.prompt.entity.DecompilePrompt;
 import com.company.codeinsight.modules.prompt.service.DecompilePromptService;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.Data;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.CacheControl;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+import org.springframework.util.StringUtils;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
+
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.nio.charset.StandardCharsets;
 
 /**
  * AI 提示词模板管理控制器
@@ -26,11 +37,16 @@ import org.springframework.web.bind.annotation.*;
 @Validated
 public class DecompilePromptController {
 
+    private static final String DEFAULT_PROMPT_TYPE = "MODULARIZE";
+
     @Autowired
     private DecompilePromptService decompilePromptService;
 
     @Autowired
     private OperationLogService operationLogService;
+
+    @Autowired
+    private ObjectMapper objectMapper;
 
     /**
      * 创建新的提示词模板，初始默认版本号为 1 且启用
@@ -41,6 +57,11 @@ public class DecompilePromptController {
         prompt.setId(null);
         prompt.setVersion(1);
         prompt.setStatus(1); // 默认启用
+        prompt.setPromptType(normalizePromptType(prompt.getPromptType()));
+        if (prompt.getIsDefault() == null) {
+            prompt.setIsDefault(0);
+        }
+        clearDefaultPrompts(prompt.getPromptType(), null, prompt.getIsDefault());
         decompilePromptService.save(prompt);
         operationLogService.logOperation(null, null, "CREATE_PROMPT", "创建提示词模板: " + prompt.getName(), null, true);
         return ApiResponse.success(prompt);
@@ -57,7 +78,15 @@ public class DecompilePromptController {
         DecompilePrompt existing = decompilePromptService.getById(id);
         if (existing != null) {
             prompt.setVersion(existing.getVersion() + 1);
+            if (!StringUtils.hasText(prompt.getPromptType())) {
+                prompt.setPromptType(normalizePromptType(existing.getPromptType()));
+            }
+            if (prompt.getIsDefault() == null) {
+                prompt.setIsDefault(existing.getIsDefault());
+            }
         }
+        prompt.setPromptType(normalizePromptType(prompt.getPromptType()));
+        clearDefaultPrompts(prompt.getPromptType(), id, prompt.getIsDefault());
         decompilePromptService.updateById(prompt);
         operationLogService.logOperation(null, null, "UPDATE_PROMPT", "更新提示词模板: " + prompt.getName() + ", 新版本号: " + prompt.getVersion(), null, true);
         return ApiResponse.success(prompt);
@@ -108,7 +137,12 @@ public class DecompilePromptController {
             @RequestParam(required = false) String name,
             @RequestParam(required = false) Integer status,
             @RequestParam(required = false) String promptType) {
-        Page<DecompilePrompt> page = decompilePromptService.listPromptsPage(current, size, name, status, promptType);
+        Page<DecompilePrompt> page = decompilePromptService.listPromptsPage(
+                current,
+                size,
+                name,
+                status,
+                normalizeOptionalPromptType(promptType));
         PageResult<DecompilePrompt> result = new PageResult<>(page.getTotal(), page.getSize(), page.getCurrent(), page.getRecords());
         return ApiResponse.success(result);
     }
@@ -143,6 +177,35 @@ public class DecompilePromptController {
     }
 
     /**
+     * 流式试跑提示词模板：每行输出一个 JSON 事件，适配 fetch + ReadableStream。
+     */
+    @Operation(summary = "流式试跑提示词模板")
+    @PostMapping(value = "/{id}/test-run/stream", produces = "application/x-ndjson")
+    public ResponseEntity<StreamingResponseBody> testRunStream(@PathVariable Long id, @RequestBody TestRunRequest request) {
+        StreamingResponseBody body = outputStream -> {
+            long started = System.currentTimeMillis();
+            try {
+                decompilePromptService.testRunStream(id, request.getSampleCode(), request.getModelId(), event -> {
+                    try {
+                        outputStream.write((objectMapper.writeValueAsString(event) + "\n").getBytes(StandardCharsets.UTF_8));
+                        outputStream.flush();
+                    } catch (IOException e) {
+                        throw new UncheckedIOException(e);
+                    }
+                });
+                operationLogService.logOperation(null, null, "TEST_RUN_PROMPT_STREAM",
+                        "流式试跑提示词模板, ID: " + id + ", 消耗时间: " + (System.currentTimeMillis() - started) + "ms", null, true);
+            } catch (UncheckedIOException e) {
+                throw e.getCause();
+            }
+        };
+        return ResponseEntity.ok()
+                .contentType(MediaType.parseMediaType("application/x-ndjson"))
+                .cacheControl(CacheControl.noCache())
+                .body(body);
+    }
+
+    /**
      * 试跑测试请求载荷类
      */
     @Data
@@ -155,6 +218,27 @@ public class DecompilePromptController {
          * 所需测试调用的 AI 大模型 ID
          */
         private Long modelId;
+    }
+
+    private void clearDefaultPrompts(String promptType, Long excludeId, Integer isDefault) {
+        if (isDefault == null || isDefault != 1) {
+            return;
+        }
+        LambdaUpdateWrapper<DecompilePrompt> updateWrapper = new LambdaUpdateWrapper<DecompilePrompt>()
+                .eq(DecompilePrompt::getPromptType, normalizePromptType(promptType))
+                .set(DecompilePrompt::getIsDefault, 0);
+        if (excludeId != null) {
+            updateWrapper.ne(DecompilePrompt::getId, excludeId);
+        }
+        decompilePromptService.update(updateWrapper);
+    }
+
+    private String normalizeOptionalPromptType(String promptType) {
+        return StringUtils.hasText(promptType) ? promptType : null;
+    }
+
+    private String normalizePromptType(String promptType) {
+        return StringUtils.hasText(promptType) ? promptType : DEFAULT_PROMPT_TYPE;
     }
 }
 

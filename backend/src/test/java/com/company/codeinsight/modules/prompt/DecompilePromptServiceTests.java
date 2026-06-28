@@ -1,6 +1,10 @@
 package com.company.codeinsight.modules.prompt;
 
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
+import com.company.codeinsight.modules.model.entity.AiModel;
+import com.company.codeinsight.modules.model.mapper.AiModelMapper;
+import com.company.codeinsight.modules.prompt.dto.PromptTestStreamEventDto;
 import com.company.codeinsight.modules.prompt.dto.PromptTestResultDto;
 import com.company.codeinsight.modules.prompt.entity.DecompilePrompt;
 import com.company.codeinsight.modules.prompt.service.DecompilePromptService;
@@ -12,6 +16,8 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.HashMap;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 
 @SpringBootTest(properties = {
@@ -24,6 +30,9 @@ public class DecompilePromptServiceTests {
     @Autowired
     private DecompilePromptService decompilePromptService;
 
+    @Autowired
+    private AiModelMapper aiModelMapper;
+
     @Test
     public void testCrud() {
         DecompilePrompt prompt = new DecompilePrompt();
@@ -31,7 +40,8 @@ public class DecompilePromptServiceTests {
         prompt.setContent("Please analyze class ${class_name} and methods ${method_name}. Code:\n${source_code}");
         prompt.setVersion(1);
         prompt.setStatus(1);
-        prompt.setIsDefault(1);
+        prompt.setIsDefault(0);
+        prompt.setPromptType("MODULARIZE");
 
         // Save
         boolean saved = decompilePromptService.save(prompt);
@@ -77,6 +87,8 @@ public class DecompilePromptServiceTests {
         prompt.setContent("Class: ${class_name}, Method: ${method_name}, Code: ${source_code}");
         prompt.setVersion(1);
         prompt.setStatus(1);
+        prompt.setIsDefault(0);
+        prompt.setPromptType("MODULARIZE");
         decompilePromptService.save(prompt);
 
         String sampleCode = "public class OrderService {\n" +
@@ -96,5 +108,64 @@ public class DecompilePromptServiceTests {
         Assertions.assertTrue(output.contains("OrderService"));
         Assertions.assertTrue(output.contains("createOrder"));
         Assertions.assertTrue(output.contains("orderMapper"));
+    }
+
+    @Test
+    public void testTrialRunUsesEnabledConfiguredModelWhenNoModelSelected() {
+        aiModelMapper.update(null, new LambdaUpdateWrapper<AiModel>()
+                .set(AiModel::getIsDefault, "false"));
+
+        AiModel configuredModel = new AiModel();
+        configuredModel.setName("Prompt Trial Configured Model");
+        configuredModel.setIdentifier("prompt-trial-configured-model");
+        configuredModel.setProvider("Test");
+        configuredModel.setApiKey("sk-prompt-trial-secret");
+        configuredModel.setBaseUrl("https://example.test/v1");
+        configuredModel.setIsDefault("false");
+        configuredModel.setStatus(1);
+        configuredModel.setSortOrder(-1000);
+        aiModelMapper.insert(configuredModel);
+
+        DecompilePrompt prompt = new DecompilePrompt();
+        prompt.setName("Trial Run Configured Model Test");
+        prompt.setContent("Class: ${class_name}, Method: ${method_name}, Code: ${source_code}");
+        prompt.setVersion(1);
+        prompt.setStatus(1);
+        prompt.setIsDefault(0);
+        prompt.setPromptType("MODULARIZE");
+        decompilePromptService.save(prompt);
+
+        PromptTestResultDto result = decompilePromptService.testRun(prompt.getId(), "public class ConfiguredModelProbe { public void scan() {} }", null);
+
+        Assertions.assertNotNull(result);
+        Assertions.assertNotNull(result.getResult());
+        Assertions.assertTrue(result.getResult().contains("prompt-trial-configured-model"));
+    }
+
+    @Test
+    public void testTrialRunStreamEmitsContentAndDoneEvent() {
+        DecompilePrompt prompt = new DecompilePrompt();
+        prompt.setName("Trial Run Stream Test");
+        prompt.setContent("Class: ${class_name}, Method: ${method_name}, Code: ${source_code}");
+        prompt.setVersion(1);
+        prompt.setStatus(1);
+        prompt.setIsDefault(0);
+        prompt.setPromptType("MODULARIZE");
+        decompilePromptService.save(prompt);
+
+        List<PromptTestStreamEventDto> events = new ArrayList<>();
+
+        decompilePromptService.testRunStream(
+                prompt.getId(),
+                "public class StreamProbe { public void inspect() {} }",
+                null,
+                events::add);
+
+        Assertions.assertFalse(events.isEmpty());
+        Assertions.assertTrue(events.stream().anyMatch(event -> "content".equals(event.getType()) && event.getContent().contains("StreamProbe")));
+        PromptTestStreamEventDto lastEvent = events.get(events.size() - 1);
+        Assertions.assertEquals("done", lastEvent.getType());
+        Assertions.assertTrue(lastEvent.getInputTokens() > 0);
+        Assertions.assertTrue(lastEvent.getOutputTokens() > 0);
     }
 }

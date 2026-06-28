@@ -1,354 +1,393 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { Button, Card, Form, Modal, Space, Table, Typography, message } from 'antd';
+import type { FormInstance } from 'antd';
+import { PlusOutlined, SettingOutlined } from '@ant-design/icons';
 import {
-  Button,
-  Card,
-  Col,
-  Form,
-  Input,
-  Modal,
-  Popconfirm,
-  Row,
-  Select,
-  Space,
-  Switch,
-  Table,
-  Tag,
-  Typography,
-  message,
-} from 'antd';
-import {
-  DeleteOutlined,
-  EditOutlined,
-  HolderOutlined,
-  PlusOutlined,
-  SettingOutlined,
-  ThunderboltOutlined,
-} from '@ant-design/icons';
-import {
+  changeModelPresetStatus,
+  changeModelStatus,
   createModel,
+  createModelPreset,
   deleteModel,
-  listModels,
+  deleteModelPreset,
+  getModelMetricTrend,
+  listAllModelPresets,
+  listModelPresets,
+  listModelMetricSummaries,
+  testModelConnection,
   updateModel,
+  updateModelPreset,
 } from '../../api/model';
-import type { AiModel } from '../../types';
+import type {
+  AiModel,
+  AiModelMetricSummary,
+  AiModelMetricTrendPoint,
+  AiModelPreset,
+} from '../../types';
+import { useDragSort, useModels } from './hooks';
+import { getModelColumns } from './columns';
+import ModelFormModal, { type ModelFormValues } from './ModelFormModal';
+import ModelMetricsDrawer from './ModelMetricsDrawer';
+import ModelPresetManagerDrawer from './ModelPresetManagerDrawer';
+import ModelPresetModal, { type ModelPresetFormValues } from './ModelPresetModal';
+import {
+  fillFormForEdit,
+  getDefaultFormValues,
+  valuesToPayload,
+} from './modelFormUtils';
+import './model-drag.css';
 
 const { Text } = Typography;
 
+/**
+ * AI 模型配置管理页
+ *
+ * 关注点拆分：
+ *  - 数据获取 → hooks.ts: useModels
+ *  - 拖拽排序 → hooks.ts: useDragSort
+ *  - 表单弹窗 → ModelFormModal.tsx
+ *  - 表格列   → columns.tsx
+ *  - 预设模板 → 后端 /models/presets
+ *  - 拖拽样式 → model-drag.css
+ *  - 本文件   → 仅编排：state + handlers + 渲染
+ */
 export const ModelConfig: React.FC = () => {
-  const [models, setModels] = useState<AiModel[]>([]);
-  const [loading, setLoading] = useState(false);
+  const { models, loading, fetch, setModels } = useModels();
+  const dragSort = useDragSort();
+
+  // 表单 Modal 状态
   const [modelModalOpen, setModelModalOpen] = useState(false);
   const [editingModel, setEditingModel] = useState<AiModel | null>(null);
-  const [form] = Form.useForm();
+  const [form] = Form.useForm<ModelFormValues>();
+  const [modelPresets, setModelPresets] = useState<AiModelPreset[]>([]);
+  const [allModelPresets, setAllModelPresets] = useState<AiModelPreset[]>([]);
+  const [presetsLoading, setPresetsLoading] = useState(false);
+  const [presetManagerLoading, setPresetManagerLoading] = useState(false);
+  const [presetManagerOpen, setPresetManagerOpen] = useState(false);
+  const [presetModalOpen, setPresetModalOpen] = useState(false);
+  const [presetEditing, setPresetEditing] = useState<AiModelPreset | null>(null);
+  const [presetForm] = Form.useForm<ModelPresetFormValues>();
+  const [metricSummaries, setMetricSummaries] = useState<AiModelMetricSummary[]>([]);
+  const [metricTrend, setMetricTrend] = useState<AiModelMetricTrendPoint[]>([]);
+  const [metricTrendLoading, setMetricTrendLoading] = useState(false);
+  const [metricDrawerOpen, setMetricDrawerOpen] = useState(false);
+  const [metricModel, setMetricModel] = useState<AiModel | null>(null);
+  const [testingModelId, setTestingModelId] = useState<number | null>(null);
 
-  // 拖拽排序状态
-  const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
-  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
-  const [rowDraggable, setRowDraggable] = useState(false);
-
-  const handleRowDragStart = (e: React.DragEvent, index: number) => {
-    setDraggedIndex(index);
-    e.dataTransfer.effectAllowed = 'move';
-  };
-
-  const handleRowDragOver = (e: React.DragEvent, index: number) => {
-    e.preventDefault();
-    if (dragOverIndex !== index) {
-      setDragOverIndex(index);
-    }
-  };
-
-  const handleRowDragLeave = () => {
-    setDragOverIndex(null);
-  };
-
-  const handleRowDrop = async (e: React.DragEvent, targetIndex: number) => {
-    e.preventDefault();
-    if (draggedIndex === null || draggedIndex === targetIndex) return;
-
-    const reorderedModels = [...models];
-    const [draggedItem] = reorderedModels.splice(draggedIndex, 1);
-    reorderedModels.splice(targetIndex, 0, draggedItem);
-
-    // 重新计算并分配排序权重值 (10, 20, 30...)
-    const updatedModels = reorderedModels.map((item, idx) => ({
-      ...item,
-      sortOrder: (idx + 1) * 10,
-    }));
-
-    setModels(updatedModels);
-    setDraggedIndex(null);
-    setDragOverIndex(null);
-
+  // ===== 业务操作 =====
+  const fetchModelPresets = useCallback(async () => {
+    setPresetsLoading(true);
     try {
-      const promises = updatedModels
-        .filter((item, idx) => models[idx]?.id !== item.id || models[idx]?.sortOrder !== item.sortOrder)
-        .map((item) => updateModel(item.id, item));
-
-      await Promise.all(promises);
-      message.success('排序更新成功');
-      fetchModels();
-    } catch (err) {
-      console.error(err);
-      message.error('排序更新失败');
-      fetchModels();
-    }
-  };
-
-  const handleRowDragEnd = () => {
-    setDraggedIndex(null);
-    setDragOverIndex(null);
-    setRowDraggable(false);
-  };
-
-  const presets = [
-    { name: 'Gemini 2.0 Pro', provider: 'Google', identifier: 'gemini-2.0-pro-exp-02-05', baseUrl: 'https://generativelanguage.googleapis.com', description: 'Google 顶尖多模态模型，支持原生视频理解。', capabilities: ['text', 'image', 'video'] },
-    { name: 'Qwen-VL-Max', provider: 'Alibaba', identifier: 'qwen-vl-max', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', description: '通义千问视觉大模型，视频理解能力强。', capabilities: ['text', 'image', 'video'] },
-    { name: 'DeepSeek Chat', provider: 'DeepSeek', identifier: 'deepseek-chat', baseUrl: 'https://api.deepseek.com', description: '深度求索高性能模型，环境分析极具性价比。', capabilities: ['text'] },
-    { name: 'GPT-4o', provider: 'OpenAI', identifier: 'gpt-4o', baseUrl: 'https://api.openai.com/v1', description: 'OpenAI 旗舰全能模型，推理能力卓越。', capabilities: ['text', 'image', 'video'] },
-    { name: 'MiniMax-M2.7', provider: 'MiniMax', identifier: 'MiniMax-M2.7', baseUrl: 'https://api.minimaxi.chat/v1', description: '国产多模态模型，支持图片理解与环境分析。', capabilities: ['text', 'image'] },
-    { name: 'MiniMax-M3', provider: 'MiniMax', identifier: 'MiniMax-M3', baseUrl: 'https://api.minimaxi.chat/v1', description: 'MiniMax 最新旗舰，原生多模态，100 万 Token 上下文。', capabilities: ['text', 'image', 'video'] },
-  ];
-
-  const fetchModels = useCallback(async () => {
-    setLoading(true);
-    try {
-      const data = await listModels();
-      setModels(data);
+      const data = await listModelPresets();
+      setModelPresets(data);
+    } catch (e) {
+      console.error(e);
     } finally {
-      setLoading(false);
+      setPresetsLoading(false);
+    }
+  }, []);
+
+  const fetchAllModelPresets = useCallback(async () => {
+    setPresetManagerLoading(true);
+    try {
+      const data = await listAllModelPresets();
+      setAllModelPresets(data);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setPresetManagerLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    fetchModels();
-  }, [fetchModels]);
+    fetchModelPresets();
+  }, [fetchModelPresets]);
 
-  const openModelModal = (model: AiModel | null = null) => {
-    setEditingModel(model);
-    if (model) {
-      form.setFieldsValue({
-        name: model.name,
-        provider: model.provider,
-        identifier: model.identifier,
-        baseUrl: model.baseUrl,
-        apiKey: model.apiKey,
-        capabilities: model.capabilities ? model.capabilities.split(',') : [],
-        description: model.description,
-        isDefault: model.isDefault === 'true',
+  const fetchMetricSummaries = useCallback(async () => {
+    try {
+      const data = await listModelMetricSummaries();
+      setMetricSummaries(data);
+    } catch (e) {
+      console.error(e);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchMetricSummaries();
+  }, [fetchMetricSummaries]);
+
+  const metricsByModel = useMemo(
+    () =>
+      metricSummaries.reduce<Record<string, AiModelMetricSummary>>((map, item) => {
+        map[item.modelName] = item;
+        return map;
+      }, {}),
+    [metricSummaries],
+  );
+
+  const openModelModal = useCallback(
+    (model: AiModel | null = null) => {
+      setEditingModel(model);
+      fetchModelPresets();
+      if (model) {
+        fillFormForEdit(form, model);
+      } else {
+        form.resetFields();
+        form.setFieldsValue(getDefaultFormValues());
+      }
+      setModelModalOpen(true);
+    },
+    [fetchModelPresets, form],
+  );
+
+  const openPresetModal = useCallback((preset: AiModelPreset | null = null) => {
+    setPresetEditing(preset);
+    presetForm.resetFields();
+    if (preset) {
+      presetForm.setFieldsValue({
+        name: preset.name,
+        provider: preset.provider,
+        identifier: preset.identifier,
+        baseUrl: preset.baseUrl,
+        capabilities: preset.capabilities ? preset.capabilities.split(',') : [],
+        description: preset.description,
+        sortOrder: preset.sortOrder,
+        status: (preset.status ?? 1) === 1,
       });
     } else {
-      form.resetFields();
-      form.setFieldsValue({
-        isDefault: false,
+      const presetCount = allModelPresets.length || modelPresets.length;
+      presetForm.setFieldsValue({
         capabilities: ['text'],
+        sortOrder: (presetCount + 1) * 10,
+        status: true,
       });
     }
-    setModelModalOpen(true);
-  };
+    setPresetModalOpen(true);
+  }, [allModelPresets.length, modelPresets.length, presetForm]);
 
-  const handleApplyPreset = (presetName: string) => {
-    const p = presets.find((x) => x.name === presetName);
-    if (p) {
-      form.setFieldsValue({
-        name: p.name,
-        provider: p.provider,
-        identifier: p.identifier,
-        baseUrl: p.baseUrl,
-        description: p.description,
-        capabilities: p.capabilities,
-      });
-    }
-  };
+  const openPresetManager = useCallback(() => {
+    setPresetManagerOpen(true);
+    fetchAllModelPresets();
+  }, [fetchAllModelPresets]);
 
-  const handleModelSubmit = async () => {
+  const handleModelSubmit = useCallback(async () => {
     const values = await form.validateFields();
-    const payload: Partial<AiModel> = {
+    try {
+      if (editingModel) {
+        await updateModel(
+          editingModel.id,
+          valuesToPayload(values, { sortOrder: editingModel.sortOrder, id: editingModel.id }),
+        );
+        message.success('AI模型更新成功');
+      } else {
+        await createModel(valuesToPayload(values, { sortOrder: (models.length + 1) * 10 }));
+        message.success('AI模型创建成功');
+      }
+      setModelModalOpen(false);
+      fetch();
+      fetchMetricSummaries();
+    } catch (e) {
+      console.error(e);
+    }
+  }, [editingModel, fetch, fetchMetricSummaries, form, models.length]);
+
+  const handlePresetSubmit = useCallback(async () => {
+    const values = await presetForm.validateFields();
+    const payload = {
       name: values.name,
       provider: values.provider,
       identifier: values.identifier,
       baseUrl: values.baseUrl,
-      apiKey: values.apiKey,
-      capabilities: values.capabilities ? values.capabilities.join(',') : '',
+      capabilities: values.capabilities.join(','),
       description: values.description,
-      isDefault: values.isDefault ? 'true' : 'false',
+      sortOrder: values.sortOrder ?? (modelPresets.length + 1) * 10,
+      status: values.status ? 1 : 0,
     };
-
     try {
-      if (editingModel) {
-        await updateModel(editingModel.id, {
-          ...payload,
-          sortOrder: editingModel.sortOrder,
-        });
-        message.success('AI模型更新成功');
+      if (presetEditing) {
+        await updateModelPreset(presetEditing.id, payload);
+        message.success('模型预设更新成功');
       } else {
-        await createModel({
-          ...payload,
-          sortOrder: (models.length + 1) * 10,
-        });
-        message.success('AI模型创建成功');
+        await createModelPreset(payload);
+        message.success('模型预设创建成功');
       }
-      setModelModalOpen(false);
-      fetchModels();
+      setPresetModalOpen(false);
+      setPresetEditing(null);
+      fetchModelPresets();
+      fetchAllModelPresets();
     } catch (e) {
       console.error(e);
     }
-  };
+  }, [
+    fetchAllModelPresets,
+    fetchModelPresets,
+    modelPresets.length,
+    presetEditing,
+    presetForm,
+  ]);
 
-  const handleDelete = async (id: number) => {
-    try {
-      await deleteModel(id);
-      message.success('AI模型已删除');
-      fetchModels();
-    } catch (e) {
-      console.error(e);
-    }
-  };
-
-  const handleToggleDefault = async (checked: boolean, record: AiModel) => {
-    try {
-      await updateModel(record.id, {
-        ...record,
-        isDefault: checked ? 'true' : 'false',
-      });
-      message.success(`${record.name} 已设置为默认模型`);
-      fetchModels();
-    } catch (e) {
-      console.error(e);
-    }
-  };
-
-  const columns = [
-    {
-      title: '排序',
-      key: 'order',
-      width: 80,
-      render: (_: any, _record: AiModel, index: number) => (
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <div
-            onMouseEnter={() => setRowDraggable(true)}
-            onMouseLeave={() => setRowDraggable(false)}
-            style={{ cursor: 'grab', display: 'flex', alignItems: 'center', padding: '4px' }}
-            title="拖拽排序"
-          >
-            <HolderOutlined style={{ fontSize: '15px', color: '#8c8c8c' }} />
-          </div>
-          <Tag color="cyan" style={{ margin: 0, minWidth: '22px', height: '22px', lineHeight: '20px', textAlign: 'center', borderRadius: '4px', fontWeight: 600, border: 'none' }}>
-            {index + 1}
-          </Tag>
-        </div>
-      ),
+  const handlePresetToggleStatus = useCallback(
+    async (preset: AiModelPreset, checked: boolean) => {
+      try {
+        await changeModelPresetStatus(preset.id, checked ? 1 : 0);
+        message.success(`${preset.name} 已${checked ? '启用' : '停用'}`);
+        fetchModelPresets();
+        fetchAllModelPresets();
+      } catch (e) {
+        console.error(e);
+      }
     },
-    {
-      title: '模型信息',
-      key: 'modelInfo',
-      render: (_: any, record: AiModel) => (
-        <Space direction="vertical" size={2} style={{ width: '100%' }}>
-          <Space size={8} style={{ flexWrap: 'wrap' }}>
-            <Text strong style={{ fontSize: '14px' }}>{record.name}</Text>
-            <Tag color="blue" style={{ border: 'none', borderRadius: '4px', margin: 0 }}>
-              {record.provider}
-            </Tag>
-            {record.isDefault === 'true' && (
-              <Tag color="gold" icon={<ThunderboltOutlined />} style={{ border: 'none', borderRadius: '4px', margin: 0 }}>
-                默认
-              </Tag>
-            )}
-          </Space>
-          <div style={{ marginTop: 2 }}>
-            <Text type="secondary" code style={{ fontSize: '12px' }}>
-              {record.identifier}
-            </Text>
-          </div>
+    [fetchAllModelPresets, fetchModelPresets],
+  );
+
+  const handlePresetDelete = useCallback(
+    async (id: number) => {
+      try {
+        await deleteModelPreset(id);
+        message.success('模型预设已删除');
+        fetchModelPresets();
+        fetchAllModelPresets();
+      } catch (e) {
+        console.error(e);
+      }
+    },
+    [fetchAllModelPresets, fetchModelPresets],
+  );
+
+  const handleDelete = useCallback(
+    async (id: number) => {
+      try {
+        await deleteModel(id);
+        message.success('AI模型已删除');
+        fetch();
+        fetchMetricSummaries();
+      } catch (e) {
+        console.error(e);
+      }
+    },
+    [fetch, fetchMetricSummaries],
+  );
+
+  const handleToggleDefault = useCallback(
+    async (checked: boolean, record: AiModel) => {
+      try {
+        await updateModel(record.id, {
+          ...record,
+          isDefault: checked ? 'true' : 'false',
+        });
+        message.success(`${record.name} 已设置为默认模型`);
+        fetch();
+        fetchMetricSummaries();
+      } catch (e) {
+        console.error(e);
+      }
+    },
+    [fetch, fetchMetricSummaries],
+  );
+
+  const handleToggleStatus = useCallback(
+    async (checked: boolean, record: AiModel) => {
+      try {
+        await changeModelStatus(record.id, checked ? 1 : 0);
+        message.success(`${record.name} 已${checked ? '启用' : '停用'}`);
+        fetch();
+        fetchMetricSummaries();
+      } catch (e) {
+        console.error(e);
+      }
+    },
+    [fetch, fetchMetricSummaries],
+  );
+
+  const handleTestModel = useCallback(async (record: AiModel) => {
+    setTestingModelId(record.id);
+    try {
+      const result = await testModelConnection(record.id);
+      const content = (
+        <Space direction="vertical" size={6}>
+          <Text>{result.message}</Text>
+          <Text type="secondary">耗时：{result.durationMs} ms</Text>
+          {result.responseSummary && (
+            <Text type="secondary">响应摘要：{result.responseSummary}</Text>
+          )}
         </Space>
-      ),
-    },
-    {
-      title: 'Endpoint URL (接口地址)',
-      dataIndex: 'baseUrl',
-      key: 'baseUrl',
-      ellipsis: { showTitle: true },
-      render: (text: string) =>
-        text ? (
-          <Text type="secondary" copyable style={{ fontSize: '13px', fontFamily: 'monospace' }}>
-            {text}
-          </Text>
-        ) : (
-          <Text type="secondary">—</Text>
-        ),
-    },
-    {
-      title: '支持能力',
-      dataIndex: 'capabilities',
-      key: 'capabilities',
-      width: 180,
-      render: (text: string) => {
-        if (!text) return <Text type="secondary" italic>无</Text>;
-        return (
-          <Space size={4}>
-            {text.split(',').map((cap) => {
-              let label = cap;
-              let color = 'default';
-              if (cap === 'text') {
-                label = '文本';
-                color = 'blue';
-              } else if (cap === 'image') {
-                label = '图片';
-                color = 'green';
-              } else if (cap === 'video') {
-                label = '视频';
-                color = 'purple';
-              }
-              return (
-                <Tag key={cap} color={color}>
-                  {label}
-                </Tag>
-              );
-            })}
-          </Space>
+      );
+
+      if (result.success) {
+        Modal.success({
+          title: `${record.name} 测试通过`,
+          content,
+        });
+      } else {
+        Modal.error({
+          title: `${record.name} 测试失败`,
+          content,
+        });
+      }
+    } catch (e) {
+      console.error(e);
+      message.error('模型测试失败，请检查接口地址和密钥配置');
+    } finally {
+      setTestingModelId(null);
+    }
+  }, []);
+
+  const openMetricDrawer = useCallback(async (model: AiModel) => {
+    setMetricModel(model);
+    setMetricDrawerOpen(true);
+    setMetricTrendLoading(true);
+    try {
+      const data = await getModelMetricTrend(model.id, 7);
+      setMetricTrend(data);
+    } catch (e) {
+      console.error(e);
+      setMetricTrend([]);
+    } finally {
+      setMetricTrendLoading(false);
+    }
+  }, []);
+
+  // 拖拽落点：算出新顺序 → 并发调 API 落 sortOrder → 失败回滚
+  const handleRowDrop = useCallback(
+    async (e: React.DragEvent, targetIndex: number) => {
+      e.preventDefault();
+      const from = dragSort.draggedIndex;
+      if (from === null || from === targetIndex) return;
+      const reordered = dragSort.reorder(models, from, targetIndex);
+      setModels(reordered);
+      dragSort.disableDrag();
+      try {
+        const dirty = reordered.filter(
+          (item, idx) =>
+            models[idx]?.id !== item.id || models[idx]?.sortOrder !== item.sortOrder,
         );
-      },
+        await Promise.all(dirty.map((m) => updateModel(m.id, m)));
+        message.success('排序更新成功');
+        fetch();
+        fetchMetricSummaries();
+      } catch (err) {
+        console.error(err);
+        message.error('排序更新失败');
+        fetch();
+        fetchMetricSummaries();
+      }
     },
+    [dragSort, models, setModels, fetch, fetchMetricSummaries],
+  );
+
+  // ===== 列定义 =====
+  const columns = getModelColumns(
     {
-      title: '默认模型',
-      key: 'isDefault',
-      width: 100,
-      render: (_: any, record: AiModel) => (
-        <Switch
-          checked={record.isDefault === 'true'}
-          onChange={(checked) => handleToggleDefault(checked, record)}
-        />
-      ),
+      onEdit: openModelModal,
+      onDelete: handleDelete,
+      onTest: handleTestModel,
+      onViewMetrics: openMetricDrawer,
+      onToggleDefault: handleToggleDefault,
+      onToggleStatus: handleToggleStatus,
+      onDragHandleEnter: dragSort.enableDrag,
+      onDragHandleLeave: dragSort.disableDrag,
     },
-    {
-      title: '操作',
-      key: 'action',
-      width: 120,
-      fixed: 'right' as const,
-      render: (_: any, record: AiModel) => (
-        <Space size={16}>
-          <Button
-            type="link"
-            size="small"
-            icon={<EditOutlined />}
-            onClick={() => openModelModal(record)}
-          >
-            编辑
-          </Button>
-          <Popconfirm
-            title="确认要删除该模型配置吗？"
-            onConfirm={() => handleDelete(record.id)}
-            okText="确认"
-            cancelText="取消"
-          >
-            <Button type="link" size="small" danger icon={<DeleteOutlined />}>
-              删除
-            </Button>
-          </Popconfirm>
-        </Space>
-      ),
-    },
-  ];
+    { metricsByModel, testingModelId },
+  );
 
   return (
     <div className="ci-workspace">
@@ -361,150 +400,79 @@ export const ModelConfig: React.FC = () => {
           </Space>
         }
         extra={
-          <Button
-            type="primary"
-            icon={<PlusOutlined />}
-            onClick={() => openModelModal()}
-          >
-            新增模型
-          </Button>
+          <Space>
+            <Button icon={<SettingOutlined />} onClick={openPresetManager}>
+              预设管理
+            </Button>
+            <Button type="primary" icon={<PlusOutlined />} onClick={() => openModelModal()}>
+              新增模型
+            </Button>
+          </Space>
         }
       >
-        <Table
+        <Table<AiModel>
           dataSource={models}
           columns={columns}
           rowKey="id"
           loading={loading}
           tableLayout="auto"
+          scroll={{ x: 1420 }}
           pagination={false}
-          onRow={(_, index) => ({
-            draggable: rowDraggable,
-            onDragStart: (e) => handleRowDragStart(e, index!),
-            onDragOver: (e) => handleRowDragOver(e, index!),
-            onDragLeave: handleRowDragLeave,
-            onDrop: (e) => handleRowDrop(e, index!),
-            onDragEnd: handleRowDragEnd,
-            className: `ci-model-row-draggable ${draggedIndex === index ? 'ci-model-row-dragging' : ''} ${dragOverIndex === index ? 'ci-model-row-drag-over' : ''}`,
-            style: {
-              cursor: rowDraggable ? 'grab' : 'default',
-            }
-          })}
+          onRow={(_, index) => {
+            const rowProps = dragSort.onRow(index ?? 0);
+            return {
+              ...rowProps,
+              onDrop: (e) => {
+                const target = rowProps.onDrop(e);
+                handleRowDrop(e, target);
+              },
+            };
+          }}
         />
       </Card>
 
-      <Modal
-        title={
-          <Space>
-            <SettingOutlined />
-            <span>{editingModel ? '编辑模型配置' : '新增 AI 模型'}</span>
-          </Space>
-        }
+      <ModelFormModal
         open={modelModalOpen}
-        onOk={handleModelSubmit}
+        editing={editingModel}
+        form={form as FormInstance<ModelFormValues>}
+        presets={modelPresets}
+        presetsLoading={presetsLoading}
         onCancel={() => setModelModalOpen(false)}
-        width={700}
-        destroyOnClose
-      >
-        <Form form={form} layout="vertical" style={{ marginTop: 16 }}>
-          <Row gutter={16}>
-            <Col span={12}>
-              <Form.Item label="从官方预设模板快速加载">
-                <Select
-                  placeholder="选择一个官方预设模板填充..."
-                  onChange={handleApplyPreset}
-                  options={presets.map((p) => ({ label: p.name, value: p.name }))}
-                />
-              </Form.Item>
-            </Col>
-            <Col span={12}>
-              <Form.Item
-                name="name"
-                label="模型显示名称"
-                rules={[{ required: true, message: '请输入模型显示名称' }]}
-              >
-                <Input placeholder="如: Gemini 2.0 Pro" />
-              </Form.Item>
-            </Col>
-          </Row>
+        onSubmit={handleModelSubmit}
+        onCreatePreset={openPresetModal}
+        onManagePresets={openPresetManager}
+      />
 
-          <Row gutter={16}>
-            <Col span={12}>
-              <Form.Item
-                name="provider"
-                label="技术供应商"
-                rules={[{ required: true, message: '请输入技术供应商' }]}
-              >
-                <Input placeholder="如: Google" />
-              </Form.Item>
-            </Col>
-            <Col span={12}>
-              <Form.Item
-                name="identifier"
-                label="模型调用 ID"
-                rules={[{ required: true, message: '请输入模型调用 ID' }]}
-              >
-                <Input placeholder="如: gemini-2.0-pro-exp-02-05" />
-              </Form.Item>
-            </Col>
-          </Row>
+      <ModelPresetModal
+        open={presetModalOpen}
+        editing={presetEditing}
+        form={presetForm as FormInstance<ModelPresetFormValues>}
+        onCancel={() => {
+          setPresetModalOpen(false);
+          setPresetEditing(null);
+        }}
+        onSubmit={handlePresetSubmit}
+      />
 
-          <Form.Item
-            name="baseUrl"
-            label="Endpoint URL (接口地址)"
-          >
-            <Input placeholder="https://generativelanguage.googleapis.com" />
-          </Form.Item>
+      <ModelPresetManagerDrawer
+        open={presetManagerOpen}
+        presets={allModelPresets}
+        loading={presetManagerLoading}
+        onClose={() => setPresetManagerOpen(false)}
+        onCreate={() => openPresetModal()}
+        onEdit={openPresetModal}
+        onDelete={handlePresetDelete}
+        onToggleStatus={handlePresetToggleStatus}
+      />
 
-          <Form.Item
-            name="apiKey"
-            label="API Key (密钥)"
-          >
-            <Input.Password placeholder="在此输入您的密钥" />
-          </Form.Item>
-
-          <Form.Item
-            name="capabilities"
-            label="支持能力"
-            rules={[{ required: true, message: '请选择支持能力' }]}
-          >
-            <Select
-              mode="multiple"
-              placeholder="选择支持的能力"
-              options={[
-                { label: '文本识别', value: 'text' },
-                { label: '图片识别', value: 'image' },
-                { label: '视频识别', value: 'video' },
-              ]}
-            />
-          </Form.Item>
-
-          <Form.Item name="description" label="功能描述">
-            <Input.TextArea
-              rows={3}
-              placeholder="描述该模型的分析优势、建议场景等..."
-            />
-          </Form.Item>
-
-          <Form.Item name="isDefault" label="是否默认模型" valuePropName="checked">
-            <Switch checkedChildren="是" unCheckedChildren="否" />
-          </Form.Item>
-        </Form>
-      </Modal>
-
-      <style>{`
-        .ci-model-row-draggable {
-          transition: background-color 0.25s ease, opacity 0.25s ease;
-        }
-        .ci-model-row-dragging {
-          opacity: 0.45;
-          background-color: #f3f4f6 !important;
-        }
-        .ci-model-row-drag-over td {
-          background-color: var(--premium-primary-soft) !important;
-          border-top: 2px solid var(--premium-primary) !important;
-          transition: none !important;
-        }
-      `}</style>
+      <ModelMetricsDrawer
+        open={metricDrawerOpen}
+        model={metricModel}
+        summary={metricModel ? metricsByModel[metricModel.identifier] : undefined}
+        trend={metricTrend}
+        loading={metricTrendLoading}
+        onClose={() => setMetricDrawerOpen(false)}
+      />
     </div>
   );
 };

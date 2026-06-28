@@ -27,7 +27,7 @@ import {
   ReloadOutlined,
   SyncOutlined,
 } from '@ant-design/icons';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   createIncrementalTask,
   createInitialTask,
@@ -40,7 +40,7 @@ import { listPrompts } from '../../api/prompt';
 import { listRepositories } from '../../api/repository';
 import { listSystems } from '../../api/system';
 import { listModels } from '../../api/model';
-import type { AiModel, Prompt, Repository, System, Task } from '../../types';
+import type { AiModel, EntryScanConfig, Prompt, Repository, System, Task } from '../../types';
 import ModuleHierarchyEditorDrawer from '../../components/ModuleHierarchyEditorDrawer';
 
 const { Text } = Typography;
@@ -76,6 +76,7 @@ const statusMeta: Record<string, { color: string; label: string; loading?: boole
  */
 const Tasks: React.FC = () => {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
 
   // 任务表格状态数据
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -157,6 +158,28 @@ const Tasks: React.FC = () => {
     loadOptions();
   }, [loadOptions]);
 
+  // 从 query string 预填：?systemId=X&repositoryId=Y&openCreate=1
+  useEffect(() => {
+    const sysId = Number(searchParams.get('systemId'));
+    const repoId = Number(searchParams.get('repositoryId'));
+    const shouldOpen = searchParams.get('openCreate') === '1';
+    if (shouldOpen && Number.isFinite(sysId) && sysId > 0) {
+      form.setFieldsValue({ systemId: sysId });
+      if (Number.isFinite(repoId) && repoId > 0) {
+        form.setFieldsValue({ repositoryId: repoId });
+      }
+      setModalOpen(true);
+      setCurrentStep(0);
+      // 消费掉 query，避免重复打开
+      const next = new URLSearchParams(searchParams);
+      next.delete('systemId');
+      next.delete('repositoryId');
+      next.delete('openCreate');
+      setSearchParams(next, { replace: true });
+    }
+    // 仅在挂载时执行
+  }, []);
+
   // 级联拉取已选择系统名下的所有 Git 代码仓库记录
   useEffect(() => {
     if (!selectedSystemId) {
@@ -165,7 +188,11 @@ const Tasks: React.FC = () => {
     }
     listRepositories({ current: 1, size: 50, systemId: selectedSystemId }).then((data) => {
       setRepositories(data.records);
-      form.setFieldValue('repositoryId', undefined);
+      // 若 query 预填的 repositoryId 仍在结果中，保留；否则清空
+      const currentRepoId = form.getFieldValue('repositoryId');
+      if (currentRepoId && !data.records.some((r) => r.id === currentRepoId)) {
+        form.setFieldValue('repositoryId', undefined);
+      }
     });
   }, [form, selectedSystemId]);
 
@@ -232,11 +259,10 @@ const Tasks: React.FC = () => {
   const DEFAULT_EXCLUDE_CLASSPATHS = ['**/*Test', '**/*Tests', '**/*TestCase'];
 
   /** 返回带后端默认值的扫描配置 */
-  const buildScanConfigWithDefaults = (config: Record<string, unknown> | undefined): Record<string, unknown> => {
-    const base = config || {};
+  const buildScanConfigWithDefaults = (config: EntryScanConfig | Record<string, unknown> | undefined): EntryScanConfig => {
+    const base = (config || {}) as EntryScanConfig;
     return {
       ...base,
-      // 排除类路径：仓库有配置则用仓库的，否则使用后端默认值
       excludeClasspaths: Array.isArray(base.excludeClasspaths) && base.excludeClasspaths.length > 0
         ? base.excludeClasspaths
         : DEFAULT_EXCLUDE_CLASSPATHS,

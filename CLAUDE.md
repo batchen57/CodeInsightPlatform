@@ -16,6 +16,21 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **前端**：React 19 + TypeScript + Vite + Ant Design + Zustand + ECharts + Monaco Editor + Hash Router
 - **存储分工**：PostgreSQL（状态/元数据）｜本地/对象存储（正文）｜Redis（草稿实时编辑与锁）｜Git（已确认知识）
 
+## 项目级 AI Skills
+
+前端页面开发相关 skill 放在 `.codex/skills/`。涉及前端页面、路由、请求、状态、图表、编辑器或 AI 交互时，优先查看对应 `SKILL.md`：
+
+- `codeinsight-frontend-conventions`
+- `antd-token-admin-ui`
+- `react-router-layout-routes`
+- `axios-query-server-state`
+- `zustand-client-state-boundaries`
+- `ant-design-pro-crud-patterns`
+- `monaco-review-editor`
+- `echarts-admin-analytics`
+- `antd-x-ai-workflows`
+- `motion-admin-microinteractions`
+
 ## 常用命令
 
 ```bash

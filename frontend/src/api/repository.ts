@@ -29,3 +29,7 @@ export const testRepositoryConnection = (data: Partial<Repository>): Promise<boo
 export const testSavedRepositoryConnection = (id: number): Promise<boolean> => {
   return request.post(`/repositories/${id}/test-connection`);
 };
+
+export const deleteRepository = (id: number): Promise<void> => {
+  return request.delete(`/repositories/${id}`);
+};
