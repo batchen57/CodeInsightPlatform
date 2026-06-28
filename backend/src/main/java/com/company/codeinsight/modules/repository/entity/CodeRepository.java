@@ -78,7 +78,7 @@ public class CodeRepository extends BaseEntity {
     /**
      * 逻辑删除时间。NULL=未删除，非空=已删除时间。
      */
-    @TableLogic
+    @TableLogic(value = "null", delval = "now()")
     private LocalDateTime deletedAt;
 }
 

@@ -4,12 +4,15 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.company.codeinsight.common.exception.BusinessException;
+import com.company.codeinsight.modules.model.entity.AiModel;
 import com.company.codeinsight.modules.prompt.dto.PromptTestResultDto;
+import com.company.codeinsight.modules.prompt.dto.PromptTestStreamEventDto;
 import com.company.codeinsight.modules.prompt.entity.DecompilePrompt;
 import com.company.codeinsight.modules.prompt.mapper.DecompilePromptMapper;
 import com.company.codeinsight.modules.prompt.service.DecompilePromptService;
 import com.company.codeinsight.modules.model.mapper.AiModelMapper;
 import com.company.codeinsight.modules.token.service.TokenAuditService;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -26,8 +29,10 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Consumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 /**
  * AI 提示词模板管理服务实现类
@@ -36,6 +41,8 @@ import java.util.regex.Pattern;
 @Slf4j
 @Service
 public class DecompilePromptServiceImpl extends ServiceImpl<DecompilePromptMapper, DecompilePrompt> implements DecompilePromptService {
+
+    private static final String DEFAULT_PROMPT_TYPE = "MODULARIZE";
 
     @Value("${code-insight.ai.mock:true}")
     private boolean isMockAi;
@@ -65,10 +72,19 @@ public class DecompilePromptServiceImpl extends ServiceImpl<DecompilePromptMappe
      */
     @Override
     public Page<DecompilePrompt> listPromptsPage(int current, int size, String name, Integer status) {
+        return listPromptsPage(current, size, name, status, null);
+    }
+
+    /**
+     * 分页查询指定用途提示词模板，支持模糊搜索模板名称，按照创建时间倒序排列
+     */
+    @Override
+    public Page<DecompilePrompt> listPromptsPage(int current, int size, String name, Integer status, String promptType) {
         Page<DecompilePrompt> page = new Page<>(current, size);
         LambdaQueryWrapper<DecompilePrompt> queryWrapper = new LambdaQueryWrapper<>();
         queryWrapper.like(StringUtils.hasText(name), DecompilePrompt::getName, name)
                 .eq(status != null, DecompilePrompt::getStatus, status)
+                .eq(StringUtils.hasText(promptType), DecompilePrompt::getPromptType, promptType)
                 .orderByDesc(DecompilePrompt::getCreatedAt);
         return this.page(page, queryWrapper);
     }
@@ -89,6 +105,7 @@ public class DecompilePromptServiceImpl extends ServiceImpl<DecompilePromptMappe
         cloned.setVersion(1);
         cloned.setStatus(0); // 默认禁用
         cloned.setIsDefault(0); // 默认非默认
+        cloned.setPromptType(normalizePromptType(original.getPromptType()));
         this.save(cloned);
         return cloned;
     }
@@ -111,8 +128,10 @@ public class DecompilePromptServiceImpl extends ServiceImpl<DecompilePromptMappe
 
         // 如果被设为默认，并且状态是启用，将其他的设为非默认
         if (status == 1 && prompt.getIsDefault() == 1) {
+            String promptType = normalizePromptType(prompt.getPromptType());
             this.update(new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<DecompilePrompt>()
                     .ne(DecompilePrompt::getId, id)
+                    .eq(DecompilePrompt::getPromptType, promptType)
                     .set(DecompilePrompt::getIsDefault, 0));
         }
     }
@@ -158,17 +177,7 @@ public class DecompilePromptServiceImpl extends ServiceImpl<DecompilePromptMappe
         String filledPrompt = replaceVariables(prompt.getContent(), vars);
 
         // 3. 获取大模型配置
-        com.company.codeinsight.modules.model.entity.AiModel model = null;
-        if (modelId != null) {
-            model = aiModelMapper.selectById(modelId);
-        } else {
-            // 获取系统设置的默认模型
-            model = aiModelMapper.selectOne(
-                    new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<com.company.codeinsight.modules.model.entity.AiModel>()
-                            .eq(com.company.codeinsight.modules.model.entity.AiModel::getIsDefault, "true")
-                            .last("LIMIT 1")
-            );
-        }
+        AiModel model = resolveTrialModel(modelId);
 
         String modelName = model != null ? model.getIdentifier() : this.modelNameProp;
         String activeApiKey = (model != null && StringUtils.hasText(model.getApiKey())) ? model.getApiKey() : this.apiKey;
@@ -266,6 +275,124 @@ public class DecompilePromptServiceImpl extends ServiceImpl<DecompilePromptMappe
         return result;
     }
 
+    @Override
+    public void testRunStream(Long id, String sampleCode, Long modelId, Consumer<PromptTestStreamEventDto> eventConsumer) {
+        DecompilePrompt prompt = this.getById(id);
+        if (prompt == null) {
+            throw new BusinessException("提示词模板不存在");
+        }
+
+        String parsedClass = parseClassName(sampleCode);
+        String parsedMethod = parseMethodName(sampleCode);
+
+        Map<String, String> vars = new HashMap<>();
+        vars.put("class_name", parsedClass);
+        vars.put("method_name", parsedMethod);
+        vars.put("source_code", sampleCode != null ? sampleCode : "public class MockTestClass { public void mockExecute() {} }");
+
+        String filledPrompt = replaceVariables(prompt.getContent(), vars);
+        AiModel model = resolveTrialModel(modelId);
+        String modelName = model != null ? model.getIdentifier() : this.modelNameProp;
+        String activeApiKey = (model != null && StringUtils.hasText(model.getApiKey())) ? model.getApiKey() : this.apiKey;
+        String activeApiUrl = (model != null && StringUtils.hasText(model.getBaseUrl())) ? model.getBaseUrl() : this.apiUrl;
+
+        long start = System.currentTimeMillis();
+        int inputTokens = Math.max(1, filledPrompt.length() / 4);
+        boolean shouldMock = this.isMockAi;
+        if (!shouldMock && (!StringUtils.hasText(activeApiKey) || activeApiKey.startsWith("test-key") || "mock".equalsIgnoreCase(activeApiKey))) {
+            shouldMock = true;
+        }
+
+        if (shouldMock) {
+            String mockReply = generateMockTestResult(parsedClass, parsedMethod, sampleCode, modelName);
+            emitTextChunks(mockReply, eventConsumer);
+            int outputTokens = Math.max(1, mockReply.length() / 4);
+            long duration = System.currentTimeMillis() - start;
+            eventConsumer.accept(PromptTestStreamEventDto.done(inputTokens, outputTokens, duration));
+            tokenAuditService.logTokenUsage(null, null, modelName, inputTokens, outputTokens, "TEST", true);
+            return;
+        }
+
+        StringBuilder streamedText = new StringBuilder();
+        int outputTokens = 0;
+        try {
+            Map<String, Object> reqBody = new HashMap<>();
+            reqBody.put("model", modelName);
+            reqBody.put("stream", true);
+            reqBody.put("stream_options", Map.of("include_usage", true));
+
+            List<Map<String, String>> messages = new ArrayList<>();
+            Map<String, String> userMsg = new HashMap<>();
+            userMsg.put("role", "user");
+            userMsg.put("content", filledPrompt);
+            messages.add(userMsg);
+            reqBody.put("messages", messages);
+
+            String requestUrl = activeApiUrl;
+            if (!requestUrl.endsWith("/chat/completions")) {
+                requestUrl = requestUrl.replaceAll("/+$", "") + "/chat/completions";
+            }
+
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(requestUrl))
+                    .header("Authorization", "Bearer " + activeApiKey)
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(reqBody)))
+                    .timeout(Duration.ofSeconds(60))
+                    .build();
+
+            HttpResponse<java.util.stream.Stream<String>> response = httpClient.send(request, HttpResponse.BodyHandlers.ofLines());
+            if (response.statusCode() != 200) {
+                String body = response.body().limit(20).collect(Collectors.joining("\n"));
+                String errorReason = "HTTP 错误码: " + response.statusCode() + ", 详情: " + body;
+                long duration = System.currentTimeMillis() - start;
+                eventConsumer.accept(PromptTestStreamEventDto.error(errorReason, inputTokens, duration));
+                tokenAuditService.logTokenUsage(null, null, modelName, inputTokens, 0, "TEST", false);
+                return;
+            }
+
+            try (java.util.stream.Stream<String> lines = response.body()) {
+                for (String line : (Iterable<String>) lines::iterator) {
+                    if (!StringUtils.hasText(line) || !line.startsWith("data:")) {
+                        continue;
+                    }
+                    String data = line.substring("data:".length()).trim();
+                    if ("[DONE]".equals(data)) {
+                        break;
+                    }
+                    JsonNode root = objectMapper.readTree(data);
+                    JsonNode usage = root.path("usage");
+                    if (!usage.isMissingNode() && !usage.isNull()) {
+                        int usageInputTokens = usage.path("prompt_tokens").asInt(inputTokens);
+                        int usageOutputTokens = usage.path("completion_tokens").asInt(outputTokens);
+                        inputTokens = usageInputTokens > 0 ? usageInputTokens : inputTokens;
+                        outputTokens = usageOutputTokens > 0 ? usageOutputTokens : outputTokens;
+                    }
+                    JsonNode choices = root.path("choices");
+                    if (!choices.isArray() || choices.isEmpty()) {
+                        continue;
+                    }
+                    String delta = choices.get(0).path("delta").path("content").asText("");
+                    if (StringUtils.hasText(delta)) {
+                        streamedText.append(delta);
+                        eventConsumer.accept(PromptTestStreamEventDto.content(delta));
+                    }
+                }
+            }
+
+            if (outputTokens <= 0) {
+                outputTokens = Math.max(1, streamedText.length() / 4);
+            }
+            long duration = System.currentTimeMillis() - start;
+            eventConsumer.accept(PromptTestStreamEventDto.done(inputTokens, outputTokens, duration));
+            tokenAuditService.logTokenUsage(null, null, modelName, inputTokens, outputTokens, "TEST", true);
+        } catch (Exception e) {
+            long duration = System.currentTimeMillis() - start;
+            eventConsumer.accept(PromptTestStreamEventDto.error(e.getMessage(), inputTokens, duration));
+            tokenAuditService.logTokenUsage(null, null, modelName, inputTokens, outputTokens, "TEST", false);
+        }
+    }
+
     /**
      * 正则提取测试代码中的类名
      */
@@ -297,6 +424,49 @@ public class DecompilePromptServiceImpl extends ServiceImpl<DecompilePromptMappe
             }
         }
         return "mockExecute";
+    }
+
+    private String normalizePromptType(String promptType) {
+        return StringUtils.hasText(promptType) ? promptType : DEFAULT_PROMPT_TYPE;
+    }
+
+    private AiModel resolveTrialModel(Long modelId) {
+        if (modelId != null) {
+            return aiModelMapper.selectById(modelId);
+        }
+
+        AiModel defaultModel = aiModelMapper.selectOne(
+                new LambdaQueryWrapper<AiModel>()
+                        .eq(AiModel::getIsDefault, "true")
+                        .eq(AiModel::getStatus, 1)
+                        .isNotNull(AiModel::getApiKey)
+                        .ne(AiModel::getApiKey, "")
+                        .last("LIMIT 1")
+        );
+        if (defaultModel != null) {
+            return defaultModel;
+        }
+
+        return aiModelMapper.selectOne(
+                new LambdaQueryWrapper<AiModel>()
+                        .eq(AiModel::getStatus, 1)
+                        .isNotNull(AiModel::getApiKey)
+                        .ne(AiModel::getApiKey, "")
+                        .orderByAsc(AiModel::getSortOrder)
+                        .orderByDesc(AiModel::getId)
+                        .last("LIMIT 1")
+        );
+    }
+
+    private void emitTextChunks(String text, Consumer<PromptTestStreamEventDto> eventConsumer) {
+        if (!StringUtils.hasText(text)) {
+            return;
+        }
+        int chunkSize = 24;
+        for (int start = 0; start < text.length(); start += chunkSize) {
+            int end = Math.min(text.length(), start + chunkSize);
+            eventConsumer.accept(PromptTestStreamEventDto.content(text.substring(start, end)));
+        }
     }
 
     /**

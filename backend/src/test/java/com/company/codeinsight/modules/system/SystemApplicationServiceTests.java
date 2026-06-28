@@ -2,6 +2,7 @@ package com.company.codeinsight.modules.system;
 
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.company.codeinsight.modules.system.entity.SystemApplication;
+import com.company.codeinsight.modules.system.vo.SystemSummaryVO;
 import com.company.codeinsight.modules.system.service.SystemApplicationService;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
@@ -39,7 +40,7 @@ public class SystemApplicationServiceTests {
         Assertions.assertEquals("Tester", fetched.getOwner());
 
         // Page list
-        Page<SystemApplication> page = systemApplicationService.listSystemsPage(1, 10, "测试", null, null);
+        Page<SystemSummaryVO> page = systemApplicationService.listSystemsPage(1, 10, "测试", null, null);
         Assertions.assertTrue(page.getTotal() > 0);
 
         // Update

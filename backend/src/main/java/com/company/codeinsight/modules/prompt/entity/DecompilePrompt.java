@@ -46,5 +46,10 @@ public class DecompilePrompt extends BaseEntity {
      * 是否是任务分析时默认使用的全局首选模板：0-否, 1-是
      */
     private Integer isDefault;
+
+    /**
+     * 提示词用途：MODULARIZE-模块提取，DOCUMENT_GENERATION-文档生成。
+     */
+    private String promptType;
 }
 

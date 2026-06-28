@@ -16,6 +16,7 @@ class AuthServiceTest {
         LoginRequest request = new LoginRequest();
         request.setUsername("admin");
         request.setPassword("admin123");
+        request.setToken("123456");
 
         LoginResponse response = service.login(request);
 
@@ -30,10 +31,11 @@ class AuthServiceTest {
         LoginRequest request = new LoginRequest();
         request.setUsername("admin");
         request.setPassword("wrong");
+        request.setToken("123456");
 
         BusinessException exception = Assertions.assertThrows(BusinessException.class, () -> service.login(request));
 
-        Assertions.assertEquals("账号或密码错误", exception.getMessage());
+        Assertions.assertEquals("UM 账号或密码错误", exception.getMessage());
     }
 
     private AuthServiceImpl createService() {

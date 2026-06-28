@@ -11,11 +11,18 @@ CREATE TABLE IF NOT EXISTS ci_system (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
     deleted_at TIMESTAMP
 );
+-- 1.0.1 系统软删除字段（兼容旧库，必须在 COMMENT 之前）
+ALTER TABLE ci_system ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP;
+
 COMMENT ON TABLE ci_system IS '系统管理表';
 COMMENT ON COLUMN ci_system.name IS '系统名称';
 COMMENT ON COLUMN ci_system.description IS '系统描述';
 COMMENT ON COLUMN ci_system.owner IS '系统负责人';
 COMMENT ON COLUMN ci_system.status IS '启用状态：0-停用，1-启用';
+COMMENT ON COLUMN ci_system.deleted_at IS '逻辑删除时间，NULL=未删除';
+
+-- 1.1 系统软删除字段（兼容旧库）
+ALTER TABLE ci_system ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP;
 COMMENT ON COLUMN ci_system.deleted_at IS '逻辑删除时间，NULL=未删除';
 
 -- 2. 代码库配置表
@@ -381,9 +388,13 @@ CREATE TABLE IF NOT EXISTS ci_model (
     capabilities VARCHAR(255),
     description VARCHAR(500),
     sort_order INT DEFAULT 0 NOT NULL,
+    status SMALLINT DEFAULT 1 NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
 );
+-- 16.0.1 AI 模型状态字段（兼容旧库，必须在 COMMENT 之前）
+ALTER TABLE ci_model ADD COLUMN IF NOT EXISTS status SMALLINT DEFAULT 1 NOT NULL;
+
 COMMENT ON TABLE ci_model IS 'AI模型配置表';
 COMMENT ON COLUMN ci_model.name IS '模型显示名称';
 COMMENT ON COLUMN ci_model.identifier IS '模型调用ID';
@@ -394,8 +405,56 @@ COMMENT ON COLUMN ci_model.is_default IS '是否默认模型：true/false';
 COMMENT ON COLUMN ci_model.capabilities IS '支持能力，逗号分隔 (text,image,video)';
 COMMENT ON COLUMN ci_model.description IS '功能描述';
 COMMENT ON COLUMN ci_model.sort_order IS '排序权重';
+COMMENT ON COLUMN ci_model.status IS '启用状态：0-停用，1-启用';
 
--- 17. 迁移或兼容性字段维护
+-- 16.1 AI 模型状态字段（兼容旧库）
+ALTER TABLE ci_model ADD COLUMN IF NOT EXISTS status SMALLINT DEFAULT 1 NOT NULL;
+
+-- 17. AI模型预设模板表
+CREATE TABLE IF NOT EXISTS ci_model_preset (
+    id BIGSERIAL PRIMARY KEY,
+    name VARCHAR(100) NOT NULL,
+    identifier VARCHAR(100) NOT NULL,
+    provider VARCHAR(100) NOT NULL,
+    base_url VARCHAR(255),
+    capabilities VARCHAR(255),
+    description VARCHAR(500),
+    sort_order INT DEFAULT 0 NOT NULL,
+    status SMALLINT DEFAULT 1 NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uk_model_preset_identifier ON ci_model_preset (identifier);
+CREATE INDEX IF NOT EXISTS idx_model_preset_status_sort ON ci_model_preset (status, sort_order);
+COMMENT ON TABLE ci_model_preset IS 'AI模型预设模板表';
+COMMENT ON COLUMN ci_model_preset.name IS '预设显示名称';
+COMMENT ON COLUMN ci_model_preset.identifier IS '模型调用ID';
+COMMENT ON COLUMN ci_model_preset.provider IS '技术供应商';
+COMMENT ON COLUMN ci_model_preset.base_url IS 'Endpoint URL (接口地址)';
+COMMENT ON COLUMN ci_model_preset.capabilities IS '支持能力，逗号分隔 (text,image,video)';
+COMMENT ON COLUMN ci_model_preset.description IS '模板说明';
+COMMENT ON COLUMN ci_model_preset.sort_order IS '排序权重';
+COMMENT ON COLUMN ci_model_preset.status IS '启用状态：0-停用，1-启用';
+
+INSERT INTO ci_model_preset (name, provider, identifier, base_url, capabilities, description, sort_order, status)
+VALUES
+    ('Gemini 2.0 Pro', 'Google', 'gemini-2.0-pro-exp-02-05', 'https://generativelanguage.googleapis.com', 'text,image,video', 'Google 顶尖多模态模型，支持原生视频理解。', 10, 1),
+    ('Qwen-VL-Max', 'Alibaba', 'qwen-vl-max', 'https://dashscope.aliyuncs.com/compatible-mode/v1', 'text,image,video', '通义千问视觉大模型，视频理解能力强。', 20, 1),
+    ('DeepSeek Chat', 'DeepSeek', 'deepseek-chat', 'https://api.deepseek.com', 'text', '深度求索高性能模型，代码分析极具性价比。', 30, 1),
+    ('GPT-4o', 'OpenAI', 'gpt-4o', 'https://api.openai.com/v1', 'text,image,video', 'OpenAI 旗舰全能模型，推理能力卓越。', 40, 1),
+    ('MiniMax-M2.7', 'MiniMax', 'MiniMax-M2.7', 'https://api.minimaxi.chat/v1', 'text,image', '国产多模态模型，支持图片理解与代码环境分析。', 50, 1),
+    ('MiniMax-M3', 'MiniMax', 'MiniMax-M3', 'https://api.minimaxi.chat/v1', 'text,image,video', 'MiniMax 旗舰模型，适合长上下文代码洞察。', 60, 1)
+ON CONFLICT (identifier) DO UPDATE SET
+    name = EXCLUDED.name,
+    provider = EXCLUDED.provider,
+    base_url = EXCLUDED.base_url,
+    capabilities = EXCLUDED.capabilities,
+    description = EXCLUDED.description,
+    sort_order = EXCLUDED.sort_order,
+    status = EXCLUDED.status,
+    updated_at = CURRENT_TIMESTAMP;
+
+-- 18. 迁移或兼容性字段维护
 ALTER TABLE ci_task ADD COLUMN IF NOT EXISTS model_name VARCHAR(100);
 
 

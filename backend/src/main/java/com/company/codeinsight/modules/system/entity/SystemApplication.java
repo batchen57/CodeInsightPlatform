@@ -50,7 +50,7 @@ public class SystemApplication extends BaseEntity {
      * 逻辑删除时间。NULL=未删除，非空=已删除时间。
      * MyBatis-Plus 在执行查询时会自动追加 deleted_at IS NULL，过滤掉已删除记录。
      */
-    @TableLogic
+    @TableLogic(value = "null", delval = "now()")
     private LocalDateTime deletedAt;
 }
 

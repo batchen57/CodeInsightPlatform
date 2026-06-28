@@ -26,7 +26,7 @@
         <where>
             s.deleted_at IS NULL
             <if test="name != null and name != ''">
-                AND s.name LIKE CONCAT('%', #{name}, '%')
+                AND s.name LIKE '%' || #{name,jdbcType=VARCHAR} || '%'
             </if>
             <if test="owner != null and owner != ''">
                 AND s.owner = #{owner}

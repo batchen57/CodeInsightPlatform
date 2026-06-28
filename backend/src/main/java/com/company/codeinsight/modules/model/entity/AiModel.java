@@ -1,6 +1,7 @@
 package com.company.codeinsight.modules.model.entity;
 
 import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
 import com.company.codeinsight.common.model.BaseEntity;
@@ -66,5 +67,17 @@ public class AiModel extends BaseEntity {
      * 列表展示中的排序权值，值越小越靠前
      */
     private Integer sortOrder;
+
+    /**
+     * 启用状态：0-停用，1-启用。
+     * 停用时拒绝被任务选用，但保留历史引用（ai_call_record / token_usage_audit 中的 model_name 是字符串外键）。
+     */
+    private Integer status;
+
+    /**
+     * API 响应辅助字段：标识该模型是否已配置密钥，不映射数据库。
+     */
+    @TableField(exist = false)
+    private Boolean hasApiKey;
 }
 
