@@ -88,11 +88,13 @@ function findNodeLocation(
   return null;
 }
 
-/** 生成候选 ID：4 位 Base36 + m/s/f 前缀 */
+/** 生成候选 ID：前缀 + 4 位 Base36（总长 5，与后端 Base62Generator.generateWithPrefix(4) 一致） */
 function generateCandidateId(prefix: 'm' | 's' | 'f', existing: string[]): string {
+  // 后端校验长度为 5（prefix + 4 位随机），这里同步匹配；
+  // 同时包容可能存在的旧版 6 位 ID（prefix + 5 位），只按前缀过滤、不限制长度
   const used = new Set(
     existing
-      .filter((id) => id?.startsWith(prefix) && id.length === 6)
+      .filter((id) => id?.startsWith(prefix))
       .map((id) => id.substring(1)),
   );
   for (let counter = 0; counter < 36 ** 4; counter++) {
