@@ -81,6 +81,7 @@ public class JavaParserServiceImpl implements JavaParserService {
             String pendingMappingUrl = null;
             String pendingMappingMethod = null;
             String currentMethod = null;
+            String currentMethodArgs = null;  // 阶段 2 用：当前方法的入参签名（用于拼 callerSignature）
             int methodBraceDepth = 0;
             boolean methodBraceStarted = false;
 
@@ -184,10 +185,12 @@ public class JavaParserServiceImpl implements JavaParserService {
                     methodInfo.setArguments(methodMatcher.group(3).trim());
                     methodInfo.setRequestMapping(pendingMappingUrl);
                     methodInfo.setHttpMethod(pendingMappingMethod);
+                    methodInfo.setStartLine(i + 1);  // 阶段 2 用：方法体起始行
                     classInfo.getMethods().add(methodInfo);
 
                     // 开启对当前方法内部大括号作用域的深度追踪，用于限制方法内调用的收集范围
                     currentMethod = methodInfo.getName();
+                    currentMethodArgs = methodInfo.getArguments();  // 阶段 2 用：保存当前方法参数
                     methodBraceDepth = countChar(line, '{') - countChar(line, '}');
                     methodBraceStarted = line.contains("{");
                     pendingMappingUrl = null;
@@ -196,7 +199,7 @@ public class JavaParserServiceImpl implements JavaParserService {
 
                 // 9. 追踪并分析方法体内的方法调用表达式，记录方法级的链路拓扑
                 if (currentMethod != null) {
-                    collectMethodCalls(line, i + 1, currentMethod, dependencyVariables, classInfo);
+                    collectMethodCalls(line, i + 1, currentMethod, currentMethodArgs, dependencyVariables, classInfo);
                     if (!methodBraceStarted && line.contains("{")) {
                         methodBraceStarted = true;
                     } else if (!methodStartedOnLine) {
@@ -204,7 +207,15 @@ public class JavaParserServiceImpl implements JavaParserService {
                     }
                     // 当括号深度归零，说明当前方法的作用域块已解析结束
                     if (methodBraceStarted && methodBraceDepth <= 0) {
+                        // 阶段 2 用：写入方法体结束行
+                        if (!classInfo.getMethods().isEmpty()) {
+                            MethodInfo lastMethod = classInfo.getMethods().get(classInfo.getMethods().size() - 1);
+                            if (lastMethod.getName().equals(currentMethod) && lastMethod.getEndLine() == null) {
+                                lastMethod.setEndLine(i + 1);
+                            }
+                        }
                         currentMethod = null;
+                        currentMethodArgs = null;
                         methodBraceDepth = 0;
                         methodBraceStarted = false;
                     }
@@ -256,24 +267,26 @@ public class JavaParserServiceImpl implements JavaParserService {
         if (directory == null || !directory.exists()) {
             return list;
         }
-        scanAndParse(directory, list);
+        scanAndParse(directory, directory, list);
         return list;
     }
 
     /**
      * 递归扫描与深度分析的核心辅助方法
      */
-    private void scanAndParse(File file, List<ParsedClassInfo> list) {
+    private void scanAndParse(File root, File file, List<ParsedClassInfo> list) {
         if (file.isDirectory()) {
             File[] files = file.listFiles();
             if (files != null) {
                 for (File f : files) {
-                    scanAndParse(f, list);
+                    scanAndParse(root, f, list);
                 }
             }
         } else if (file.getName().endsWith(".java")) {
             ParsedClassInfo info = parseFile(file);
             if (info != null && info.getClassName() != null) {
+                String rel = root.toURI().relativize(file.toURI()).getPath();
+                info.setSourceRelativePath(rel.replace('\\', '/'));
                 list.add(info);
             }
         }
@@ -371,8 +384,9 @@ public class JavaParserServiceImpl implements JavaParserService {
 
     /**
      * 分析方法体内部依赖的方法调用，建立调用关系元数据 MethodCallInfo
+     * 阶段 2 增强：同步记录 callerSignature（caller 方法完整签名，方法名 + 参数）和 targetSignature（target 端 MVP 简化为 targetMethod）
      */
-    private void collectMethodCalls(String line, int lineNumber, String currentMethod, Map<String, String> dependencyVariables, ParsedClassInfo classInfo) {
+    private void collectMethodCalls(String line, int lineNumber, String currentMethod, String currentMethodArgs, Map<String, String> dependencyVariables, ParsedClassInfo classInfo) {
         Matcher matcher = METHOD_CALL_PATTERN.matcher(line);
         while (matcher.find()) {
             String variable = matcher.group(1);
@@ -381,13 +395,26 @@ public class JavaParserServiceImpl implements JavaParserService {
             if (dependencyVariables.containsKey(variable)) {
                 MethodCallInfo callInfo = new MethodCallInfo();
                 callInfo.setCallerMethod(currentMethod);
+                callInfo.setCallerSignature(buildMethodSignature(currentMethod, currentMethodArgs));
                 callInfo.setDependencyName(dependencyVariables.get(variable));
                 callInfo.setTargetMethod(targetMethod);
+                // MVP 简化：target 端仅同名，不带参数（同名重载取第一个匹配）
+                // 阶段 3 升级：跨文件 MethodInfo 关联 + 按行号 + 参数数量精确定位
+                callInfo.setTargetSignature(targetMethod);
                 callInfo.setExpression(variable + "." + targetMethod + "()");
                 callInfo.setLineNumber(lineNumber);
                 classInfo.getMethodCalls().add(callInfo);
             }
         }
+    }
+
+    /**
+     * 拼装方法签名：methodName(ParamType1, ParamType2)
+     * args 为空时返回 "methodName()"
+     */
+    private String buildMethodSignature(String methodName, String args) {
+        if (methodName == null) return null;
+        return methodName + "(" + (args == null ? "" : args) + ")";
     }
 
     /**

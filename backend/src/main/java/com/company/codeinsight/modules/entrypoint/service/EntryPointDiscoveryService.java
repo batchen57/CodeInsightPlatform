@@ -27,4 +27,15 @@ public interface EntryPointDiscoveryService {
      * 入口类自身若命中排除规则 → 返回空字符串。
      */
     String collectReachableSource(Long taskId, String entryClassName, File projectDir, EntryPointConfig config);
+
+    /**
+     * 只读取入口类自身的源文件（不做 BFS 依赖展开）
+     * 模块层级提炼阶段使用：AI 只看入口类的方法签名和注解即可判定业务领域归属，不需要看依赖类的实现细节。
+     *
+     * @param projectDir 项目目录（temp_repos/task_{taskId}）
+     * @param entry      入口类 DTO（含 filePath 或 className）
+     * @param config     扫描配置（含排除规则，为空则不校验排除）
+     * @return 入口类的完整源码；命中排除规则或文件不存在返回空字符串
+     */
+    String readEntrySource(File projectDir, EntryPoint entry, EntryPointConfig config);
 }

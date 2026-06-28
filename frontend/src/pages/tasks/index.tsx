@@ -1,25 +1,53 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Button, Card, Col, Collapse, Form, Modal, Progress, Row, Select, Space, Steps, Table, Tag, Typography, message } from 'antd';
+import {
+  Button,
+  Card,
+  Col,
+  Form,
+  Modal,
+  Progress,
+  Row,
+  Select,
+  Space,
+  Steps,
+  Switch,
+  Table,
+  Tag,
+  Tooltip,
+  Typography,
+  message,
+} from 'antd';
 import {
   CloseCircleOutlined,
+  EditOutlined,
   EyeOutlined,
   LoadingOutlined,
   PlusOutlined,
   PlayCircleOutlined,
   ReloadOutlined,
+  SyncOutlined,
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
-import { createIncrementalTask, createInitialTask, listTasks, retryTask, startTask, terminateTask } from '../../api/task';
+import {
+  createIncrementalTask,
+  createInitialTask,
+  listTasks,
+  retryTask,
+  startTask,
+  terminateTask,
+} from '../../api/task';
 import { listPrompts } from '../../api/prompt';
 import { listRepositories } from '../../api/repository';
 import { listSystems } from '../../api/system';
 import { listModels } from '../../api/model';
 import type { AiModel, Prompt, Repository, System, Task } from '../../types';
+import ModuleHierarchyEditorDrawer from '../../components/ModuleHierarchyEditorDrawer';
 
 const { Text } = Typography;
 
 // 运行中的阶段状态集：这些状态下的任务属于活跃状态，页面需要发起自动轮询
-const runningStatuses = ['PENDING', 'PULLING_CODE', 'PARSING_CODE', 'SPLITTING_TASK', 'AI_ANALYZING', 'GENERATING_DOC', 'PUSHING'];
+// 注意：MODULE_HIERARCHY_REVIEW 是人工断点，状态变更由用户驱动，但仍加入轮询以便跨标签页恢复时及时刷新
+const runningStatuses = ['PENDING', 'PULLING_CODE', 'PARSING_CODE', 'SPLITTING_TASK', 'AI_ANALYZING', 'MODULE_HIERARCHY_REVIEW', 'GENERATING_DOC', 'PUSHING'];
 
 // 各个状态下的标签显示及微标配置
 const statusMeta: Record<string, { color: string; label: string; loading?: boolean }> = {
@@ -29,6 +57,8 @@ const statusMeta: Record<string, { color: string; label: string; loading?: boole
   PARSING_CODE: { color: 'cyan', label: '解析代码', loading: true },
   SPLITTING_TASK: { color: 'purple', label: '任务切片', loading: true },
   AI_ANALYZING: { color: 'orange', label: 'AI 分析中', loading: true },
+  MODULE_HIERARCHY: { color: 'gold', label: '模块层级提炼' },
+  MODULE_HIERARCHY_REVIEW: { color: 'geekblue', label: '模块层级调试' },
   GENERATING_DOC: { color: 'gold', label: '生成文档', loading: true },
   PENDING_REVIEW: { color: 'magenta', label: '待复核' },
   REVIEWING: { color: 'geekblue', label: '复核中' },
@@ -46,7 +76,7 @@ const statusMeta: Record<string, { color: string; label: string; loading?: boole
  */
 const Tasks: React.FC = () => {
   const navigate = useNavigate();
-  
+
   // 任务表格状态数据
   const [tasks, setTasks] = useState<Task[]>([]);
   const [total, setTotal] = useState(0);
@@ -63,7 +93,10 @@ const Tasks: React.FC = () => {
   const [systems, setSystems] = useState<System[]>([]);
   const [taskSourceSystems, setTaskSourceSystems] = useState<System[]>([]);
   const [repositories, setRepositories] = useState<Repository[]>([]);
-  const [prompts, setPrompts] = useState<Prompt[]>([]);
+  /** 模块提取提示词（ci_prompt.prompt_type=MODULARIZE），用于 AI_ANALYZING / MODULE_HIERARCHY 阶段 */
+  const [modularizePrompts, setModularizePrompts] = useState<Prompt[]>([]);
+  /** 文档生成提示词（ci_prompt.prompt_type=DOCUMENT_GENERATION），用于 GENERATING_DOC 阶段 */
+  const [documentPrompts, setDocumentPrompts] = useState<Prompt[]>([]);
   const [models, setModels] = useState<AiModel[]>([]);
 
   // 新建任务向导弹框的步骤控制器、表单组件引用
@@ -73,6 +106,8 @@ const Tasks: React.FC = () => {
   
   // 观察并在表单选择系统改变时，级联过滤出该系统下的可用 Git 仓库
   const selectedSystemId = Form.useWatch('systemId', form);
+  // 观察仓库选择变化，用于从仓库默认配置初始化策略步骤表单
+  const selectedRepositoryId = Form.useWatch('repositoryId', form);
 
   // 获取并刷新任务分页列表数据
   const fetchTasks = useCallback(
@@ -95,18 +130,20 @@ const Tasks: React.FC = () => {
     [current, filterStatus, filterSystemId, filterType, size],
   );
 
-  // 初始化：获取已配置了代码库的系统列表、提示词模板及可用 AI 模型数据
+  // 初始化：获取已配置了代码库的系统列表、两类提示词模板（模块提取/文档生成）及可用 AI 模型数据
   const loadOptions = useCallback(async () => {
-    const [sysData, repositoryData, promptData, modelData] = await Promise.all([
+    const [sysData, repositoryData, modularizeData, documentData, modelData] = await Promise.all([
       listSystems({ current: 1, size: 100, status: 1 }),
       listRepositories({ current: 1, size: 1000 }),
-      listPrompts({ current: 1, size: 100, status: 1 }),
+      listPrompts({ current: 1, size: 100, status: 1, promptType: 'MODULARIZE' }),
+      listPrompts({ current: 1, size: 100, status: 1, promptType: 'DOCUMENT_GENERATION' }),
       listModels(),
     ]);
     const configuredSystemIds = new Set(repositoryData.records.map((repository) => repository.systemId));
     setSystems(sysData.records);
     setTaskSourceSystems(sysData.records.filter((system) => configuredSystemIds.has(system.id)));
-    setPrompts(promptData.records);
+    setModularizePrompts(modularizeData.records);
+    setDocumentPrompts(documentData.records);
     setModels(modelData);
   }, []);
 
@@ -131,6 +168,16 @@ const Tasks: React.FC = () => {
       form.setFieldValue('repositoryId', undefined);
     });
   }, [form, selectedSystemId]);
+
+  // 选中仓库时，从仓库默认配置初始化策略步骤表单的 entryScanConfig
+  useEffect(() => {
+    if (!selectedRepositoryId) {
+      form.setFieldValue('entryScanConfig', buildScanConfigWithDefaults(undefined));
+      return;
+    }
+    const repo = repositories.find((r) => r.id === selectedRepositoryId);
+    form.setFieldValue('entryScanConfig', parseRepoEntryScanConfig(repo));
+  }, [form, repositories, selectedRepositoryId]);
 
   /**
    * 自动轮询机制 (2.5 秒刷新一次)
@@ -168,22 +215,78 @@ const Tasks: React.FC = () => {
     fetchTasks();
   };
 
+  // 模块层级调试抽屉状态（仅作为打开/关闭与当前任务 ID 的胶水代码，编辑器本体在共享组件中）
+  const [reviewDrawerOpen, setReviewDrawerOpen] = useState(false);
+  const [reviewTaskId, setReviewTaskId] = useState<number | null>(null);
+
+  const openReviewDrawer = (taskId: number) => {
+    setReviewTaskId(taskId);
+    setReviewDrawerOpen(true);
+  };
+  const closeReviewDrawer = () => {
+    setReviewDrawerOpen(false);
+    setReviewTaskId(null);
+  };
+
+  /** 后端 EntryPointConfig 的默认排除规则（与 Java 端 new EntryPointConfig() 保持一致） */
+  const DEFAULT_EXCLUDE_CLASSPATHS = ['**/*Test', '**/*Tests', '**/*TestCase'];
+
+  /** 返回带后端默认值的扫描配置 */
+  const buildScanConfigWithDefaults = (config: Record<string, unknown> | undefined): Record<string, unknown> => {
+    const base = config || {};
+    return {
+      ...base,
+      // 排除类路径：仓库有配置则用仓库的，否则使用后端默认值
+      excludeClasspaths: Array.isArray(base.excludeClasspaths) && base.excludeClasspaths.length > 0
+        ? base.excludeClasspaths
+        : DEFAULT_EXCLUDE_CLASSPATHS,
+    };
+  };
+
+  /** 将后端返回的 entryScanConfig（JSON 字符串或对象）统一转为对象 */
+  const parseRepoEntryScanConfig = (repo: Repository | undefined) => {
+    if (!repo?.entryScanConfig) return buildScanConfigWithDefaults(undefined);
+    if (typeof repo.entryScanConfig === 'string') {
+      try { return buildScanConfigWithDefaults(JSON.parse(repo.entryScanConfig)); } catch { return buildScanConfigWithDefaults(undefined); }
+    }
+    return buildScanConfigWithDefaults(repo.entryScanConfig);
+  };
+
+  // 一键同步仓库默认扫描配置
+  const handleSyncRepoScanConfig = () => {
+    if (!selectedRepositoryId) {
+      message.warning('请先选择仓库');
+      return;
+    }
+    const repo = repositories.find((r) => r.id === selectedRepositoryId);
+    if (!repo) {
+      message.warning('未找到当前仓库');
+      return;
+    }
+    form.setFieldsValue({
+      entryScanConfig: parseRepoEntryScanConfig(repo),
+    });
+    message.success('已恢复为仓库默认配置');
+  };
+
   // 向导最终步骤：执行新建任务表单落盘
   const handleCreateTask = async () => {
     const values = form.getFieldsValue();
     const payload = {
       systemId: values.systemId,
       repositoryId: values.repositoryId,
-      promptVersion: values.promptVersion,
+      modularizePromptId: values.modularizePromptId,
+      documentPromptId: values.documentPromptId,
       modelName: values.modelName,
       entryScanConfig: values.entryScanConfig,
+      requireHierarchyReview: values.requireHierarchyReview !== false, // 默认开启
     };
     if (values.taskType === 'INITIAL') {
       await createInitialTask(payload);
     } else {
       await createIncrementalTask(payload);
     }
-    message.success('任务已创建');
+    message.success(values.requireHierarchyReview === false ? '任务已创建（跳过模块层级调试）' : '任务已创建（启用模块层级调试）');
     setModalOpen(false);
     setCurrentStep(0);
     form.resetFields();
@@ -266,16 +369,21 @@ const Tasks: React.FC = () => {
     {
       title: '操作',
       key: 'action',
-      width: 230,
+      width: 280,
       fixed: 'right' as const,
       render: (_: unknown, record: Task) => (
-        <Space size={8}>
+        <Space size={8} wrap>
           <Button size="small" icon={<EyeOutlined />} onClick={() => navigate(`/tasks/${record.id}`)}>
             详情
           </Button>
           {record.status === 'DRAFT' && (
             <Button size="small" type="primary" icon={<PlayCircleOutlined />} onClick={() => handleStart(record.id)}>
               启动
+            </Button>
+          )}
+          {record.status === 'MODULE_HIERARCHY_REVIEW' && (
+            <Button size="small" type="primary" icon={<EditOutlined />} onClick={() => openReviewDrawer(record.id)}>
+              开始调试
             </Button>
           )}
           {runningStatuses.includes(record.status) && (
@@ -394,7 +502,7 @@ const Tasks: React.FC = () => {
                     await form.validateFields(['systemId', 'repositoryId']);
                   }
                   if (currentStep === 1) {
-                    await form.validateFields(['taskType', 'promptVersion', 'modelName']);
+                    await form.validateFields(['taskType', 'modularizePromptId', 'documentPromptId', 'modelName']);
                   }
                   setCurrentStep(currentStep + 1);
                 }}
@@ -417,7 +525,11 @@ const Tasks: React.FC = () => {
           />
         </div>
 
-        <Form form={form} layout="vertical" preserve={true}>
+        <Form form={form} layout="vertical" preserve={true} initialValues={{
+          entryScanConfig: {
+            excludeClasspaths: ['**/*Test', '**/*Tests', '**/*TestCase'],
+          },
+        }}>
           {/* 第一步：选择目标系统与待扫描仓库 */}
           <div style={{ display: currentStep === 0 ? 'block' : 'none' }}>
             <Form.Item name="systemId" label="系统" rules={[{ required: true, message: '请选择系统' }]}>
@@ -446,18 +558,46 @@ const Tasks: React.FC = () => {
           <div style={{ display: currentStep === 1 ? 'block' : 'none' }}>
             <Form.Item name="taskType" label="任务类型" initialValue="INITIAL" rules={[{ required: true }]}>
               <Select
+                size="small"
                 options={[
                   { value: 'INITIAL', label: '全量扫描 - 分析整个代码库' },
                   { value: 'INCREMENTAL', label: '增量扫描 - 基于 Git Diff 分析' },
                 ]}
               />
             </Form.Item>
-            <Form.Item name="promptVersion" label="提示词版本" rules={[{ required: true, message: '请选择提示词' }]}>
+            <Form.Item
+              name="modularizePromptId"
+              label="模块提取提示词"
+              tooltip="AI_ANALYZING / MODULE_HIERARCHY 阶段使用的提示词模板"
+              rules={[{ required: true, message: '请选择模块提取提示词' }]}
+            >
               <Select
-                placeholder="请选择提示词模板"
-                options={prompts.map((prompt) => ({
-                  value: prompt.version,
-                  label: `${prompt.name} (v${prompt.version})`,
+                size="small"
+                placeholder="请选择模块提取提示词"
+                showSearch
+                optionFilterProp="label"
+                notFoundContent={modularizePrompts.length === 0 ? '暂无启用的模块提取提示词，请先在提示词管理中维护' : undefined}
+                options={modularizePrompts.map((prompt) => ({
+                  value: prompt.id,
+                  label: `${prompt.name} (v${prompt.version})${prompt.isDefault === 1 ? ' · 默认' : ''}`,
+                }))}
+              />
+            </Form.Item>
+            <Form.Item
+              name="documentPromptId"
+              label="文档生成提示词"
+              tooltip="GENERATING_DOC 阶段使用的提示词模板"
+              rules={[{ required: true, message: '请选择文档生成提示词' }]}
+            >
+              <Select
+                size="small"
+                placeholder="请选择文档生成提示词"
+                showSearch
+                optionFilterProp="label"
+                notFoundContent={documentPrompts.length === 0 ? '暂无启用的文档生成提示词，请先在提示词管理中维护' : undefined}
+                options={documentPrompts.map((prompt) => ({
+                  value: prompt.id,
+                  label: `${prompt.name} (v${prompt.version})${prompt.isDefault === 1 ? ' · 默认' : ''}`,
                 }))}
               />
             </Form.Item>
@@ -468,6 +608,7 @@ const Tasks: React.FC = () => {
               rules={[{ required: true, message: '请选择AI模型' }]}
             >
               <Select
+                size="small"
                 placeholder="请选择要调用的 AI 模型"
                 options={models.map((model) => ({
                   value: model.identifier,
@@ -476,71 +617,120 @@ const Tasks: React.FC = () => {
               />
             </Form.Item>
 
-            {/* 入口扫描配置：仅在该任务生效，不配置时走默认 Controller/JOB/MQ 兜底 */}
-            <Form.Item label="扫描规则" tooltip="配置仅对该任务生效；任一入口列表为空即走默认 Controller/JOB/MQ 识别">
-              <Collapse
-                defaultActiveKey={['include']}
-                items={[
-                  {
-                    key: 'include',
-                    label: '入口识别规则（满足任一即视为入口）',
-                    children: (
-                      <>
-                        <Form.Item name={['entryScanConfig', 'includeAnnotations']} noStyle>
-                          <Select
-                            mode="tags"
-                            placeholder="注解（如 RestController / Service / 自定义注解）"
-                            style={{ width: '100%' }}
-                          />
-                        </Form.Item>
-                        <Form.Item name={['entryScanConfig', 'includeClasspaths']} noStyle style={{ marginTop: 8 }}>
-                          <Select
-                            mode="tags"
-                            placeholder="类路径 Ant 模式（如 com.demo.controller.*，建议 ** 匹配多级）"
-                            style={{ width: '100%' }}
-                          />
-                        </Form.Item>
-                        <Form.Item name={['entryScanConfig', 'includeExtends']} noStyle style={{ marginTop: 8 }}>
-                          <Select
-                            mode="tags"
-                            placeholder="继承/实现父类（如 BaseEntry / CommandLineRunner）"
-                            style={{ width: '100%' }}
-                          />
-                        </Form.Item>
-                      </>
-                    ),
-                  },
-                  {
-                    key: 'exclude',
-                    label: '排除规则（满足任一即从候选中排除）',
-                    children: (
-                      <>
-                        <Form.Item name={['entryScanConfig', 'excludeClasspaths']} noStyle>
-                          <Select
-                            mode="tags"
-                            placeholder="排除类路径 Ant 模式（如 *.test.*）"
-                            style={{ width: '100%' }}
-                          />
-                        </Form.Item>
-                        <Form.Item name={['entryScanConfig', 'excludePackages']} noStyle style={{ marginTop: 8 }}>
-                          <Select
-                            mode="tags"
-                            placeholder="排除包路径（如 com.legacy.config，点分隔前缀匹配）"
-                            style={{ width: '100%' }}
-                          />
-                        </Form.Item>
-                        <Form.Item name={['entryScanConfig', 'excludeAnnotations']} noStyle style={{ marginTop: 8 }}>
-                          <Select
-                            mode="tags"
-                            placeholder="排除注解（如 Internal / Deprecated）"
-                            style={{ width: '100%' }}
-                          />
-                        </Form.Item>
-                      </>
-                    ),
-                  },
-                ]}
-              />
+            {/* 入口扫描配置：仅在该任务生效，不配置时走默认 Controller/JOB/MQ 兜底
+                紧凑两列布局：左边入口识别 (include) / 右边排除 (exclude)，行内 label + tags 输入 */}
+            <div className="ci-scan-config">
+              <div
+                className="ci-scan-config-title"
+                style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+              >
+                <div>
+                  <Text type="secondary" style={{ fontSize: 12 }}>扫描规则</Text>
+                  <Tooltip title="配置仅对该任务生效；任一入口列表为空即走默认 Controller/JOB/MQ 识别">
+                    <Text type="secondary" style={{ fontSize: 12, marginLeft: 6 }}>（不配置走默认）</Text>
+                  </Tooltip>
+                </div>
+                <Button
+                  size="small"
+                  icon={<SyncOutlined />}
+                  onClick={handleSyncRepoScanConfig}
+                  disabled={!selectedRepositoryId}
+                >
+                  同步仓库配置
+                </Button>
+              </div>
+              <Row gutter={[8, 6]}>
+                {/* 左列：入口识别 */}
+                <Col xs={24} md={12}>
+                  <div className="ci-scan-config-col">
+                    <div className="ci-scan-config-col-title">入口识别（满足任一即视为入口）</div>
+                    <div className="ci-scan-config-row">
+                      <span className="ci-scan-config-label">注解</span>
+                      <Form.Item name={['entryScanConfig', 'includeAnnotations']} noStyle>
+                        <Select
+                          size="small"
+                          mode="tags"
+                          placeholder="RestController / Service / ..."
+                          style={{ width: '100%' }}
+                        />
+                      </Form.Item>
+                    </div>
+                    <div className="ci-scan-config-row">
+                      <span className="ci-scan-config-label">类路径</span>
+                      <Form.Item name={['entryScanConfig', 'includeClasspaths']} noStyle>
+                        <Select
+                          size="small"
+                          mode="tags"
+                          placeholder="com.demo.controller.**"
+                          style={{ width: '100%' }}
+                        />
+                      </Form.Item>
+                    </div>
+                    <div className="ci-scan-config-row">
+                      <span className="ci-scan-config-label">继承/实现</span>
+                      <Form.Item name={['entryScanConfig', 'includeExtends']} noStyle>
+                        <Select
+                          size="small"
+                          mode="tags"
+                          placeholder="BaseEntry / CommandLineRunner"
+                          style={{ width: '100%' }}
+                        />
+                      </Form.Item>
+                    </div>
+                  </div>
+                </Col>
+                {/* 右列：排除规则 */}
+                <Col xs={24} md={12}>
+                  <div className="ci-scan-config-col">
+                    <div className="ci-scan-config-col-title">排除规则（满足任一即从候选中排除）</div>
+                    <div className="ci-scan-config-row">
+                      <span className="ci-scan-config-label">类路径</span>
+                      <Form.Item name={['entryScanConfig', 'excludeClasspaths']} noStyle>
+                        <Select
+                          size="small"
+                          mode="tags"
+                          placeholder="*.test.*"
+                          style={{ width: '100%' }}
+                        />
+                      </Form.Item>
+                    </div>
+                    <div className="ci-scan-config-row">
+                      <span className="ci-scan-config-label">包路径</span>
+                      <Form.Item name={['entryScanConfig', 'excludePackages']} noStyle>
+                        <Select
+                          size="small"
+                          mode="tags"
+                          placeholder="com.legacy.config"
+                          style={{ width: '100%' }}
+                        />
+                      </Form.Item>
+                    </div>
+                    <div className="ci-scan-config-row">
+                      <span className="ci-scan-config-label">注解</span>
+                      <Form.Item name={['entryScanConfig', 'excludeAnnotations']} noStyle>
+                        <Select
+                          size="small"
+                          mode="tags"
+                          placeholder="Internal / Deprecated"
+                          style={{ width: '100%' }}
+                        />
+                      </Form.Item>
+                    </div>
+                  </div>
+                </Col>
+              </Row>
+            </div>
+
+            {/* 是否启用模块层级调试（人工复核断点） */}
+            <Form.Item
+              name="requireHierarchyReview"
+              label="模块层级调试"
+              tooltip="AI 提炼模块层级完成后是否暂停等待人工调试。开启后任务停在「模块层级调试」状态，需在「模块层级调试」页签中点击「开始调试」确认后才继续生成文档。"
+              initialValue={true}
+              valuePropName="checked"
+              style={{ marginTop: 8, marginBottom: 0 }}
+            >
+              <Switch size="small" checkedChildren="启用" unCheckedChildren="跳过" />
             </Form.Item>
           </div>
 
@@ -557,10 +747,15 @@ const Tasks: React.FC = () => {
                 策略：<b>{form.getFieldValue('taskType') === 'INITIAL' ? '全量扫描' : '增量扫描'}</b>
               </p>
               <p>
-                提示词：{' '}
+                模块提取提示词：{' '}
                 <b>
-                  {prompts.find((prompt) => prompt.version === form.getFieldValue('promptVersion'))?.name} v
-                  {form.getFieldValue('promptVersion')}
+                  {(() => { const p = modularizePrompts.find((pr) => pr.id === form.getFieldValue('modularizePromptId')); return p ? `${p.name} (v${p.version})` : '未选择'; })()}
+                </b>
+              </p>
+              <p>
+                文档生成提示词：{' '}
+                <b>
+                  {(() => { const p = documentPrompts.find((pr) => pr.id === form.getFieldValue('documentPromptId')); return p ? `${p.name} (v${p.version})` : '未选择'; })()}
                 </b>
               </p>
               <p>
@@ -587,11 +782,27 @@ const Tasks: React.FC = () => {
                     : configured.map(([k, v]) => `${k} ${v!.length} 条`).join('，');
                 })()}</b>
               </p>
+              <p>
+                模块层级调试：{' '}
+                <b>
+                  {form.getFieldValue('requireHierarchyReview') === false
+                    ? '跳过（AI 提炼后直接生成文档）'
+                    : '启用（AI 提炼后停在「模块层级调试」等待人工确认）'}
+                </b>
+              </p>
               <Text type="secondary">任务将以草稿状态创建，可在队列中手动启动。</Text>
             </div>
           )}
         </Form>
       </Modal>
+
+      {/* 模块层级调试抽屉（共享编辑器组件） */}
+      <ModuleHierarchyEditorDrawer
+        open={reviewDrawerOpen}
+        taskId={reviewTaskId}
+        onClose={closeReviewDrawer}
+        onSubmitted={() => fetchTasks()}
+      />
     </div>
   );
 };

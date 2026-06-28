@@ -485,6 +485,61 @@ button, input, textarea, select { font: inherit; }
   border-color: #e3e6ed;
   border-radius: 9px;
 }
+
+/* 创建任务弹窗中的扫描规则紧凑布局：双栏 + 行内 label + 小尺寸输入 */
+.ci-scan-config {
+  margin: 8px 0 4px;
+  padding: 10px 12px;
+  background: #f8f9fb;
+  border: 1px solid #e3e6ed;
+  border-radius: 8px;
+}
+.ci-scan-config-title {
+  font-size: 12px;
+  margin-bottom: 8px;
+  color: rgba(0, 0, 0, 0.55);
+}
+.ci-scan-config-col {
+  background: #fff;
+  border: 1px solid #eceef3;
+  border-radius: 6px;
+  padding: 8px 10px;
+  height: 100%;
+}
+.ci-scan-config-col-title {
+  font-size: 12px;
+  color: rgba(0, 0, 0, 0.65);
+  font-weight: 500;
+  margin-bottom: 6px;
+  padding-bottom: 4px;
+  border-bottom: 1px dashed #eceef3;
+}
+.ci-scan-config-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+.ci-scan-config-row:last-child { margin-bottom: 0; }
+.ci-scan-config-label {
+  flex: 0 0 60px;
+  font-size: 12px;
+  color: rgba(0, 0, 0, 0.55);
+  text-align: right;
+  line-height: 24px;
+}
+
+/* 创建任务弹窗整体紧凑：标签字号略小，间距略小 */
+.ant-modal-body .ant-form-item-label > label {
+  font-size: 13px;
+}
+.ant-modal-body .ant-form-item { margin-bottom: 12px; }
+.ant-modal-body .ant-select-single .ant-select-selector,
+.ant-modal-body .ant-select-multiple .ant-select-selector {
+  min-height: 28px;
+  padding-top: 1px;
+  padding-bottom: 1px;
+}
 .ci-terminal {
   color: #cfebdf;
   background: #111721;

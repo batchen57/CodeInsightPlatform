@@ -61,14 +61,15 @@ public class DecompilePromptServiceImpl extends ServiceImpl<DecompilePromptMappe
     private final HttpClient httpClient = HttpClient.newBuilder().build();
 
     /**
-     * 分页查询提示词模板，支持模糊搜索模板名称，按照创建时间倒序排列
+     * 分页查询提示词模板，支持按名称/状态/用途（MODULARIZE / DOCUMENT_GENERATION）过滤，按创建时间倒序排列
      */
     @Override
-    public Page<DecompilePrompt> listPromptsPage(int current, int size, String name, Integer status) {
+    public Page<DecompilePrompt> listPromptsPage(int current, int size, String name, Integer status, String promptType) {
         Page<DecompilePrompt> page = new Page<>(current, size);
         LambdaQueryWrapper<DecompilePrompt> queryWrapper = new LambdaQueryWrapper<>();
         queryWrapper.like(StringUtils.hasText(name), DecompilePrompt::getName, name)
                 .eq(status != null, DecompilePrompt::getStatus, status)
+                .eq(StringUtils.hasText(promptType), DecompilePrompt::getPromptType, promptType)
                 .orderByDesc(DecompilePrompt::getCreatedAt);
         return this.page(page, queryWrapper);
     }
@@ -95,7 +96,7 @@ public class DecompilePromptServiceImpl extends ServiceImpl<DecompilePromptMappe
 
     /**
      * 修改提示词状态（0-禁用, 1-启用）
-     * 并且在此提示词是默认模板时，排他性地修改其它模板为非默认。
+     * 并且在此提示词是默认模板时，排他性地将同 {@code prompt_type} 下的其他模板降为非默认。
      */
     @Override
     public void changeStatus(Long id, Integer status) {
@@ -109,10 +110,11 @@ public class DecompilePromptServiceImpl extends ServiceImpl<DecompilePromptMappe
         prompt.setStatus(status);
         this.updateById(prompt);
 
-        // 如果被设为默认，并且状态是启用，将其他的设为非默认
-        if (status == 1 && prompt.getIsDefault() == 1) {
+        // 如果被启用，且是默认模板，将同类型的其它模板降为非默认（不同类型互不影响）
+        if (status == 1 && prompt.getIsDefault() != null && prompt.getIsDefault() == 1) {
             this.update(new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<DecompilePrompt>()
                     .ne(DecompilePrompt::getId, id)
+                    .eq(StringUtils.hasText(prompt.getPromptType()), DecompilePrompt::getPromptType, prompt.getPromptType())
                     .set(DecompilePrompt::getIsDefault, 0));
         }
     }
@@ -132,6 +134,40 @@ public class DecompilePromptServiceImpl extends ServiceImpl<DecompilePromptMappe
             result = result.replace(key, value);
         }
         return result;
+    }
+
+    /**
+     * 按任务运行时指定的提示词类型解析提示词正文。
+     * <p>查找顺序：①任务记录中显式保存的版本号 → ②同 prompt_type 下默认版本 → ③null。</p>
+     *
+     * @param task       任务实体（用于读取显式版本号）
+     * @param promptType 提示词用途：{@link DecompilePrompt#TYPE_MODULARIZE} 或 {@link DecompilePrompt#TYPE_DOCUMENT_GENERATION}
+     * @return 提示词正文；找不到返回 null
+     */
+    @Override
+    public String resolveTaskPromptContent(com.company.codeinsight.modules.task.entity.DecompileTask task, String promptType) {
+        if (task == null || !StringUtils.hasText(promptType)) {
+            return null;
+        }
+        Long explicitId = DecompilePrompt.TYPE_MODULARIZE.equals(promptType)
+                ? task.getModularizePromptId()
+                : task.getDocumentPromptId();
+        if (explicitId != null) {
+            DecompilePrompt hit = this.baseMapper.selectById(explicitId);
+            if (hit != null && Integer.valueOf(1).equals(hit.getStatus())
+                    && promptType.equals(hit.getPromptType())) {
+                return hit.getContent();
+            }
+            log.warn("任务 {} 指定 {} id={} 未命中（已禁用或类型不匹配或不存在），回退到默认", task.getId(), promptType, explicitId);
+        }
+        DecompilePrompt fallback = this.baseMapper.selectOne(
+                new LambdaQueryWrapper<DecompilePrompt>()
+                        .eq(DecompilePrompt::getPromptType, promptType)
+                        .eq(DecompilePrompt::getIsDefault, 1)
+                        .eq(DecompilePrompt::getStatus, 1)
+                        .last("LIMIT 1")
+        );
+        return fallback != null ? fallback.getContent() : null;
     }
 
     /**

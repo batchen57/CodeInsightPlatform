@@ -141,8 +141,10 @@ public class MethodCallServiceImpl implements MethodCallService {
                 mc.setFilePath(relativePath);
                 mc.setClassName(info.getClassName());
                 mc.setCallerMethod(src.getCallerMethod());
+                mc.setCallerSignature(buildCallerSignature(info.getClassName(), src.getCallerSignature()));
                 mc.setDependencyName(src.getDependencyName());
                 mc.setTargetMethod(src.getTargetMethod());
+                mc.setTargetSignature(src.getTargetSignature());
                 mc.setExpression(truncate(src.getExpression(), MAX_EXPR_LEN));
                 mc.setLineNumber(src.getLineNumber());
                 mc.setCreatedAt(LocalDateTime.now());
@@ -197,5 +199,16 @@ public class MethodCallServiceImpl implements MethodCallService {
             return null;
         }
         return value.length() > max ? value.substring(0, max) : value;
+    }
+
+    /**
+     * 拼装 caller_signature："className#methodName(ParamType1, ParamType2)"
+     * 阶段 2 反查调用链用；MVP 仅 caller 端带完整签名，target 端等阶段 3
+     */
+    private String buildCallerSignature(String className, String methodSignature) {
+        if (!StringUtils.hasText(className) || !StringUtils.hasText(methodSignature)) {
+            return null;
+        }
+        return className + "#" + methodSignature;
     }
 }

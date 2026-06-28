@@ -14,6 +14,7 @@ import com.company.codeinsight.modules.hierarchy.mapper.ModuleHierarchyNodeMappe
 import com.company.codeinsight.modules.hierarchy.model.FunctionDto;
 import com.company.codeinsight.modules.hierarchy.model.ModuleDto;
 import com.company.codeinsight.modules.hierarchy.model.ModuleHierarchy;
+import com.company.codeinsight.modules.hierarchy.model.PromptViewDtos;
 import com.company.codeinsight.modules.hierarchy.model.SubModuleDto;
 import com.company.codeinsight.modules.hierarchy.service.ModuleHierarchyService;
 import com.company.codeinsight.modules.task.entity.DecompileTask;
@@ -22,6 +23,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -49,7 +51,12 @@ import java.util.Set;
 @Service
 public class ModuleHierarchyServiceImpl implements ModuleHierarchyService {
 
-    private static final String PROMPT_PATH = "analyze_prompt.md";
+    /**
+     * 模块提取提示词的 classpath 兜底文件路径
+     * <p>仅当 DB 中所有 MODULARIZE 提示词都不可用（如未执行 seed）时使用，保证旧任务也能跑通。</p>
+     */
+    private static final String MODULARIZE_PROMPT_FALLBACK_PATH = "analyze_prompt.md";
+
     private static final String LEVEL_MODULE = "MODULE";
     private static final String LEVEL_SUB_MODULE = "SUB_MODULE";
     private static final String LEVEL_FUNCTION = "FUNCTION";
@@ -61,9 +68,13 @@ public class ModuleHierarchyServiceImpl implements ModuleHierarchyService {
     private DecompileTaskMapper taskMapper;
 
     @Autowired
+    private com.company.codeinsight.modules.repository.mapper.CodeRepositoryMapper repositoryMapper;
+
+    @Autowired
     private EntryPointDiscoveryService entryPointDiscoveryService;
 
     @Autowired
+    @Lazy
     private AiSummaryService aiSummaryService;
 
     @Autowired
@@ -71,6 +82,9 @@ public class ModuleHierarchyServiceImpl implements ModuleHierarchyService {
 
     @Autowired
     private Base62Generator base62Generator;
+
+    @Autowired
+    private com.company.codeinsight.modules.prompt.service.DecompilePromptService decompilePromptService;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -90,15 +104,37 @@ public class ModuleHierarchyServiceImpl implements ModuleHierarchyService {
         hierarchy.setTaskId(taskId);
         hierarchy.setSystemId(task.getSystemId());
 
-        // 1.5 从 task 配置还原 EntryPointConfig（null 走默认 Controller/JOB/MQ 兜底）
+        // 1.5 从 task 配置还原 EntryPointConfig（任务级 null 时回退到仓库级，再 null 走默认 Controller/JOB/MQ 兜底）
         EntryPointConfig entryPointConfig = EntryPointConfigCodec.decode(task.getEntryScanConfig());
+        if (entryPointConfig.isIncludeAllEmpty()
+                && entryPointConfig.getEffectiveIncludeAnnotations().isEmpty()
+                && entryPointConfig.getEffectiveIncludeClasspaths().isEmpty()
+                && entryPointConfig.getEffectiveIncludeExtends().isEmpty()
+                && entryPointConfig.getEffectiveExcludeClasspaths().isEmpty()
+                && entryPointConfig.getEffectiveExcludePackages().isEmpty()
+                && entryPointConfig.getEffectiveExcludeAnnotations().isEmpty()) {
+            // 任务级全空 → 尝试从仓库表读默认配置
+            com.company.codeinsight.modules.repository.entity.CodeRepository repo =
+                    repositoryMapper.selectById(task.getRepositoryId());
+            if (repo != null) {
+                entryPointConfig = EntryPointConfigCodec.decode(repo.getEntryScanConfig());
+                log.info("taskId={} 任务级 EntryPointConfig 为空，回退使用仓库 {} (repositoryId={}) 的默认配置",
+                        taskId, repo.getGitUrl(), task.getRepositoryId());
+            }
+        }
 
         // 2. 识别入口
         List<EntryPoint> entries = entryPointDiscoveryService.discoverEntries(taskId, projectDir, entryPointConfig);
         log.info("ModuleHierarchyService.buildAndPersist taskId={} entries={}", taskId, entries.size());
 
         // 3. 加载 prompt 模板（仅一次）
-        String promptTemplate = promptTemplateLoader.load(PROMPT_PATH);
+        //    优先 DB（按 task.modularizePromptVersion 或同类型默认），找不到再回退到 classpath 资源，保证向后兼容
+        String promptTemplate = decompilePromptService.resolveTaskPromptContent(task,
+                com.company.codeinsight.modules.prompt.entity.DecompilePrompt.TYPE_MODULARIZE);
+        if (!StringUtils.hasText(promptTemplate)) {
+            log.warn("taskId={} 数据库中无 MODULARIZE 提示词可用，回退到 classpath 资源 {}", taskId, MODULARIZE_PROMPT_FALLBACK_PATH);
+            promptTemplate = promptTemplateLoader.load(MODULARIZE_PROMPT_FALLBACK_PATH);
+        }
 
         // 4. 遍历每个入口
         for (EntryPoint entry : entries) {
@@ -175,6 +211,7 @@ public class ModuleHierarchyServiceImpl implements ModuleHierarchyService {
                     fn.setId(n.getNodeId());
                     fn.setFunctionName(n.getName());
                     fn.setClassPaths(new LinkedHashSet<>(parseJsonArray(n.getClassPaths())));
+                    fn.setMethodSignatures(new LinkedHashSet<>(parseJsonArray(n.getMethodSignatures())));
                     sm.getFunctions().put(fn.getId(), fn);
                 }
             }
@@ -190,10 +227,10 @@ public class ModuleHierarchyServiceImpl implements ModuleHierarchyService {
     private void processEntry(DecompileTask task, ModuleHierarchy hierarchy,
                               EntryPoint entry, String promptTemplate, File projectDir,
                               EntryPointConfig entryPointConfig) {
-        // 收集入口可达源码
-        String javaCode = entryPointDiscoveryService.collectReachableSource(task.getId(), entry.getClassName(), projectDir, entryPointConfig);
+        // 只读取入口类自身源码（不做 BFS 依赖展开），AI 看入口类方法签名和注解即可判定业务领域归属
+        String javaCode = entryPointDiscoveryService.readEntrySource(projectDir, entry, entryPointConfig);
         if (!StringUtils.hasText(javaCode)) {
-            log.warn("入口 {} 无可达源码，跳过", entry.getClassName());
+            log.warn("入口 {} 无可读源文件或命中排除规则，跳过", entry.getClassName());
             return;
         }
 
@@ -213,20 +250,45 @@ public class ModuleHierarchyServiceImpl implements ModuleHierarchyService {
         meta.setCallStage("MODULE_HIERARCHY");
         meta.setClassPath(entry.getClassName());
 
-        String aiResponse = aiSummaryService.summarizeWithPrompt(task.getId(), promptInput, task.getModelName(), meta);
-        if (!StringUtils.hasText(aiResponse) || "{}".equals(aiResponse.trim())) {
-            log.info("AI 未返回有效响应（Mock 或异常），跳过入口 {}", entry.getClassName());
-            return;
+        // 带重试的 AI 调用 + JSON 解析：最多尝试 2 次，解析失败时附加错误信息重试
+        int maxAttempts = 2;
+        String currentPrompt = promptInput;
+        JsonNode inc = null;
+        boolean parsed = false;
+
+        for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+            String aiResponse = aiSummaryService.summarizeWithPrompt(task.getId(), currentPrompt, task.getModelName(), meta);
+            if (!StringUtils.hasText(aiResponse) || "{}".equals(aiResponse.trim())) {
+                if (attempt < maxAttempts) {
+                    log.info("入口 {} AI 返回为空（第 {} 次），重试", entry.getClassName(), attempt);
+                    continue;
+                }
+                log.warn("入口 {} AI 经过 {} 次尝试仍未返回有效响应，跳过", entry.getClassName(), maxAttempts);
+                return;
+            }
+
+            try {
+                String cleaned = stripCodeFence(aiResponse);
+                inc = objectMapper.readTree(cleaned);
+                parsed = true;
+                break;
+            } catch (Exception e) {
+                String errorMsg = e.getMessage();
+                log.warn("入口 {} AI 响应 JSON 解析失败（第 {} 次）: {}", entry.getClassName(), attempt, errorMsg);
+                if (attempt < maxAttempts) {
+                    // 附加错误信息重试，引导 AI 修正输出
+                    currentPrompt = promptInput + "\n\n[系统提示] 上轮输出 JSON 解析失败：" + errorMsg
+                            + "\n请确保输出是合法的 JSON 格式（用 ```json ... ``` 包裹），字段约束见上方模板。";
+                } else {
+                    log.warn("入口 {} AI 响应 JSON 解析已重试 {} 次仍失败，跳过。原始响应前 200 字符: {}",
+                            entry.getClassName(), maxAttempts,
+                            aiResponse.substring(0, Math.min(200, aiResponse.length())));
+                    return;
+                }
+            }
         }
 
-        JsonNode inc;
-        try {
-            String cleaned = stripCodeFence(aiResponse);
-            inc = objectMapper.readTree(cleaned);
-        } catch (Exception e) {
-            log.warn("AI 响应解析失败，跳过入口 {}: {}", entry.getClassName(), e.getMessage());
-            return;
-        }
+        if (!parsed || inc == null) return;
 
         // 合并到 DTO
         Set<String> newlyCreatedFunctionIds = new LinkedHashSet<>();
@@ -306,7 +368,10 @@ public class ModuleHierarchyServiceImpl implements ModuleHierarchyService {
                     if (StringUtils.hasText(fnNode.path("function_name").asText(""))) {
                         fn.setFunctionName(fnNode.path("function_name").asText());
                     }
-                    // 不读取 AI 的 class_paths，程序侧注入
+                    // 解析 AI 输出的 class_paths（不再由程序兜底，但保留 processEntry 的兜底注入逻辑兼容旧数据）
+                    mergeClassPaths(fn, fnNode.path("class_paths"));
+                    // 解析 AI 输出的 method_signatures
+                    mergeMethodSignatures(fn, fnNode.path("method_signatures"));
                 }
             }
         }
@@ -321,6 +386,35 @@ public class ModuleHierarchyServiceImpl implements ModuleHierarchyService {
             String v = kw.asText();
             if (StringUtils.hasText(v) && !existing.contains(v)) {
                 existing.add(v);
+            }
+        }
+    }
+
+    /**
+     * 合并 AI 输出的 class_paths 到 FunctionDto.classPaths
+     * null/空/非数组都安全忽略；trim 去除多余空白
+     */
+    private void mergeClassPaths(FunctionDto fn, JsonNode classPathsNode) {
+        if (fn == null || classPathsNode == null || !classPathsNode.isArray()) return;
+        for (JsonNode cp : classPathsNode) {
+            String v = cp.asText();
+            if (StringUtils.hasText(v)) {
+                fn.getClassPaths().add(v.trim());
+            }
+        }
+    }
+
+    /**
+     * 合并 AI 输出的 method_signatures 到 FunctionDto.methodSignatures
+     * 格式约束：methodName(ParamType1, ParamType2)，不含返回类型
+     * null/空/非数组都安全忽略；trim 去除多余空白
+     */
+    private void mergeMethodSignatures(FunctionDto fn, JsonNode methodSignaturesNode) {
+        if (fn == null || methodSignaturesNode == null || !methodSignaturesNode.isArray()) return;
+        for (JsonNode sig : methodSignaturesNode) {
+            String v = sig.asText();
+            if (StringUtils.hasText(v)) {
+                fn.getMethodSignatures().add(v.trim());
             }
         }
     }
@@ -416,6 +510,7 @@ public class ModuleHierarchyServiceImpl implements ModuleHierarchyService {
                     fnRow.setName(fn.getFunctionName());
                     fnRow.setKeywords(null);
                     fnRow.setClassPaths(serializeJsonArray(new ArrayList<>(fn.getClassPaths())));
+                    fnRow.setMethodSignatures(serializeJsonArray(new ArrayList<>(fn.getMethodSignatures())));
                     fnRows.add(fnRow);
                 }
             }
@@ -455,11 +550,94 @@ public class ModuleHierarchyServiceImpl implements ModuleHierarchyService {
     }
 
     private String serializeHierarchyToJson(ModuleHierarchy hierarchy) {
+        // 仅供提示词渲染：剥离 class_paths，避免敏感类路径泄漏到大模型调用 payload
         try {
-            return objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(hierarchy);
+            return objectMapper.writerWithDefaultPrettyPrinter()
+                    .writeValueAsString(PromptViewDtos.from(hierarchy));
         } catch (Exception e) {
             return "{}";
         }
+    }
+
+    /**
+     * 校验前端手工编辑后的层级树：
+     * - 节点 ID 必须符合 Base62Generator 约定（m/s/f 前缀 + 5 位）
+     * - 名称非空（模块 / 子模块 / 功能）
+     * - 子模块挂在模块下，功能挂在子模块下，结构不能错位
+     * - 同一 task 内 ID 不能重复
+     * - classPaths 中允许为空，但元素必须是字符串
+     */
+    private void validateReplacement(Long taskId, ModuleHierarchy hierarchy) {
+        if (hierarchy == null) {
+            throw new BusinessException("模块层级为空");
+        }
+        Set<String> seenModuleIds = new HashSet<>();
+        for (ModuleDto m : hierarchy.getModules().values()) {
+            if (!StringUtils.hasText(m.getId()) || !m.getId().startsWith("m") || m.getId().length() != 6) {
+                throw new BusinessException("模块 ID 非法: " + m.getId());
+            }
+            if (!seenModuleIds.add(m.getId())) {
+                throw new BusinessException("模块 ID 重复: " + m.getId());
+            }
+            if (!StringUtils.hasText(m.getModuleName())) {
+                throw new BusinessException("模块名称不能为空, id=" + m.getId());
+            }
+            Set<String> seenSubIds = new HashSet<>();
+            for (SubModuleDto sm : m.getSubModules().values()) {
+                if (!StringUtils.hasText(sm.getId()) || !sm.getId().startsWith("s") || sm.getId().length() != 6) {
+                    throw new BusinessException("子模块 ID 非法: " + sm.getId());
+                }
+                if (!seenSubIds.add(sm.getId())) {
+                    throw new BusinessException("子模块 ID 重复: " + sm.getId());
+                }
+                if (!StringUtils.hasText(sm.getSubModuleName())) {
+                    throw new BusinessException("子模块名称不能为空, id=" + sm.getId());
+                }
+                Set<String> seenFnIds = new HashSet<>();
+                for (FunctionDto fn : sm.getFunctions().values()) {
+                    if (!StringUtils.hasText(fn.getId()) || !fn.getId().startsWith("f") || fn.getId().length() != 6) {
+                        throw new BusinessException("功能 ID 非法: " + fn.getId());
+                    }
+                    if (!seenFnIds.add(fn.getId())) {
+                        throw new BusinessException("功能 ID 重复: " + fn.getId());
+                    }
+                    if (!StringUtils.hasText(fn.getFunctionName())) {
+                        throw new BusinessException("功能名称不能为空, id=" + fn.getId());
+                    }
+                    if (fn.getClassPaths() == null) {
+                        fn.setClassPaths(new LinkedHashSet<>());
+                    }
+                    if (fn.getMethodSignatures() == null) {
+                        fn.setMethodSignatures(new LinkedHashSet<>());
+                    }
+                    for (String cp : fn.getClassPaths()) {
+                        if (!StringUtils.hasText(cp)) {
+                            throw new BusinessException("功能 classPaths 含空元素, id=" + fn.getId());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @Override
+    public ModuleHierarchy replaceHierarchy(Long taskId, ModuleHierarchy replacement) {
+        if (taskId == null) {
+            throw new BusinessException("taskId 不能为空");
+        }
+        DecompileTask task = taskMapper.selectById(taskId);
+        if (task == null) {
+            throw new BusinessException("任务不存在: " + taskId);
+        }
+        validateReplacement(taskId, replacement);
+
+        // 设置上下文后落表（persistAll 依赖 taskId / systemId）
+        replacement.setTaskId(taskId);
+        replacement.setSystemId(task.getSystemId());
+        persistAll(taskId, task.getSystemId(), replacement);
+        log.info("replaceHierarchy done. taskId={} modules={} functions={}",
+                taskId, replacement.getModules().size(), countFunctions(replacement));
+        return replacement;
     }
 
     private String readOptionalFile(java.nio.file.Path path) {

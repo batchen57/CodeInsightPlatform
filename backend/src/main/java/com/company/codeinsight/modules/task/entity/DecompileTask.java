@@ -35,9 +35,18 @@ public class DecompileTask extends BaseEntity {
     private Long repositoryId;
 
     /**
-     * 运行任务时所选定的 AI 提示词模板版本号
+     * 模块提取提示词 ID（AI_ANALYZING / MODULE_HIERARCHY 阶段使用）
+     * <p>按 ci_prompt 主键精准定位。
      */
-    private Integer promptVersion;
+    @TableField("modularize_prompt_id")
+    private Long modularizePromptId;
+
+    /**
+     * 文档生成提示词 ID（GENERATING_DOC 阶段使用）
+     * <p>按 ci_prompt 主键精准定位。
+     */
+    @TableField("document_prompt_id")
+    private Long documentPromptId;
 
     /**
      * 运行任务时所选定的 AI 大模型唯一标识标识
@@ -90,5 +99,14 @@ public class DecompileTask extends BaseEntity {
      */
     @TableField("entry_scan_config")
     private String entryScanConfig;
+
+    /**
+     * 是否启用模块层级调试（人工复核断点）
+     * TRUE - 模块层级提炼完成后停在 MODULE_HIERARCHY_REVIEW，等待用户在页面上编辑 module_hierarchy 后再继续
+     * FALSE - 跳过断点，由 MODULE_HIERARCHY 直接推进至 GENERATING_DOC
+     * 默认 TRUE
+     */
+    @TableField("require_hierarchy_review")
+    private Boolean requireHierarchyReview;
 }
 

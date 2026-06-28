@@ -18,6 +18,7 @@ import {
   MenuUnfoldOutlined,
   PlayCircleOutlined,
   SettingOutlined,
+  SwapOutlined,
   UserOutlined,
 } from '@ant-design/icons';
 
@@ -65,6 +66,13 @@ const navigation = [
     description: '创建、启动、终止、重试并监控代码知识生成任务。',
   },
   {
+    key: '/tasks/hierarchy-review',
+    icon: <SwapOutlined />,
+    label: <Link to="/tasks/hierarchy-review">模块层级复核</Link>,
+    title: '模块层级复核',
+    description: '集中处理处于模块层级调试断点的任务，对 AI 提炼的模块 / 子模块 / 功能树进行增删改。',
+  },
+  {
     key: '/drafts',
     icon: <EditOutlined />,
     label: <Link to="/drafts">知识复核</Link>,
@@ -96,13 +104,16 @@ const navigation = [
 
 /**
  * 辅助定位匹配当前选中的侧边栏高亮菜单项 Key 值
+ * 当路径同时匹配多个菜单（如 /tasks 与 /tasks/hierarchy-review）时，按 key 长度倒序优先匹配最具体的项
  */
 const getSelectedKey = (pathname: string) => {
   if (pathname === '/') {
     return '/';
   }
-  const match = navigation.find((item) => item.key !== '/' && pathname.startsWith(item.key));
-  return match?.key ?? '/';
+  const matches = navigation
+    .filter((item) => item.key !== '/' && pathname.startsWith(item.key))
+    .sort((a, b) => b.key.length - a.key.length);
+  return matches[0]?.key ?? '/';
 };
 
 /**

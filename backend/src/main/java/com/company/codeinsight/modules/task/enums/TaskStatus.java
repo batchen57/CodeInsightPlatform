@@ -34,6 +34,10 @@ public enum TaskStatus {
      */
     MODULE_HIERARCHY,
     /**
+     * 模块层级人工复核断点（AI 提炼完成后等待用户在页面上编辑 module_hierarchy，确认后继续生成文档）
+     */
+    MODULE_HIERARCHY_REVIEW,
+    /**
      * 知识生成中（整合切片 Markdown 并写入 ci_knowledge_draft 进行版本归档）
      */
     GENERATING_DOC,

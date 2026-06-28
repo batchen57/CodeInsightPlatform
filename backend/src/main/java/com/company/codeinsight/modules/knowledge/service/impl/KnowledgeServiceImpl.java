@@ -70,6 +70,12 @@ public class KnowledgeServiceImpl implements KnowledgeService {
     @Autowired
     private DraftSourceReferenceMapper draftSourceReferenceMapper;
 
+    @Autowired
+    private com.company.codeinsight.modules.knowledge.service.KnowledgeIndexService knowledgeIndexService;
+
+    @Autowired
+    private com.company.codeinsight.modules.hierarchy.service.ModuleHierarchyService moduleHierarchyService;
+
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     /**
@@ -133,12 +139,7 @@ public class KnowledgeServiceImpl implements KnowledgeService {
             indexBuilder.append("- [依赖与调用链路](dependency-index.md)\n");
             indexBuilder.append("- [待确认事项清单](pending-confirmation.md)\n");
 
-            // 2. 构建模块目录索引（module-index.md）
-            StringBuilder moduleIndexBuilder = new StringBuilder();
-            moduleIndexBuilder.append("# 模块知识归纳索引\n\n");
-            moduleIndexBuilder.append("本知识库由代码洞察平台基于大模型及静态解析自动归纳生成。\n\n");
-            moduleIndexBuilder.append("## 系统模块列表\n");
-
+            // 2. 构建模块目录索引（module-index.md）—— 项 4 升级为三级表格
             StringBuilder yamlBuilder = new StringBuilder();
             yamlBuilder.append("modules:\n");
 
@@ -150,9 +151,20 @@ public class KnowledgeServiceImpl implements KnowledgeService {
                 String cleanFileName = draft.getModuleName().replaceAll("[\\s/\\(\\)]", "_") + ".md";
                 Files.writeString(modulesPath.resolve(cleanFileName), content);
 
-                moduleIndexBuilder.append("- [").append(draft.getModuleName()).append("](modules/").append(cleanFileName).append(")\n");
                 yamlBuilder.append("  - name: \"").append(draft.getModuleName()).append("\"\n");
                 yamlBuilder.append("    path: \"docs/code-insight/modules/").append(cleanFileName).append("\"\n");
+            }
+
+            // 加载 ModuleHierarchy DTO（项 2 产出），由 KnowledgeIndexService 生成三级索引
+            try {
+                com.company.codeinsight.modules.hierarchy.model.ModuleHierarchy hierarchy =
+                        moduleHierarchyService.loadByTaskId(taskId);
+                knowledgeIndexService.generateModuleIndex(docsPath, hierarchy, drafts);
+                log.info("项 4 三级索引 module-index.md 生成完成（taskId={}）", taskId);
+            } catch (Exception e) {
+                // 索引生成失败不能影响主流程，降级为旧版两行列表（这里直接保留 fallback）
+                log.warn("KnowledgeIndexService 调用失败，写 fallback module-index.md: {}", e.getMessage());
+                writeFallbackModuleIndex(docsPath, drafts);
             }
 
             // 3. 构建架构整体设计大纲（architecture-overview.md）
@@ -297,7 +309,7 @@ public class KnowledgeServiceImpl implements KnowledgeService {
 
             // 执行本地磁盘写入落盘
             Files.writeString(docsPath.resolve("index.md"), indexBuilder.toString());
-            Files.writeString(docsPath.resolve("module-index.md"), moduleIndexBuilder.toString());
+            // module-index.md 已在前面 KnowledgeIndexService 调用时生成（项 4）
             Files.writeString(docsPath.resolve("architecture-overview.md"), archBuilder.toString());
             Files.writeString(docsPath.resolve("frontend-overview.md"), feBuilder.toString());
             Files.writeString(docsPath.resolve("backend-overview.md"), beBuilder.toString());
@@ -320,7 +332,7 @@ public class KnowledgeServiceImpl implements KnowledgeService {
 
             ObjectNode promptJson = objectMapper.createObjectNode();
             promptJson.put("taskId", taskId);
-            promptJson.put("promptVersion", task.getPromptVersion() != null ? task.getPromptVersion() : 1);
+            promptJson.putNull("promptVersion");
             promptJson.put("modelName", "MiniMax-M3");
             promptJson.put("appliedAt", LocalDateTime.now().toString());
             Files.writeString(metaPath.resolve("prompt-used.json"), objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(promptJson));
@@ -340,7 +352,7 @@ public class KnowledgeServiceImpl implements KnowledgeService {
         version.setSourceCommit(repo.getLastCommitId());
         version.setTargetBranch("docs-code-insight"); 
         version.setTargetCommit(null);
-        version.setPromptVersion(task.getPromptVersion());
+        version.setPromptVersion(null);
         version.setModelName("MiniMax-M3");
         version.setStatus("DRAFT");
         version.setConfirmedBy(confirmedBy);
@@ -514,5 +526,21 @@ public class KnowledgeServiceImpl implements KnowledgeService {
                 zos.closeEntry();
             }
         }
+    }
+
+    /**
+     * 项 4 KnowledgeIndexService 失败时的降级：写原版两行列表 module-index.md
+     * 保持与旧版本行为兼容，避免推送阶段因索引异常阻塞
+     */
+    private void writeFallbackModuleIndex(Path docsPath, List<KnowledgeDraft> drafts) throws IOException {
+        StringBuilder sb = new StringBuilder();
+        sb.append("# 模块知识归纳索引\n\n");
+        sb.append("本知识库由代码洞察平台基于大模型及静态解析自动归纳生成。\n\n");
+        sb.append("## 系统模块列表\n");
+        for (KnowledgeDraft draft : drafts) {
+            String cleanFileName = draft.getModuleName().replaceAll("[\\s/\\(\\)]", "_") + ".md";
+            sb.append("- [").append(draft.getModuleName()).append("](modules/").append(cleanFileName).append(")\n");
+        }
+        Files.writeString(docsPath.resolve("module-index.md"), sb.toString());
     }
 }

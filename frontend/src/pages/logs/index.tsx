@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Button, Card, Descriptions, Form, Input, Modal, Select, Space, Table, Tag, Typography } from 'antd';
 import { EyeOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/icons';
+import { useSearchParams } from 'react-router-dom';
 import { getLogDetail, listLogs, type OperationLog } from '../../api/log';
 import { listSystems } from '../../api/system';
 import type { System } from '../../types';
@@ -21,6 +22,9 @@ const actionMeta: Record<string, { color: string; label: string }> = {
 };
 
 const Logs: React.FC = () => {
+  const [searchParams] = useSearchParams();
+  const urlTaskId = searchParams.get('taskId') || '';
+
   const [logs, setLogs] = useState<OperationLog[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
@@ -29,7 +33,7 @@ const Logs: React.FC = () => {
 
   const [systems, setSystems] = useState<System[]>([]);
   const [selectedSystemId, setSelectedSystemId] = useState<number | undefined>();
-  const [searchTaskId, setSearchTaskId] = useState('');
+  const [searchTaskId, setSearchTaskId] = useState(urlTaskId);
   const [searchUsername, setSearchUsername] = useState('');
   const [searchActionType, setSearchActionType] = useState('');
   const [searchSuccess, setSearchSuccess] = useState<number | undefined>();
@@ -40,6 +44,14 @@ const Logs: React.FC = () => {
   useEffect(() => {
     listSystems({ current: 1, size: 100, status: 1 }).then((data) => setSystems(data.records));
   }, []);
+
+  // 从 URL 参数带出 taskId 时，自动查询
+  useEffect(() => {
+    if (urlTaskId) {
+      setCurrent(1);
+      fetchLogs(1, size);
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const fetchLogs = async (page = current, pageSize = size) => {
     setLoading(true);

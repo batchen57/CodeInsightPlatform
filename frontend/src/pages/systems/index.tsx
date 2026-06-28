@@ -3,6 +3,7 @@ import {
   Button,
   Card,
   Col,
+  Collapse,
   Descriptions,
   Drawer,
   Form,
@@ -24,8 +25,10 @@ import {
   GlobalOutlined,
   PlusOutlined,
   ReloadOutlined,
+  ScanOutlined,
   SearchOutlined,
   SettingOutlined,
+  ThunderboltOutlined,
 } from '@ant-design/icons';
 import { changeSystemStatus, createSystem, listSystems, updateSystem } from '../../api/system';
 import { createRepository, listRepositories, testRepositoryConnection, updateRepository } from '../../api/repository';
@@ -57,6 +60,12 @@ const Systems: React.FC = () => {
   const [editingRepo, setEditingRepo] = useState<Repository | null>(null);
   const [testingConnection, setTestingConnection] = useState(false);
   const [repoForm] = Form.useForm();
+
+  // 仓库扫描规则 Drawer（行编辑入口）
+  const [scanConfigDrawerOpen, setScanConfigDrawerOpen] = useState(false);
+  const [scanConfigRepo, setScanConfigRepo] = useState<Repository | null>(null);
+  const [scanConfigForm] = Form.useForm();
+  const [savingScanConfig, setSavingScanConfig] = useState(false);
 
   const fetchSystems = useCallback(
     async (page = current, pageSize = size) => {
@@ -190,6 +199,77 @@ const Systems: React.FC = () => {
     setRepoModalOpen(false);
     fetchRepositories(selectedSystem.id);
   };
+
+  // 打开仓库扫描规则 Drawer（行编辑入口）
+  const openScanConfigDrawer = (repo: Repository) => {
+    setScanConfigRepo(repo);
+    // 后端 entryScanConfig 是 JSON 字符串，需要反序列化为对象才能填充嵌套 Form.Item
+    let config = repo.entryScanConfig;
+    if (typeof config === 'string') {
+      try { config = JSON.parse(config); } catch { config = {}; }
+    }
+    const base = (config || {}) as Record<string, unknown>;
+    // 排除类路径：仓库有配置则用仓库的，否则使用后端默认值
+    const merged = {
+      ...base,
+      excludeClasspaths: Array.isArray(base.excludeClasspaths) && (base.excludeClasspaths as string[]).length > 0
+        ? base.excludeClasspaths
+        : ['**/*Test', '**/*Tests', '**/*TestCase'],
+    };
+    scanConfigForm.setFieldsValue({ entryScanConfig: merged });
+    setScanConfigDrawerOpen(true);
+  };
+
+  // 保存仓库扫描规则
+  const handleSaveScanConfig = async () => {
+    if (!scanConfigRepo) return;
+    const values = await scanConfigForm.validateFields();
+    setSavingScanConfig(true);
+    try {
+      // entryScanConfig 对象需要序列化为 JSON 字符串（后端 CodeRepository.entryScanConfig 是 String 类型）
+      const merged = {
+        ...scanConfigRepo,
+        ...values,
+        entryScanConfig: values.entryScanConfig ? JSON.stringify(values.entryScanConfig) : null,
+      };
+      await updateRepository(scanConfigRepo.id, merged);
+      message.success('仓库扫描规则已保存');
+      setScanConfigDrawerOpen(false);
+      if (selectedSystem) {
+        fetchRepositories(selectedSystem.id);
+      }
+    } catch (e) {
+      // request.ts 拦截器已统一处理
+    } finally {
+      setSavingScanConfig(false);
+    }
+  };
+
+  // 一键填入默认扫描配置（覆盖全部 6 个字段）
+  const handleFillDefaultScanConfig = () => {
+    scanConfigForm.setFieldsValue({
+      entryScanConfig: {
+        includeAnnotations: ['RestController', 'Controller', 'RequestMapping'],
+        includeClasspaths: [],
+        includeExtends: [],
+        excludeClasspaths: ['**/*Test', '**/*Tests', '**/*TestCase'],
+        excludePackages: [],
+        excludeAnnotations: ['Deprecated'],
+      },
+    });
+    message.success('已填入默认扫描配置，请按需调整后保存');
+  };
+
+  // 监听扫描配置变化，控制保存按钮可用性
+  const watchedScanConfig = Form.useWatch('entryScanConfig', scanConfigForm);
+  const hasAnyInclude = (() => {
+    if (!watchedScanConfig) return false;
+    const cfg = watchedScanConfig as { includeAnnotations?: string[]; includeClasspaths?: string[]; includeExtends?: string[] };
+    const ann = Array.isArray(cfg.includeAnnotations) ? cfg.includeAnnotations.length : 0;
+    const cp = Array.isArray(cfg.includeClasspaths) ? cfg.includeClasspaths.length : 0;
+    const ext = Array.isArray(cfg.includeExtends) ? cfg.includeExtends.length : 0;
+    return ann + cp + ext > 0;
+  })();
 
   const columns = [
     {
@@ -419,11 +499,18 @@ const Systems: React.FC = () => {
                   {
                     title: '操作',
                     key: 'action',
-                    width: 120,
+                    width: 200,
                     render: (_: unknown, repo: Repository) => (
                       <Space size={8}>
                         <Button size="small" onClick={() => openRepoModal(repo)}>
                           编辑
+                        </Button>
+                        <Button
+                          size="small"
+                          icon={<ScanOutlined />}
+                          onClick={() => openScanConfigDrawer(repo)}
+                        >
+                          扫描规则
                         </Button>
                         <Button
                           size="small"
@@ -508,6 +595,90 @@ const Systems: React.FC = () => {
           </Row>
         </Form>
       </Modal>
+
+      <Drawer
+        title={scanConfigRepo ? `扫描规则：${scanConfigRepo.gitUrl}` : '扫描规则'}
+        width={680}
+        open={scanConfigDrawerOpen}
+        onClose={() => setScanConfigDrawerOpen(false)}
+        destroyOnHidden
+        footer={
+          <Space>
+            <Button onClick={() => setScanConfigDrawerOpen(false)}>取消</Button>
+            <Button
+              type="primary"
+              loading={savingScanConfig}
+              onClick={handleSaveScanConfig}
+              disabled={!hasAnyInclude}
+            >
+              保存
+            </Button>
+          </Space>
+        }
+      >
+        <Form form={scanConfigForm} layout="vertical" style={{ marginTop: 16 }} initialValues={{
+          entryScanConfig: {
+            excludeClasspaths: ['**/*Test', '**/*Tests', '**/*TestCase'],
+          },
+        }}>
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              marginBottom: 12,
+              gap: 12,
+            }}
+          >
+            <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
+              该配置作为新建反编译任务时的默认值；任务可单独配置覆盖此默认值。
+              至少需要 1 个入口识别规则。
+            </Typography.Paragraph>
+            <Button icon={<ThunderboltOutlined />} onClick={handleFillDefaultScanConfig}>
+              填入默认扫描配置
+            </Button>
+          </div>
+          <Collapse
+            defaultActiveKey={['include']}
+            items={[
+              {
+                key: 'include',
+                label: '入口识别规则（满足任一即视为入口）',
+                children: (
+                  <>
+                    <Form.Item name={['entryScanConfig', 'includeAnnotations']} noStyle>
+                      <Select mode="tags" placeholder="注解（如 RestController / Service / 自定义注解）" style={{ width: '100%' }} />
+                    </Form.Item>
+                    <Form.Item name={['entryScanConfig', 'includeClasspaths']} noStyle style={{ marginTop: 8 }}>
+                      <Select mode="tags" placeholder="类路径 Ant 模式（如 com.demo.controller.*）" style={{ width: '100%' }} />
+                    </Form.Item>
+                    <Form.Item name={['entryScanConfig', 'includeExtends']} noStyle style={{ marginTop: 8 }}>
+                      <Select mode="tags" placeholder="继承/实现父类（如 BaseEntry / CommandLineRunner）" style={{ width: '100%' }} />
+                    </Form.Item>
+                  </>
+                ),
+              },
+              {
+                key: 'exclude',
+                label: '排除规则（满足任一即从候选中排除）',
+                children: (
+                  <>
+                    <Form.Item name={['entryScanConfig', 'excludeClasspaths']} noStyle>
+                      <Select mode="tags" placeholder="排除类路径 Ant 模式（如 *.test.*）" style={{ width: '100%' }} />
+                    </Form.Item>
+                    <Form.Item name={['entryScanConfig', 'excludePackages']} noStyle style={{ marginTop: 8 }}>
+                      <Select mode="tags" placeholder="排除包路径（如 com.legacy.config）" style={{ width: '100%' }} />
+                    </Form.Item>
+                    <Form.Item name={['entryScanConfig', 'excludeAnnotations']} noStyle style={{ marginTop: 8 }}>
+                      <Select mode="tags" placeholder="排除注解（如 Internal / Deprecated）" style={{ width: '100%' }} />
+                    </Form.Item>
+                  </>
+                ),
+              },
+            ]}
+          />
+        </Form>
+      </Drawer>
     </div>
   );
 };

@@ -65,6 +65,57 @@ public class EntryPointDiscoveryServiceImpl implements EntryPointDiscoveryServic
         return collectReachableSourceInternal(taskId, entryClassName, projectDir, config);
     }
 
+    @Override
+    public String readEntrySource(File projectDir, EntryPoint entry, EntryPointConfig config) {
+        if (projectDir == null || entry == null) {
+            return "";
+        }
+        String fqcn = entry.getClassName();
+        if (!StringUtils.hasText(fqcn)) return "";
+
+        try {
+            // 1. 定位源文件
+            File sourceFile = resolveEntryFile(projectDir, entry);
+            if (sourceFile == null || !sourceFile.exists()) {
+                log.warn("readEntrySource: 找不到入口类 {} 的源文件 (filePath={})", fqcn, entry.getFilePath());
+                return "";
+            }
+
+            // 2. 排除规则检查（二次保障，discoverEntries 已过滤，但可能传了不同的 config）
+            if (config != null) {
+                try {
+                    ParsedClassInfo info = javaParserService.parseFile(sourceFile);
+                    if (info != null && isExcluded(fqcn, info, config)) {
+                        log.debug("入口类 {} 命中排除规则，跳过", fqcn);
+                        return "";
+                    }
+                } catch (Exception e) {
+                    log.warn("解析入口类 {} 失败，仍尝试读取源文件", fqcn, e);
+                }
+            }
+
+            return Files.readString(sourceFile.toPath());
+        } catch (Exception e) {
+            log.warn("readEntrySource 读取失败: {}", fqcn, e);
+            return "";
+        }
+    }
+
+    /**
+     * 根据 EntryPoint 信息在 projectDir 下定位源文件
+     */
+    private File resolveEntryFile(File projectDir, EntryPoint entry) {
+        // 优先使用 entry.filePath（来自 discoverEntries 的落表结果）
+        String filePath = entry.getFilePath();
+        if (StringUtils.hasText(filePath)) {
+            File f = new File(projectDir, filePath.replace('/', File.separatorChar));
+            if (f.exists()) {
+                return f;
+            }
+        }
+        return findJavaFileByFqcn(projectDir, entry.getClassName());
+    }
+
     // ============================ core impl ============================
 
     private List<EntryPoint> discoverEntriesInternal(Long taskId, File projectDir, EntryPointConfig config) {
@@ -81,12 +132,16 @@ public class EntryPointDiscoveryServiceImpl implements EntryPointDiscoveryServic
             return Collections.emptyList();
         }
 
-        // 2. 加载调用链，构建 dependency_name -> [file_path] 反向索引
+        // 2. 加载调用链，构建 className -> file_path 索引（支持多模块路径）
         List<MethodCall> calls = methodCallService.listByTaskId(taskId);
         Map<String, String> depNameToFilePath = new HashMap<>();
+        Map<String, String> shortNameToFilePath = new HashMap<>();
         for (MethodCall mc : calls) {
             if (StringUtils.hasText(mc.getDependencyName()) && StringUtils.hasText(mc.getFilePath())) {
                 depNameToFilePath.putIfAbsent(mc.getDependencyName(), mc.getFilePath());
+            }
+            if (StringUtils.hasText(mc.getClassName()) && StringUtils.hasText(mc.getFilePath())) {
+                shortNameToFilePath.putIfAbsent(mc.getClassName(), mc.getFilePath());
             }
         }
         Set<String> calledDependencies = depNameToFilePath.keySet();
@@ -112,9 +167,9 @@ public class EntryPointDiscoveryServiceImpl implements EntryPointDiscoveryServic
                 String type = info.getType();
                 String entryType = mapTypeToEntryType(type);
                 if (entryType != null) {
-                    addEntry(entries, fq, info, entryType, extractTriggerAnnotation(info.getAnnotations(), entryType));
+                    addEntry(entries, fq, info, entryType, extractTriggerAnnotation(info.getAnnotations(), entryType), shortNameToFilePath);
                 } else if (info.isHasMainMethod()) {
-                    addEntry(entries, fq, info, "APPLICATION", "main");
+                    addEntry(entries, fq, info, "APPLICATION", "main", shortNameToFilePath);
                 }
             } else {
                 // 配置驱动：三 include"或"逻辑
@@ -126,7 +181,7 @@ public class EntryPointDiscoveryServiceImpl implements EntryPointDiscoveryServic
                     if (entryType == null) {
                         entryType = "CUSTOM";
                     }
-                    addEntry(entries, fq, info, entryType, firstHitAnnotation(info, config));
+                    addEntry(entries, fq, info, entryType, firstHitAnnotation(info, config), shortNameToFilePath);
                 }
             }
         }
@@ -143,7 +198,7 @@ public class EntryPointDiscoveryServiceImpl implements EntryPointDiscoveryServic
                 }
                 ParsedClassInfo info = classNameToInfo.get(fq);
                 if (info != null && info.isHasMainMethod()) {
-                    addEntry(entries, fq, info, "MAIN", "main (zero-reference)");
+                    addEntry(entries, fq, info, "MAIN", "main (zero-reference)", shortNameToFilePath);
                 }
             }
         }
@@ -316,11 +371,12 @@ public class EntryPointDiscoveryServiceImpl implements EntryPointDiscoveryServic
 
     // ============================ entry builder ============================
 
-    private void addEntry(Map<String, EntryPoint> entries, String fq, ParsedClassInfo info, String entryType, String annotation) {
+    private void addEntry(Map<String, EntryPoint> entries, String fq, ParsedClassInfo info, String entryType,
+                        String annotation, Map<String, String> shortNameToFilePath) {
         if (entries.containsKey(fq)) return;
         EntryPoint ep = new EntryPoint();
         ep.setClassName(fq);
-        ep.setFilePath(lookupFilePath(info.getClassName(), null, info));
+        ep.setFilePath(resolveFilePathForClass(fq, info, shortNameToFilePath));
         ep.setEntryType(entryType);
         ep.setAnnotation(annotation);
         ep.setRemark(info.getRequestMapping());
@@ -358,10 +414,53 @@ public class EntryPointDiscoveryServiceImpl implements EntryPointDiscoveryServic
         return info.getPackageName() + "." + info.getClassName();
     }
 
-    private String lookupFilePath(String className, List<ParsedClassInfo> parsed, ParsedClassInfo info) {
-        // 优先用 info 的 packageName 推断
-        if (info != null && StringUtils.hasText(info.getPackageName())) {
+    private String resolveFilePathForClass(String fqcn, ParsedClassInfo info, Map<String, String> shortNameToFilePath) {
+        if (info != null && StringUtils.hasText(info.getSourceRelativePath())) {
+            return info.getSourceRelativePath();
+        }
+        if (StringUtils.hasText(fqcn)) {
+            String shortName = fqcn.contains(".") ? fqcn.substring(fqcn.lastIndexOf('.') + 1) : fqcn;
+            String fromCalls = shortNameToFilePath != null ? shortNameToFilePath.get(shortName) : null;
+            if (StringUtils.hasText(fromCalls)) {
+                return fromCalls;
+            }
+        }
+        return inferStandardMavenPath(info != null ? info.getClassName() : null, info);
+    }
+
+    private String inferStandardMavenPath(String className, ParsedClassInfo info) {
+        if (info != null && StringUtils.hasText(info.getPackageName()) && StringUtils.hasText(className)) {
             return "src/main/java/" + info.getPackageName().replace('.', '/') + "/" + className + ".java";
+        }
+        return null;
+    }
+
+    private File findJavaFileByFqcn(File projectDir, String fqcn) {
+        if (projectDir == null || !StringUtils.hasText(fqcn) || !fqcn.contains(".")) {
+            return null;
+        }
+        String suffix = fqcn.replace('.', '/') + ".java";
+        return findFileByPathSuffix(projectDir, suffix);
+    }
+
+    private File findFileByPathSuffix(File dir, String pathSuffix) {
+        if (dir == null || !dir.exists() || !StringUtils.hasText(pathSuffix)) {
+            return null;
+        }
+        String normalizedSuffix = pathSuffix.replace('\\', '/');
+        if (dir.isFile()) {
+            String rel = dir.getPath().replace('\\', '/');
+            return rel.endsWith(normalizedSuffix) ? dir : null;
+        }
+        File[] children = dir.listFiles();
+        if (children == null) {
+            return null;
+        }
+        for (File child : children) {
+            File hit = findFileByPathSuffix(child, normalizedSuffix);
+            if (hit != null) {
+                return hit;
+            }
         }
         return null;
     }
@@ -392,11 +491,7 @@ public class EntryPointDiscoveryServiceImpl implements EntryPointDiscoveryServic
             target = new File(projectDir, relativePath.replace('/', File.separatorChar));
         }
         if (target == null || !target.exists()) {
-            if (StringUtils.hasText(fallbackClassName) && fallbackClassName.contains(".")) {
-                String pkgPath = fallbackClassName.substring(0, fallbackClassName.lastIndexOf('.')).replace('.', '/');
-                String simpleName = fallbackClassName.substring(fallbackClassName.lastIndexOf('.') + 1);
-                target = new File(projectDir, "src/main/java/" + pkgPath + "/" + simpleName + ".java");
-            }
+            target = findJavaFileByFqcn(projectDir, fallbackClassName);
         }
         if (target != null && target.exists()) {
             try {

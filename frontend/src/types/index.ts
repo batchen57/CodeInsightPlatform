@@ -20,6 +20,8 @@ export interface Repository {
   excludeFileTypes?: string;
   lastCommitId?: string;
   lastDecompileAt?: string;
+  /** 仓库级入口扫描配置，新建任务时默认带出，任务可单独覆盖 */
+  entryScanConfig?: EntryScanConfig;
   createdAt: string;
   updatedAt: string;
 }
@@ -31,6 +33,8 @@ export interface Prompt {
   version: number;
   status: number; // 0-禁用, 1-启用
   isDefault: number; // 0-否, 1-是
+  /** 提示词用途：MODULARIZE-模块提取 / DOCUMENT_GENERATION-文档生成 */
+  promptType?: 'MODULARIZE' | 'DOCUMENT_GENERATION' | string;
   createdAt: string;
   updatedAt: string;
 }
@@ -39,7 +43,12 @@ export interface Task {
   id: number;
   systemId: number;
   repositoryId: number;
+  /** 已废弃，请使用 modularizePromptVersion / documentPromptVersion */
   promptVersion?: number;
+  /** 模块提取提示词版本（对应 ci_prompt.prompt_type=MODULARIZE） */
+  modularizePromptVersion?: number;
+  /** 文档生成提示词版本（对应 ci_prompt.prompt_type=DOCUMENT_GENERATION） */
+  documentPromptVersion?: number;
   modelName?: string;
   status: string;
   type: 'INITIAL' | 'INCREMENTAL';
@@ -50,6 +59,8 @@ export interface Task {
   startedAt?: string;
   endedAt?: string;
   entryScanConfig?: EntryScanConfig;
+  /** 是否启用模块层级调试（人工复核断点）；undefined 时按 TRUE 处理 */
+  requireHierarchyReview?: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -72,6 +83,34 @@ export interface EntryScanConfig {
   excludePackages?: string[];
   /** 排除 - 注解 */
   excludeAnnotations?: string[];
+}
+
+/** 模块层级（人工复核断点编辑对象），与后端 ModuleHierarchy DTO 对应 */
+export interface ModuleHierarchy {
+  taskId?: number;
+  systemId?: number;
+  modules?: Record<string, ModuleNode>;
+}
+
+export interface ModuleNode {
+  id: string;
+  moduleName: string;
+  keywords?: string[];
+  subModules?: Record<string, SubModuleNode>;
+}
+
+export interface SubModuleNode {
+  id: string;
+  subModuleName: string;
+  keywords?: string[];
+  functions?: Record<string, FunctionNode>;
+}
+
+export interface FunctionNode {
+  id: string;
+  functionName: string;
+  /** 入口类全限定名集合（仅在内存维护，不会写入提示词） */
+  classPaths?: string[];
 }
 
 export interface KnowledgeDraft {

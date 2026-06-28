@@ -6,6 +6,7 @@ import lombok.NoArgsConstructor;
 
 import java.io.Serializable;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 /**
@@ -15,6 +16,8 @@ import java.util.List;
  * - exclude 规则：满足任一即从候选中排除
  *
  * 任一 include 列表为空且 config 不为 null → 走默认 Controller/JOB/MQ 兜底
+ *
+ * 默认排除规则：自动过滤测试类（*Test / *Tests / *TestCase）以避免测试代码被当作业务入口。
  */
 @Data
 @NoArgsConstructor
@@ -37,7 +40,11 @@ public class EntryPointConfig implements Serializable {
     /* ---------- 排除规则（满足任一即排除）---------- */
 
     /** 排除类路径（Ant 风格）列表 */
-    private List<String> excludeClasspaths = new ArrayList<>();
+    private List<String> excludeClasspaths = new ArrayList<>(Arrays.asList(
+            "**/*Test",
+            "**/*Tests",
+            "**/*TestCase"
+    ));
 
     /** 排除包路径列表：FQ.startsWith 任一元素（点分隔）即匹配 */
     private List<String> excludePackages = new ArrayList<>();

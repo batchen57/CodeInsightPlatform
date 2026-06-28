@@ -14,6 +14,8 @@ export const listPrompts = (params: {
   size: number;
   name?: string;
   status?: number;
+  /** MODULARIZE-模块提取 / DOCUMENT_GENERATION-文档生成 */
+  promptType?: 'MODULARIZE' | 'DOCUMENT_GENERATION' | string;
 }): Promise<PageResult<Prompt>> => {
   return request.get('/prompts', { params });
 };

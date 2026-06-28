@@ -1,3 +1,30 @@
+-- =============================================================================
+-- 默认提示词种子数据
+-- -----------------------------------------------------------------------------
+-- 将 backend/src/main/resources/analyze_prompt.md 与 module_doc_prompt.md 的
+-- 内容维护到 ci_prompt 表，作为「模块提取」与「文档生成」两类提示词的默认模板。
+--
+-- 设计要点：
+--   1. 使用 PostgreSQL 的命名 dollar-quoting（$tag$ ... $tag$）包裹 Markdown 正文，
+--      避免转义单引号 / 双引号 / 反引号等特殊字符。两段正文 tag 不同以避免嵌套歧义。
+--   2. 幂等性通过「INSERT ... SELECT ... WHERE NOT EXISTS」实现：
+--      已存在同 (prompt_type, name, version) 的记录时跳过；启动执行多次也不会重复插入。
+--   3. 同一 prompt_type 下只允许一条 is_default=1（schema 中已建部分唯一索引），
+--      故先 UPDATE 将同类型其他默认记录降为非默认，再插入新默认。
+-- =============================================================================
+
+-- -----------------------------------------------------------------------------
+-- 1) 模块提取提示词（MODULARIZE）— 来源：analyze_prompt.md
+-- -----------------------------------------------------------------------------
+UPDATE ci_prompt
+   SET is_default = 0
+ WHERE prompt_type = 'MODULARIZE'
+   AND is_default  = 1
+   AND (name <> '默认模块提取提示词' OR version <> 1);
+
+INSERT INTO ci_prompt (name, content, version, status, is_default, prompt_type, created_at, updated_at)
+SELECT '默认模块提取提示词',
+       $analyze_prompt_md$
 # Java 代码分析提示词（增量输出模式）
 
 ## 角色
@@ -35,8 +62,7 @@
             {
               "id": "f3AbC",
               "function_name": "功能A",
-              "class_paths": ["com.example.Controller"],
-              "method_signatures": ["methodA(String)", "methodB(Integer)"]
+              "class_paths": ["com.example.Controller"]
             }
           ]
         }
@@ -101,8 +127,7 @@
 | `sub_modules[].functions` | object[] | 功能列表 |
 | `functions[].id` | string | 5 位 Base62，`f` 前缀 |
 | `functions[].function_name` | string | 业务功能名（动词短语） |
-| `functions[].class_paths` | string[] | **必填**：入口类全限定名列表（AI 根据代码自行判断，不再由程序兜底） |
-| `functions[].method_signatures` | string[] | **必填**：该功能涉及的所有方法签名，格式 `methodName(ParamType1, ParamType2)`（不含返回类型），例 `["listUsers(Integer, Integer)", "createUser(UserDTO)"]`；用于阶段 2 按方法签名粒度反查调用链喂 AI 文档生成 |
+| `functions[].class_paths` | **禁止输出** | 由程序在解析后自动注入 |
 
 > **功能节点不再包含 `keywords` 字段**：`function_name` 本身就是关键词，重复会污染检索。
 
@@ -262,7 +287,7 @@
           "sub_module_name": "存量查询",
           "keywords": ["查询"],
           "functions": [
-            { "id": "f3AbC", "function_name": "存量查询执行", "class_paths": ["com.example.scan.ScanController"], "method_signatures": ["queryScanConfig(String)", "executeScan(Long)"] }
+            { "id": "f3AbC", "function_name": "存量查询执行", "class_paths": ["com.example.scan.ScanController"] }
           ]
         }
       ]
@@ -288,7 +313,7 @@
           "sub_module_name": "重庆房管局",
           "keywords": ["重庆", "授权", "房管局"],
           "functions": [
-            { "id": "fL9xN", "function_name": "重庆房管局授权", "class_paths": ["com.example.fang.gov.ChongqingAuthController"], "method_signatures": ["authApply(Long, String)", "authCallback(String)"] }
+            { "id": "fL9xN", "function_name": "重庆房管局授权" }
           ]
         }
       ]
@@ -297,7 +322,7 @@
 }
 ```
 
-> 说明：模块 ID、子模块 ID、功能 ID 都是新生成的（因为 `module_hierarchy.json` 中此前没有房管局业务相关内容）；`class_paths` 与 `method_signatures` 由 AI 直接输出（不再由程序兜底）。
+> 说明：模块 ID、子模块 ID、功能 ID 都是新生成的（因为 `module_hierarchy.json` 中此前没有房管局业务相关内容）；`class_paths` 不输出，由程序后续注入。
 
 ---
 
@@ -308,6 +333,138 @@
 - [ ] 模块名是**业务领域**，不在禁忌清单内
 - [ ] 模块关键词 3–5 个，**只含名词**
 - [ ] ID 5 位 Base62，前缀对应层级（`m` / `s` / `f`）
-- [ ] **已输出** `class_paths` 字段（必填，不再由程序兜底）
-- [ ] **已输出** `method_signatures` 字段（必填，每个功能至少 1 个方法签名）
+- [ ] **未输出** `class_paths` 字段
 - [ ] 边界场景已正确处理（无法识别/通用工具类 → 空输出）
+$analyze_prompt_md$,
+       1,
+       1,
+       1,
+       'MODULARIZE',
+       CURRENT_TIMESTAMP,
+       CURRENT_TIMESTAMP
+ WHERE NOT EXISTS (
+    SELECT 1 FROM ci_prompt
+     WHERE prompt_type = 'MODULARIZE'
+       AND name        = '默认模块提取提示词'
+       AND version     = 1
+);
+
+-- -----------------------------------------------------------------------------
+-- 2) 文档生成提示词（DOCUMENT_GENERATION）— 来源：module_doc_prompt.md
+-- -----------------------------------------------------------------------------
+UPDATE ci_prompt
+   SET is_default = 0
+ WHERE prompt_type      = 'DOCUMENT_GENERATION'
+   AND is_default       = 1
+   AND (name <> '默认文档生成提示词' OR version <> 1);
+
+INSERT INTO ci_prompt (name, content, version, status, is_default, prompt_type, created_at, updated_at)
+SELECT '默认文档生成提示词',
+       $module_doc_prompt_md$
+# 模块说明文档生成提示词
+
+### 一、文档定位
+- **目标读者**：产品经理、开发工程师、集成测试工程师
+- **内容侧重**：业务逻辑描述、边界情况和异常处理
+
+### 二、信息
+- **业务名称**：{公共模块名称}
+- **module_hierarchy.json 内容**:
+{module_hierarchy.json}
+- **java 内容**:
+{java.code}
+
+### 三、文档结构与内容规范
+根据读取到的所有代码文件，提炼业务逻辑，转换为业务语言描述。
+
+1. **概述**
+   - 公共模块名称：【从配置中读取的模块名】
+   - 包含子模块：【列出所有子模块名称】
+   - 业务背景：简述业务问题
+   - 业务目标：期望效果
+   - 功能描述：核心能力（2-3 句话）
+
+2. **涉及类清单**
+   | 序号 | 子模块 | 类路径 | 功能说明 |
+   | --- | --- | --- | --- |
+   | 1 | 因子验证 | com.peig.prep.xxx.VerifyController | xxx |
+   | 2 | 因子配置 | com.peig.prep.xxx.ConfigController | xxx |
+
+3. **输入输出**
+   - 输入：列出所有输入数据源，说明关键字段含义及业务含义
+   - 输出接口 URL：列出所有 HTTP 接口的 URL 地址，格式如 `http://host:port/api/...`
+   - 输出：列出所有输出数据，说明字段维度
+
+4. **核心业务流程图**
+   - 使用 Mermaid 语法绘制流程图
+   - 按业务阶段划分，突出业务动作和判断逻辑
+   - 清晰展示条件分支和循环逻辑
+   - 展示各子模块之间的协作关系
+
+5. **核心业务逻辑**
+   使用中文描述，满足以下要求：
+   - 字段中文命名；首次出现时标注字段含义
+   - 禁止出现代码片段、类名、方法名（可用"处理模块"等抽象描述替代）
+
+6. **调用链路说明**
+   | 调用类型 | 目标服务/系统 | 调用地址/接口 | 说明 |
+   | --- | --- | --- | --- |
+   | HTTP | xxx-service | /api/xxx | 获取 xxx 数据 |
+   | Feign | xxx-service | XxxApi | 调用 xxx 接口 |
+   | RocketMQ | - | topic: xxx | 发送 xxx 消息 |
+   | Redis | - | key: xxx:* | 缓存 xxx 数据 |
+   | MySQL | - | table: xxx | 查询 xxx 数据 |
+
+### 四、格式要求
+- 使用 Markdown 格式编写
+- 标题层级清晰（H1-H3）
+- 表格用于结构化展示
+- 流程图使用 Mermaid 语法
+
+### 五、示例展示
+
+#### 正确示例
+
+```markdown
+## 订单处理模块
+### 业务背景
+随着用户量增长，原有订单处理机制已无法满足高并发场景需求，需要引入异步处理。
+
+### 核心业务逻辑
+1. 系统首先接收订单请求，解析订单信息
+2. 校验订单状态，确保订单处于待处理状态
+3. 将订单信息写入消息队列，由消费模块异步处理
+```
+
+#### 错误示例
+
+```markdown
+## 订单处理模块
+### 业务背景
+...（业务问题描述）
+### 核心业务逻辑
+...（错误：出现了代码注释）
+orderService.process(order);
+...（错误：直接使用类名）
+SceneMonitorServiceImpl.doSomething();
+```
+
+### 六、输出要求
+- 仅输出 Markdown 正文，不要输出任何解释性文字
+- 不输出代码块（除非 Mermaid 流程图）
+- 不要臆造未在源码中出现的数据表名、接口路径、配置项
+- 章节标题严格使用中文数字（一、二、三、...）
+- 如果某章节没有相关信息，输出"暂无相关信息"占位，不要省略章节
+$module_doc_prompt_md$,
+       1,
+       1,
+       1,
+       'DOCUMENT_GENERATION',
+       CURRENT_TIMESTAMP,
+       CURRENT_TIMESTAMP
+ WHERE NOT EXISTS (
+    SELECT 1 FROM ci_prompt
+     WHERE prompt_type = 'DOCUMENT_GENERATION'
+       AND name        = '默认文档生成提示词'
+       AND version     = 1
+);

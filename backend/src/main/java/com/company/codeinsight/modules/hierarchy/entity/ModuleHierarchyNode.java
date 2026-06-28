@@ -2,6 +2,7 @@ package com.company.codeinsight.modules.hierarchy.entity;
 
 import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableId;
+import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableName;
 import lombok.Data;
 
@@ -41,6 +42,14 @@ public class ModuleHierarchyNode {
 
     /** 入口类全限定名集合（仅 FUNCTION 级）JSON 数组字符串 */
     private String classPaths;
+
+    /**
+     * 该功能涉及的方法签名 JSON 数组字符串（仅 FUNCTION 级）
+     * 由 AI 在模块提取阶段输出，格式 ["methodName(ParamType1, ParamType2)"]（不含返回类型）
+     * 用于阶段 2 按方法签名粒度反查调用链喂 AI 文档生成
+     */
+    @TableField("method_signatures")
+    private String methodSignatures;
 
     private LocalDateTime createdAt;
 

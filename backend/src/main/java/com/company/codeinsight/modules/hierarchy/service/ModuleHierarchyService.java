@@ -29,4 +29,12 @@ public interface ModuleHierarchyService {
      * 从数据库加载该任务的模块层级 DTO
      */
     ModuleHierarchy loadByTaskId(Long taskId);
+
+    /**
+     * 用前端复核后提交的新层级整体替换落表（人工复核断点使用）
+     * <p>
+     * 行为：先校验 ID 前缀/唯一性/名称非空等结构约束，再 deleteByTaskId + 全量 insert 保证幂等。
+     * 不修改 AI 生成的入口归属（classPaths 由前端编辑后传入），其它 DTO 字段（taskId / systemId）由后端补齐。
+     */
+    ModuleHierarchy replaceHierarchy(Long taskId, ModuleHierarchy replacement);
 }

@@ -5,6 +5,7 @@ import Systems from '../pages/systems';
 import Prompts from '../pages/prompts';
 import Tasks from '../pages/tasks';
 import TaskDetail from '../pages/tasks/detail';
+import HierarchyReview from '../pages/tasks/hierarchy-review';
 import Drafts from '../pages/drafts';
 import Push from '../pages/push';
 import TokenAudit from '../pages/token-audit';
@@ -40,6 +41,10 @@ export const router = createHashRouter([
       {
         path: 'tasks', // 扫描分析任务列表
         element: <Tasks />,
+      },
+      {
+        path: 'tasks/hierarchy-review', // 模块层级调试专用页
+        element: <HierarchyReview />,
       },
       {
         path: 'tasks/:id', // 任务执行详情与流程监控

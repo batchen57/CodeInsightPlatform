@@ -1,25 +1,29 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Alert, Button, Card, Col, Descriptions, Progress, Row, Space, Steps, Statistic, Tag, Typography, message } from 'antd';
+import React, { useCallback, useEffect, useState } from 'react';
+import { Alert, Button, Card, Col, Descriptions, Modal, Progress, Row, Space, Steps, Statistic, Tag, Typography, message } from 'antd';
 import {
   ArrowLeftOutlined,
   CheckCircleOutlined,
   CloseCircleOutlined,
-  CodeOutlined,
   EditOutlined,
+  FileSearchOutlined,
   PlayCircleOutlined,
   ReloadOutlined,
+  SwapOutlined,
 } from '@ant-design/icons';
 import { useNavigate, useParams } from 'react-router-dom';
-import { getTask, retryTask, startTask, terminateTask } from '../../api/task';
+import { getTask, getTaskExecutionLog, retryTask, startTask, terminateTask } from '../../api/task';
 import { getSystem } from '../../api/system';
 import type { System, Task } from '../../types';
+
 
 const { Text, Title } = Typography;
 
 // 运行中的核心状态列表
-const runningStatuses = ['PENDING', 'PULLING_CODE', 'PARSING_CODE', 'SPLITTING_TASK', 'AI_ANALYZING', 'GENERATING_DOC', 'PUSHING'];
+// 包含 MODULE_HIERARCHY_REVIEW：处于人工调试断点时也要轮询状态，提交保存并继续后会跳到 GENERATING_DOC
+const runningStatuses = ['PENDING', 'PULLING_CODE', 'PARSING_CODE', 'SPLITTING_TASK', 'AI_ANALYZING', 'MODULE_HIERARCHY_REVIEW', 'GENERATING_DOC', 'PUSHING'];
 
 // 任务执行管道阶段步骤索引与展示元数据配置说明
+// 「模块层级复核」位于「AI 分析」与「生成文档」之间（step 5），是 MODULE_HIERARCHY_REVIEW 状态对应的可视化阶段
 const statusMeta: Record<string, { color: string; label: string; step: number }> = {
   DRAFT: { color: 'default', label: '草稿', step: -1 },
   PENDING: { color: 'blue', label: '排队中', step: 0 },
@@ -27,12 +31,14 @@ const statusMeta: Record<string, { color: string; label: string; step: number }>
   PARSING_CODE: { color: 'cyan', label: '解析代码', step: 2 },
   SPLITTING_TASK: { color: 'purple', label: '任务切片', step: 3 },
   AI_ANALYZING: { color: 'orange', label: 'AI 分析中', step: 4 },
-  GENERATING_DOC: { color: 'gold', label: '生成文档', step: 5 },
-  PENDING_REVIEW: { color: 'magenta', label: '待复核', step: 6 },
-  REVIEWING: { color: 'geekblue', label: '复核中', step: 6 },
-  CONFIRMED: { color: 'green', label: '已确认', step: 6 },
-  PUSHING: { color: 'purple', label: '推送中', step: 6 },
-  PUSHED: { color: 'green', label: '已推送', step: 6 },
+  MODULE_HIERARCHY: { color: 'gold', label: '模块层级提炼', step: 4 },
+  MODULE_HIERARCHY_REVIEW: { color: 'geekblue', label: '模块层级复核', step: 5 },
+  GENERATING_DOC: { color: 'gold', label: '生成文档', step: 6 },
+  PENDING_REVIEW: { color: 'magenta', label: '待复核', step: 7 },
+  REVIEWING: { color: 'geekblue', label: '复核中', step: 7 },
+  CONFIRMED: { color: 'green', label: '已确认', step: 7 },
+  PUSHING: { color: 'purple', label: '推送中', step: 7 },
+  PUSHED: { color: 'green', label: '已推送', step: 7 },
   FAILED: { color: 'red', label: '失败', step: -1 },
   CANCELLED: { color: 'default', label: '已取消', step: -1 },
 };
@@ -55,7 +61,48 @@ const TaskDetail: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
 
-  // 获取任务详情及关联的系统基本元数据
+  // 卡片执行日志内容
+  const [cardLogContent, setCardLogContent] = useState('');
+
+  const loadCardLog = useCallback(async () => {
+    if (!taskId) return;
+    try {
+      const content = await getTaskExecutionLog(taskId);
+      setCardLogContent(content || '');
+    } catch {
+      setCardLogContent('');
+    }
+  }, [taskId]);
+
+  // 任务加载时 + 运行中轮询时刷新卡片日志
+  useEffect(() => {
+    loadCardLog();
+  }, [loadCardLog]);
+
+  useEffect(() => {
+    if (!task || !runningStatuses.includes(task.status)) return;
+    const timer = window.setInterval(loadCardLog, 2500);
+    return () => window.clearInterval(timer);
+  }, [loadCardLog, task]);
+
+  // 执行日志弹窗
+  const [logModalOpen, setLogModalOpen] = useState(false);
+  const [execLogContent, setExecLogContent] = useState('');
+  const [logLoading, setLogLoading] = useState(false);
+
+  const openExecLog = async () => {
+    if (!taskId) return;
+    setLogModalOpen(true);
+    setLogLoading(true);
+    try {
+      const content = await getTaskExecutionLog(taskId);
+      setExecLogContent(content || '(暂无日志)');
+    } catch {
+      setExecLogContent('(加载失败)');
+    } finally {
+      setLogLoading(false);
+    }
+  };
   const fetchTaskDetails = useCallback(
     async (showLoading = true) => {
       if (!taskId) {
@@ -111,33 +158,6 @@ const TaskDetail: React.FC = () => {
   };
 
   const meta = task ? statusMeta[task.status] ?? { color: 'default', label: task.status, step: -1 } : null;
-
-  /**
-   * 依据当前任务状态及基本属性，动态拼接控制台输出的模拟状态日志
-   */
-  const logLines = useMemo(() => {
-    if (!task) {
-      return [];
-    }
-    const base = [
-      `[task:${task.id}] type=${task.type} status=${task.status}`,
-      `[system:${task.systemId}] ${system?.name ?? '正在加载系统元数据'}`,
-      `[progress] 已完成 ${task.progress}%`,
-    ];
-    if (task.status === 'DRAFT') {
-      return [...base, '[next] 启动任务后将进入执行队列'];
-    }
-    if (runningStatuses.includes(task.status)) {
-      return [...base, '[worker] 执行管道运行中，进度正在刷新'];
-    }
-    if (task.status === 'FAILED') {
-      return [...base, `[error] ${task.errorReason || '未知失败'}`];
-    }
-    if (['PENDING_REVIEW', 'REVIEWING', 'CONFIRMED', 'PUSHED'].includes(task.status)) {
-      return [...base, '[result] Markdown 草稿已生成，可进入复核或版本推送'];
-    }
-    return base;
-  }, [system?.name, task]);
 
   if (loading) {
     return <Card loading style={{ minHeight: 420 }} />;
@@ -208,6 +228,9 @@ const TaskDetail: React.FC = () => {
                 复核草稿
               </Button>
             )}
+            <Button icon={<FileSearchOutlined />} onClick={() => navigate(`/logs?taskId=${task.id}`)}>
+              查看日志
+            </Button>
           </Space>
         </div>
       </Card>
@@ -224,11 +247,28 @@ const TaskDetail: React.FC = () => {
             { title: '静态解析' },
             { title: '切片' },
             { title: 'AI 分析' },
+            { title: '模块层级复核' },
             { title: '生成文档' },
             { title: '复核' },
           ]}
         />
       </Card>
+
+      {/* 模块层级复核提示：统一跳转到「模块层级复核」专用页面处理 */}
+      {task.status === 'MODULE_HIERARCHY_REVIEW' && (
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message="模块层级需要人工复核"
+          description="AI 已完成模块层级提炼，需要您复核并确认模块与功能结构。请点击下方按钮前往「模块层级复核」页面集中处理。"
+          action={
+            <Button type="primary" icon={<SwapOutlined />} onClick={() => navigate('/tasks/hierarchy-review')}>
+              前往模块层级复核
+            </Button>
+          }
+        />
+      )}
 
       {/* 草稿就绪提示横幅 */}
       {['PENDING_REVIEW', 'REVIEWING', 'CONFIRMED'].includes(task.status) && (
@@ -246,7 +286,19 @@ const TaskDetail: React.FC = () => {
       )}
 
       {/* 任务失败错误提示框 */}
-      {task.errorReason && <Alert type="error" showIcon message="执行错误" description={task.errorReason} />}
+      {task.errorReason && (
+        <Alert
+          type="error"
+          showIcon
+          message="执行错误"
+          description={task.errorReason}
+          action={
+            <Button size="small" icon={<FileSearchOutlined />} onClick={() => navigate(`/logs?taskId=${task.id}`)}>
+              查看日志
+            </Button>
+          }
+        />
+      )}
 
       <Row gutter={[16, 16]}>
         {/* 左侧：任务静态指标表格 */}
@@ -271,10 +323,35 @@ const TaskDetail: React.FC = () => {
           </Card>
         </Col>
 
-        {/* 右侧：模拟终端控制台日志输出 */}
+        {/* 右侧：执行进程日志（全部内容可在卡片内滚动） */}
         <Col xs={24} xl={12}>
-          <Card title="执行日志" extra={<CodeOutlined />} style={{ height: '100%' }}>
-            <pre className="ci-terminal">{logLines.join('\n')}</pre>
+          <Card
+            title="执行日志"
+            extra={
+              <Button size="small" icon={<FileSearchOutlined />} onClick={openExecLog}>
+                查看完整日志
+              </Button>
+            }
+            style={{ height: '100%' }}
+            styles={{ body: { padding: '12px 16px' } }}
+          >
+            <pre
+              className="ci-terminal"
+              style={{
+                fontSize: 12,
+                margin: 0,
+                maxHeight: 380,
+                overflow: 'auto',
+                whiteSpace: 'pre-wrap',
+                wordBreak: 'break-all',
+                background: '#1e1e1e',
+                color: '#d4d4d4',
+                padding: 8,
+                borderRadius: 4,
+              }}
+            >
+              {cardLogContent || '暂无日志'}
+            </pre>
           </Card>
         </Col>
       </Row>
@@ -296,6 +373,36 @@ const TaskDetail: React.FC = () => {
           </Card>
         </div>
       )}
+
+      <Modal
+        title={`执行日志 — 任务 #${task.id}`}
+        open={logModalOpen}
+        onCancel={() => setLogModalOpen(false)}
+        width={800}
+        footer={<Button onClick={() => setLogModalOpen(false)}>关闭</Button>}
+        destroyOnClose
+      >
+        {logLoading ? (
+          <Card loading style={{ minHeight: 200 }} />
+        ) : (
+          <pre
+            style={{
+              fontSize: 12,
+              maxHeight: 480,
+              overflow: 'auto',
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-all',
+              margin: 0,
+              background: '#1e1e1e',
+              color: '#d4d4d4',
+              padding: 12,
+              borderRadius: 4,
+            }}
+          >
+            {execLogContent}
+          </pre>
+        )}
+      </Modal>
     </div>
   );
 };

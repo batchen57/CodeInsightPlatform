@@ -1,6 +1,7 @@
 package com.company.codeinsight.modules.callchain.entity;
 
 import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
 import lombok.Data;
@@ -38,7 +39,7 @@ public class MethodCall {
     private String className;
 
     /**
-     * 调用方所在的方法名称
+     * 调用方所在的方法名称（仅方法名，无参数/返回类型）
      */
     private String callerMethod;
 
@@ -48,7 +49,7 @@ public class MethodCall {
     private String dependencyName;
 
     /**
-     * 实际被调用的目标方法名称
+     * 实际被调用的目标方法名称（仅方法名，无参数/返回类型）
      */
     private String targetMethod;
 
@@ -61,6 +62,23 @@ public class MethodCall {
      * 调用所在源文件行号（1-indexed）
      */
     private Integer lineNumber;
+
+    /**
+     * 调用方方法完整签名（含类 + 方法 + 参数）
+     * 格式："className#methodName(ParamType1, ParamType2)"
+     * 例："com.demo.UserController#listUsers(Integer, Integer)"
+     * 用于阶段 2 按方法粒度反查调用链，喂 AI 文档生成
+     */
+    @TableField("caller_signature")
+    private String callerSignature;
+
+    /**
+     * 被调方方法完整签名（含类 + 方法 + 参数）
+     * 格式："className#methodName(ParamType1, ParamType2)"
+     * MVP 阶段仅 caller 端带完整签名，target 端等同 targetMethod（同名第一个匹配）
+     */
+    @TableField("target_signature")
+    private String targetSignature;
 
     /**
      * 记录创建时间

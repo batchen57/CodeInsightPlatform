@@ -264,6 +264,31 @@ public class EntryPointDiscoveryServiceTest {
     }
 
     @Test
+    public void testReadEntrySourceUsesMultiModulePath() throws Exception {
+        File root = Files.createTempDirectory("entry-multi").toFile();
+        root.deleteOnExit();
+        File source = new File(root, "accounting-service/src/main/java/net/demo/AccountsController.java");
+        source.getParentFile().mkdirs();
+        try (FileWriter w = new FileWriter(source)) {
+            w.write("package net.demo;\n@RestController\npublic class AccountsController {}\n");
+        }
+
+        ParsedClassInfo info = buildClass("AccountsController", "CONTROLLER", false, "RestController");
+        info.setPackageName("net.demo");
+        info.setSourceRelativePath("accounting-service/src/main/java/net/demo/AccountsController.java");
+        when(javaParserService.parseDirectory(any())).thenReturn(Collections.singletonList(info));
+        when(javaParserService.parseFile(any())).thenReturn(info);
+        when(methodCallService.listByTaskId(any())).thenReturn(Collections.emptyList());
+
+        List<EntryPoint> entries = service.discoverEntries(1L, root);
+        Assertions.assertEquals(1, entries.size());
+        Assertions.assertEquals("accounting-service/src/main/java/net/demo/AccountsController.java", entries.get(0).getFilePath());
+
+        String content = service.readEntrySource(root, entries.get(0), null);
+        Assertions.assertTrue(content.contains("AccountsController"));
+    }
+
+    @Test
     public void testCollectReachableSourceRespectsExclude() throws Exception {
         File root = Files.createTempDirectory("entry-test-excl").toFile();
         root.deleteOnExit();

@@ -97,6 +97,8 @@ public class DecompilePromptController {
 
     /**
      * 分页多条件检索提示词模板
+     *
+     * @param promptType 提示词用途过滤：MODULARIZE-模块提取 / DOCUMENT_GENERATION-文档生成；不传则查询全部
      */
     @Operation(summary = "提示词模板分页查询")
     @GetMapping
@@ -104,8 +106,9 @@ public class DecompilePromptController {
             @RequestParam(defaultValue = "1") int current,
             @RequestParam(defaultValue = "10") int size,
             @RequestParam(required = false) String name,
-            @RequestParam(required = false) Integer status) {
-        Page<DecompilePrompt> page = decompilePromptService.listPromptsPage(current, size, name, status);
+            @RequestParam(required = false) Integer status,
+            @RequestParam(required = false) String promptType) {
+        Page<DecompilePrompt> page = decompilePromptService.listPromptsPage(current, size, name, status, promptType);
         PageResult<DecompilePrompt> result = new PageResult<>(page.getTotal(), page.getSize(), page.getCurrent(), page.getRecords());
         return ApiResponse.success(result);
     }

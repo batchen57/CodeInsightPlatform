@@ -21,5 +21,9 @@ code-insight:
     api-key: ${LLM_API_KEY:}
     api-url: ${LLM_API_URL:https://api.minimax.io/v1}
     model-name: ${LLM_MODEL_NAME:MiniMax-M3}
+  token:
+    limit-enabled: ${TOKEN_LIMIT_ENABLED:true}
+    task-limit: ${TOKEN_TASK_LIMIT:100000}
+    system-monthly-limit: ${TOKEN_SYSTEM_MONTHLY_LIMIT:1000000}
   storage:
     local-path: ${STORAGE_LOCAL_PATH:./storage}
