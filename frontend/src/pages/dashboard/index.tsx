@@ -18,6 +18,7 @@ import type { TokenStats } from '../../api/token';
 import { listVersions } from '../../api/knowledge';
 import type { KnowledgeVersion } from '../../api/knowledge';
 import type { PageResult, System, Task } from '../../types';
+import './index.css';
 
 const { Text } = Typography;
 
@@ -70,13 +71,13 @@ const versionStatusLabel: Record<string, string> = {
 };
 
 const chartColors = {
-  primary: '#356AC3',
-  info: '#0E7490',
-  green: '#10B981',
-  gold: '#D89A2F',
-  red: '#C73B4D',
-  axis: '#64748B',
-  line: '#E2E8F0',
+  primary: '#2F5FAD',
+  info: '#0C7584',
+  green: '#16835F',
+  gold: '#B7791F',
+  red: '#B4233B',
+  axis: '#6B7687',
+  line: '#D8E2EE',
 };
 
 /**
@@ -148,19 +149,29 @@ const Dashboard: React.FC = () => {
   // ECharts 配置：Token 每日消耗趋势折线图参数对象
   const lineOption = {
     color: [chartColors.primary],
-    tooltip: { trigger: 'axis' },
+    tooltip: {
+      trigger: 'axis',
+      backgroundColor: 'rgba(255, 255, 255, 0.96)',
+      borderColor: '#D8E2EE',
+      textStyle: { color: '#172033' },
+      extraCssText: 'box-shadow: 0 10px 28px rgba(18, 34, 58, 0.10); border-radius: 8px;',
+    },
+    axisPointer: {
+      lineStyle: { color: chartColors.info, width: 1, type: 'dashed' },
+    },
     grid: { top: 28, right: 22, bottom: 30, left: 48 },
     xAxis: {
       type: 'category',
       boundaryGap: false,
       data: chartData?.dailyTrends?.map((item) => item.date) ?? [],
       axisLine: { lineStyle: { color: chartColors.line } },
+      axisTick: { lineStyle: { color: chartColors.line } },
       axisLabel: { color: chartColors.axis },
     },
     yAxis: {
       type: 'value',
       axisLabel: { color: chartColors.axis },
-      splitLine: { lineStyle: { color: '#EEF2F7' } },
+      splitLine: { lineStyle: { color: '#ECF2F7' } },
     },
     series: [
       {
@@ -168,9 +179,9 @@ const Dashboard: React.FC = () => {
         type: 'line',
         data: chartData?.dailyTrends?.map((item) => item.tokens) ?? [],
         smooth: true,
-        symbolSize: 7,
-        lineStyle: { width: 3 },
-        areaStyle: { color: 'rgba(53, 106, 195, 0.10)' },
+        symbolSize: 6,
+        lineStyle: { width: 2.5 },
+        areaStyle: { color: 'rgba(47, 95, 173, 0.08)' },
       },
     ],
   };
@@ -178,15 +189,30 @@ const Dashboard: React.FC = () => {
   // ECharts 配置：各型号大模型 Token 占比环形图参数对象
   const donutOption = {
     color: [chartColors.primary, chartColors.info, chartColors.green, chartColors.gold, chartColors.red],
-    tooltip: { trigger: 'item' },
+    title: {
+      text: 'MODEL',
+      subtext: 'TOKEN MIX',
+      left: 'center',
+      top: '36%',
+      textStyle: { color: chartColors.axis, fontSize: 12, fontWeight: 700 },
+      subtextStyle: { color: '#9AA7B8', fontSize: 10, fontWeight: 700 },
+      itemGap: 2,
+    },
+    tooltip: {
+      trigger: 'item',
+      backgroundColor: 'rgba(255, 255, 255, 0.96)',
+      borderColor: '#D8E2EE',
+      textStyle: { color: '#172033' },
+      extraCssText: 'box-shadow: 0 10px 28px rgba(18, 34, 58, 0.10); border-radius: 8px;',
+    },
     legend: { bottom: 0, icon: 'circle', textStyle: { color: chartColors.axis } },
     series: [
       {
         name: '模型 Token',
         type: 'pie',
-        radius: ['54%', '72%'],
+        radius: ['56%', '72%'],
         center: ['50%', '43%'],
-        itemStyle: { borderColor: '#fff', borderWidth: 3 },
+        itemStyle: { borderColor: '#fff', borderWidth: 4 },
         label: { show: false },
         data: chartData?.modelRatio ?? [],
       },
@@ -233,6 +259,8 @@ const Dashboard: React.FC = () => {
   // KPI 顶部卡片元配置数组
   const kpis = [
     {
+      channel: 'CH-01',
+      signal: 'SYSTEMS',
       label: '已接入系统',
       value: stats.systems,
       meta: '已配置的业务系统',
@@ -243,6 +271,8 @@ const Dashboard: React.FC = () => {
       sparkData: sparkSeries(1, Math.max(stats.systems, 4)),
     },
     {
+      channel: 'CH-02',
+      signal: stats.activeTasks > 0 ? 'ACTIVE' : 'READY',
       label: '运行中任务',
       value: stats.activeTasks,
       meta: '正在拉取 / 解析 / 生成',
@@ -253,6 +283,8 @@ const Dashboard: React.FC = () => {
       sparkData: sparkSeries(2, Math.max(stats.activeTasks, 3)),
     },
     {
+      channel: 'CH-03',
+      signal: stats.pendingReviews > 0 ? 'GATED' : 'CLEAR',
       label: '复核队列',
       value: stats.pendingReviews,
       meta: '等待负责人复核的草稿',
@@ -263,6 +295,8 @@ const Dashboard: React.FC = () => {
       sparkData: sparkSeries(3, Math.max(stats.pendingReviews, 2)),
     },
     {
+      channel: 'CH-04',
+      signal: 'AUDIT',
       label: 'Token 用量',
       value: stats.todayTokens.toLocaleString(),
       meta: `预计 $${Number(stats.cost || 0).toFixed(4)}`,
@@ -274,26 +308,61 @@ const Dashboard: React.FC = () => {
     },
   ];
 
+  const panelTitle = (kicker: string, title: string, icon?: React.ReactNode) => (
+    <span className="ci-panel-title">
+      {icon && <span className="ci-panel-title-icon">{icon}</span>}
+      <span className="ci-panel-title-copy">
+        <span className="ci-panel-title-kicker">{kicker}</span>
+        <span className="ci-card-title-gradient">{title}</span>
+      </span>
+    </span>
+  );
+
   return (
     <div className="ci-page ci-dashboard-page">
       {/* 头部介绍横幅 banner 区域 */}
       <section className="ci-hero-panel">
         <div className="ci-hero-content">
           <Space size={8} wrap>
-            <Tag className="ci-hero-tag">MVP 流程</Tag>
-            <Tag className="ci-hero-tag">人工复核</Tag>
+            <Tag className="ci-hero-tag">知识生成链路</Tag>
+            <Tag className="ci-hero-tag">人工复核闸口</Tag>
             <Tag className="ci-hero-tag">Token 审计</Tag>
           </Space>
-          <h2>把代码库转化为可复核、可追溯的代码知识资产</h2>
+          <h2>代码知识 Lab 工作台</h2>
           <p>
-            代码洞察工作台覆盖系统接入、代码库扫描、AI 自动归类、Markdown 草稿复核、版本发布、推送 Git 仓库、Token 计量和操作审计等全流程。
+            保持代码库扫描、AI 归纳、草稿复核、版本推送与成本审计在同一个可追溯的运行视图中。
           </p>
+          <div className="ci-lab-console-strip">
+            <span><i /> 运行在线</span>
+            <span>链路编号：CI-LAB-08</span>
+            <span>人工闸口：已启用</span>
+          </div>
+          <div className="ci-lab-signal-row" aria-label="运行链路">
+            <span><b>01</b> 代码库扫描</span>
+            <i />
+            <span><b>02</b> AI 草稿</span>
+            <i />
+            <span><b>03</b> 人工复核</span>
+            <i />
+            <span><b>04</b> 审计留痕</span>
+          </div>
         </div>
         
         {/* 快捷菜单入口操作板 */}
         <div className="ci-hero-actions-panel">
           <div className="ci-hero-actions-title">
-            <ThunderboltOutlined /> 快捷操作
+            <span><ThunderboltOutlined /> Lab Control</span>
+            <Tag className="ci-lab-live-tag">ONLINE</Tag>
+          </div>
+          <div className="ci-lab-control-readout">
+            <span>
+              <em>Pipeline</em>
+              <strong>{stats.activeTasks > 0 ? 'ACTIVE' : 'READY'}</strong>
+            </span>
+            <span>
+              <em>Review</em>
+              <strong>{stats.pendingReviews}</strong>
+            </span>
           </div>
           <Link to="/tasks" className="ci-hero-action-btn">
             <span>新建反编译分析任务</span>
@@ -314,6 +383,11 @@ const Dashboard: React.FC = () => {
       <div className="ci-kpi-grid">
         {kpis.map((item) => (
           <div className="ci-kpi-card" style={{ '--accent': item.accent } as React.CSSProperties} key={item.label}>
+            <div className="ci-kpi-instrument-row">
+              <span>{item.channel}</span>
+              <i />
+              <span>{item.signal}</span>
+            </div>
             <div className="ci-kpi-card-header">
               <span className="ci-kpi-label">{item.label}</span>
               <span className="ci-kpi-icon-wrapper">{item.icon}</span>
@@ -345,7 +419,7 @@ const Dashboard: React.FC = () => {
         {/* 左侧：Token 趋势 与 最近任务 */}
         <div className="ci-dashboard-main">
           <Card 
-            title={<span className="ci-card-title-gradient">Token 使用趋势</span>} 
+            title={panelTitle('Telemetry', 'Token 使用趋势')} 
             extra={<Link to="/audit" className="ci-card-extra-link">审计详情 <RightOutlined style={{ fontSize: 10 }} /></Link>}
             className="ci-dashboard-card"
           >
@@ -353,7 +427,7 @@ const Dashboard: React.FC = () => {
           </Card>
 
           <Card
-            title={<Space><ThunderboltOutlined className="ci-icon-primary" />最近反编译任务</Space>}
+            title={panelTitle('Task Stream', '最近反编译任务', <ThunderboltOutlined />)}
             extra={<Link to="/tasks" className="ci-card-extra-link">查看全部 <RightOutlined style={{ fontSize: 10 }} /></Link>}
             className="ci-dashboard-card"
           >
@@ -412,14 +486,14 @@ const Dashboard: React.FC = () => {
         {/* 右侧：模型占比 与 最近推送 */}
         <div className="ci-dashboard-side">
           <Card 
-            title={<span className="ci-card-title-gradient">模型使用占比</span>}
+            title={panelTitle('Distribution', '模型使用占比')}
             className="ci-dashboard-card"
           >
             {chartData ? <ReactECharts option={donutOption} style={{ height: 300 }} /> : <Empty />}
           </Card>
 
           <Card
-            title={<Space><CloudUploadOutlined className="ci-icon-success" />最近知识推送</Space>}
+            title={panelTitle('Release Bus', '最近知识推送', <CloudUploadOutlined />)}
             extra={<Link to="/push" className="ci-card-extra-link">推送中心 <RightOutlined style={{ fontSize: 10 }} /></Link>}
             className="ci-dashboard-card"
           >

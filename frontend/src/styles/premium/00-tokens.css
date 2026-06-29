@@ -20,6 +20,23 @@
   --ci-surface: #FFFFFF;
   --ci-surface-2: #F8FAFC;
 
+  /* ============ Lab 信息科技面板 ============ */
+  --ci-lab-ink: #172033;
+  --ci-lab-text: #344255;
+  --ci-lab-muted: #667487;
+  --ci-lab-subtle: #94A3B6;
+  --ci-lab-blue: #2F5FAD;
+  --ci-lab-cyan: #0C7584;
+  --ci-lab-green: #16835F;
+  --ci-lab-gold: #B7791F;
+  --ci-lab-line: #D6E0EB;
+  --ci-lab-line-soft: #E7EEF6;
+  --ci-lab-line-strong: #B9C8D9;
+  --ci-lab-surface: rgba(255, 255, 255, 0.96);
+  --ci-lab-surface-soft: rgba(247, 250, 253, 0.92);
+  --ci-lab-shadow: 0 1px 2px rgba(20, 38, 61, 0.05), 0 16px 38px rgba(20, 38, 61, 0.08);
+  --ci-lab-shadow-hover: 0 2px 8px rgba(20, 38, 61, 0.06), 0 20px 46px rgba(20, 38, 61, 0.10);
+
   /* ============ 辅助色(状态点缀) ============ */
   --ci-accent-purple: #7C5CD8;
   --ci-accent-purple-bg: #F3EEFF;

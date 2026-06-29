@@ -8,6 +8,23 @@ import type { System } from '../../types';
 
 const { Text } = Typography;
 
+const chartColors = {
+  primary: '#2F5FAD',
+  info: '#0C7584',
+  green: '#16835F',
+  gold: '#B7791F',
+  red: '#B4233B',
+  axis: '#6B7687',
+  line: '#D8E2EE',
+};
+
+const chartTooltip = {
+  backgroundColor: 'rgba(255, 255, 255, 0.96)',
+  borderColor: chartColors.line,
+  textStyle: { color: '#172033' },
+  extraCssText: 'box-shadow: 0 10px 28px rgba(18, 34, 58, 0.10); border-radius: 8px;',
+};
+
 const TokenAudit: React.FC = () => {
   const [stats, setStats] = useState<TokenStats | null>(null);
   const [audits, setAudits] = useState<TokenUsageAudit[]>([]);
@@ -47,19 +64,24 @@ const TokenAudit: React.FC = () => {
   }, [current, refreshKey, selectedModel, selectedSystemId, selectedType, size]);
 
   const lineOption = {
-    color: ['#2563eb'],
-    tooltip: { trigger: 'axis' },
+    color: [chartColors.primary],
+    tooltip: { trigger: 'axis', ...chartTooltip },
+    axisPointer: {
+      lineStyle: { color: chartColors.info, width: 1, type: 'dashed' },
+    },
     grid: { top: 28, right: 22, bottom: 30, left: 52 },
     xAxis: {
       type: 'category',
       boundaryGap: false,
       data: stats?.dailyTrends?.map((item) => item.date) ?? [],
-      axisLabel: { color: '#667085' },
+      axisLine: { lineStyle: { color: chartColors.line } },
+      axisTick: { lineStyle: { color: chartColors.line } },
+      axisLabel: { color: chartColors.axis },
     },
     yAxis: {
       type: 'value',
-      axisLabel: { color: '#667085' },
-      splitLine: { lineStyle: { color: '#edf2f7' } },
+      axisLabel: { color: chartColors.axis },
+      splitLine: { lineStyle: { color: '#ECF2F7' } },
     },
     series: [
       {
@@ -67,34 +89,63 @@ const TokenAudit: React.FC = () => {
         type: 'line',
         data: stats?.dailyTrends?.map((item) => item.tokens) ?? [],
         smooth: true,
-        lineStyle: { width: 3 },
-        areaStyle: { color: 'rgba(37, 99, 235, 0.10)' },
+        symbolSize: 6,
+        lineStyle: { width: 2.5 },
+        areaStyle: { color: 'rgba(47, 95, 173, 0.08)' },
       },
     ],
   };
 
   const ranking = [...(stats?.systemRanking ?? [])].reverse();
   const barOption = {
-    color: ['#0891b2'],
-    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+    color: [chartColors.info],
+    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, ...chartTooltip },
     grid: { top: 22, right: 22, bottom: 30, left: 82 },
-    xAxis: { type: 'value', axisLabel: { color: '#667085' } },
-    yAxis: { type: 'category', data: ranking.map((item) => item.name), axisLabel: { color: '#667085' } },
-    series: [{ name: 'Token', type: 'bar', data: ranking.map((item) => item.tokens), barWidth: 14 }],
+    xAxis: {
+      type: 'value',
+      axisLine: { lineStyle: { color: chartColors.line } },
+      splitLine: { lineStyle: { color: '#ECF2F7' } },
+      axisLabel: { color: chartColors.axis },
+    },
+    yAxis: {
+      type: 'category',
+      data: ranking.map((item) => item.name),
+      axisLine: { lineStyle: { color: chartColors.line } },
+      axisTick: { show: false },
+      axisLabel: { color: chartColors.axis },
+    },
+    series: [
+      {
+        name: 'Token',
+        type: 'bar',
+        data: ranking.map((item) => item.tokens),
+        barWidth: 14,
+        itemStyle: { borderRadius: [0, 4, 4, 0] },
+      },
+    ],
   };
 
   const donutOption = {
-    color: ['#2563eb', '#0891b2', '#16a34a', '#d97706', '#dc2626'],
-    tooltip: { trigger: 'item' },
-    legend: { bottom: 0, icon: 'circle', textStyle: { color: '#667085' } },
+    color: [chartColors.primary, chartColors.info, chartColors.green, chartColors.gold, chartColors.red],
+    title: {
+      text: '模型',
+      subtext: 'Token 占比',
+      left: 'center',
+      top: '36%',
+      textStyle: { color: chartColors.axis, fontSize: 12, fontWeight: 700 },
+      subtextStyle: { color: '#9AA7B8', fontSize: 10, fontWeight: 700 },
+      itemGap: 2,
+    },
+    tooltip: { trigger: 'item', ...chartTooltip },
+    legend: { bottom: 0, icon: 'circle', textStyle: { color: chartColors.axis } },
     series: [
       {
         name: '模型占比',
         type: 'pie',
-        radius: ['54%', '72%'],
-        center: ['50%', '42%'],
+        radius: ['56%', '72%'],
+        center: ['50%', '43%'],
         label: { show: false },
-        itemStyle: { borderColor: '#fff', borderWidth: 3 },
+        itemStyle: { borderColor: '#fff', borderWidth: 4 },
         data: stats?.modelRatio ?? [],
       },
     ],

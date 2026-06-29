@@ -825,3 +825,527 @@
   padding: 0 4px;
   border-radius: var(--ci-radius-pill) !important;
 }
+
+/* ============================================
+   Lab Workspace — 全局业务页信息科技质感
+   与 Dashboard 保持同一套浅色 Lab 控制台语言
+   ============================================ */
+.ci-content {
+  position: relative;
+  isolation: isolate;
+  overflow-x: hidden;
+  background:
+    linear-gradient(180deg, rgba(248, 251, 255, 0.86), rgba(241, 247, 251, 0.92)),
+    repeating-linear-gradient(90deg, rgba(47, 95, 173, 0.045) 0 1px, transparent 1px 72px),
+    repeating-linear-gradient(0deg, rgba(12, 117, 132, 0.032) 0 1px, transparent 1px 72px) !important;
+}
+
+.ci-content::before,
+.ci-content::after {
+  position: absolute;
+  pointer-events: none;
+  content: "";
+}
+
+.ci-content::before {
+  inset: 0;
+  z-index: 0;
+  background:
+    linear-gradient(90deg, transparent 0 18px, rgba(47, 95, 173, 0.052) 18px 19px, transparent 19px 42px),
+    linear-gradient(0deg, transparent 0 18px, rgba(12, 117, 132, 0.038) 18px 19px, transparent 19px 42px),
+    linear-gradient(135deg, transparent 0 48%, rgba(47, 95, 173, 0.032) 48% 48.4%, transparent 48.4% 100%);
+  background-size: 168px 96px, 168px 96px, 360px 360px;
+  opacity: 0.32;
+}
+
+.ci-content::after {
+  top: 0;
+  right: -12%;
+  bottom: 0;
+  left: -12%;
+  z-index: 0;
+  background:
+    linear-gradient(90deg, transparent 0 38%, rgba(47, 95, 173, 0.10) 46%, rgba(12, 117, 132, 0.10) 50%, transparent 58%) 0 118px / 100% 1px no-repeat,
+    linear-gradient(90deg, transparent 0 42%, rgba(22, 131, 95, 0.09) 50%, transparent 62%) 0 392px / 100% 1px no-repeat;
+  opacity: 0.38;
+  animation: ci-lab-trace-shift 18s cubic-bezier(0.4, 0, 0.2, 1) infinite alternate;
+}
+
+.ci-content > * {
+  position: relative;
+  z-index: 1;
+}
+
+.ci-content > .ci-page,
+.ci-content > .ci-workspace {
+  width: 100% !important;
+  max-width: none !important;
+  margin-right: 0 !important;
+  margin-left: 0 !important;
+}
+
+.ci-page,
+.ci-workspace {
+  min-width: 0;
+}
+
+.ci-workspace {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.ci-header {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(248, 251, 255, 0.90)),
+    repeating-linear-gradient(90deg, rgba(47, 95, 173, 0.045) 0 1px, transparent 1px 34px) !important;
+  border-bottom-color: var(--ci-lab-line) !important;
+}
+
+.ci-pipeline {
+  background: rgba(255, 255, 255, 0.72) !important;
+  border-color: var(--ci-lab-line-soft) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
+}
+
+.ci-page-heading,
+.ci-page > .ant-card,
+.ci-workspace > .ant-card,
+.ci-workspace-card,
+.ci-table-card,
+.ci-filter-card,
+.ci-systems-table-card,
+.ci-review-panel,
+.ci-prompt-library,
+.ci-prompt-lab,
+.ci-push-console,
+.ci-token-console,
+.ci-dashboard-card,
+.ci-kpi-card,
+.ant-card {
+  border-color: var(--ci-lab-line) !important;
+  border-radius: var(--ci-radius-lg) !important;
+  box-shadow: var(--ci-lab-shadow) !important;
+}
+
+.ant-card {
+  position: relative;
+  overflow: hidden;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 251, 254, 0.96)) !important;
+}
+
+.ant-card::before {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  height: 2px;
+  background: linear-gradient(90deg, var(--ci-lab-blue), rgba(12, 117, 132, 0.72), transparent);
+  opacity: 0.68;
+  content: "";
+}
+
+.ant-card .ant-card {
+  box-shadow: 0 1px 2px rgba(20, 38, 61, 0.04), 0 8px 22px rgba(20, 38, 61, 0.045) !important;
+}
+
+.ant-card .ant-card::before,
+.ant-modal .ant-card::before,
+.ant-drawer .ant-card::before {
+  height: 1px;
+  background: linear-gradient(90deg, rgba(47, 95, 173, 0.26), transparent);
+  opacity: 0.36;
+}
+
+.ant-card:hover,
+.ci-page > .ant-card:hover,
+.ci-workspace-card:hover,
+.ci-table-card:hover,
+.ci-filter-card:hover,
+.ci-review-panel:hover,
+.ci-prompt-library:hover,
+.ci-prompt-lab:hover,
+.ci-push-console:hover,
+.ci-token-console:hover {
+  border-color: var(--ci-lab-line-strong) !important;
+  box-shadow: var(--ci-lab-shadow-hover) !important;
+}
+
+.ant-card .ant-card-head {
+  min-height: 54px !important;
+  background:
+    linear-gradient(180deg, rgba(248, 251, 255, 0.98), rgba(243, 248, 252, 0.98)),
+    repeating-linear-gradient(90deg, rgba(47, 95, 173, 0.05) 0 1px, transparent 1px 22px) !important;
+  border-bottom-color: var(--ci-lab-line-soft) !important;
+}
+
+.ant-card .ant-card-head-title {
+  color: var(--ci-lab-ink) !important;
+  font-weight: 760 !important;
+  letter-spacing: 0 !important;
+}
+
+.ci-card-title-icon,
+.ci-icon-primary,
+.ci-icon-success,
+.ant-card-head-title .anticon {
+  color: var(--ci-lab-cyan) !important;
+}
+
+.ci-filter-card {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(248, 251, 254, 0.92)),
+    repeating-linear-gradient(90deg, rgba(47, 95, 173, 0.04) 0 1px, transparent 1px 24px) !important;
+}
+
+.ci-filter-card .ant-card-body {
+  padding: 14px 16px !important;
+}
+
+.ci-filter-card-premium .ci-filter-section-label,
+.ci-panel-title-kicker {
+  color: var(--ci-lab-subtle) !important;
+  font-family: var(--ci-font-mono);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0;
+}
+
+.ci-filter-card-premium .ci-filter-section-label .anticon {
+  color: var(--ci-lab-cyan) !important;
+}
+
+.ant-table-wrapper {
+  border: 1px solid var(--ci-lab-line) !important;
+  border-radius: var(--ci-radius-lg) !important;
+  box-shadow: var(--ci-lab-shadow) !important;
+  background: var(--ci-lab-surface) !important;
+}
+
+.ant-card .ant-table-wrapper {
+  border: 1px solid var(--ci-lab-line-soft) !important;
+  border-radius: var(--ci-radius-md) !important;
+  box-shadow: none !important;
+}
+
+.ant-table-thead > tr > th {
+  color: var(--ci-lab-muted) !important;
+  background:
+    linear-gradient(180deg, rgba(248, 251, 255, 0.98), rgba(243, 248, 252, 0.98)),
+    repeating-linear-gradient(90deg, rgba(47, 95, 173, 0.045) 0 1px, transparent 1px 22px) !important;
+  border-bottom-color: var(--ci-lab-line-soft) !important;
+  font-weight: 700 !important;
+  letter-spacing: 0 !important;
+}
+
+.ant-table-tbody > tr > td {
+  color: var(--ci-lab-text);
+  border-bottom-color: var(--ci-lab-line-soft) !important;
+}
+
+.ant-table-tbody > tr:hover > td,
+.ant-table-tbody > tr.ant-table-row-hover > td {
+  background: rgba(247, 250, 252, 0.88) !important;
+}
+
+.ci-stat-card,
+.ci-token-page .ci-stat-card,
+.ci-task-detail-page .ci-stat-card {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 251, 254, 0.94)),
+    repeating-linear-gradient(90deg, rgba(47, 95, 173, 0.05) 0 1px, transparent 1px 22px) !important;
+}
+
+.ci-stat-card .ant-statistic-title {
+  color: var(--ci-lab-muted) !important;
+  font-size: 12px !important;
+  font-weight: 700 !important;
+}
+
+.ci-stat-card .ant-statistic-content {
+  color: var(--ci-lab-ink) !important;
+  font-family: var(--ci-font-mono);
+  font-weight: 800 !important;
+  letter-spacing: 0 !important;
+}
+
+.ci-stat-card .ant-statistic-content-prefix {
+  color: var(--ci-lab-cyan) !important;
+}
+
+.ci-guardrail-alert,
+.ant-alert {
+  border: 1px solid var(--ci-lab-line) !important;
+  border-radius: var(--ci-radius-lg) !important;
+  box-shadow: var(--ci-lab-shadow) !important;
+}
+
+.ci-guardrail-alert {
+  background:
+    linear-gradient(180deg, rgba(244, 249, 255, 0.98), rgba(238, 247, 249, 0.94)),
+    repeating-linear-gradient(90deg, rgba(47, 95, 173, 0.05) 0 1px, transparent 1px 22px) !important;
+}
+
+.ant-modal-content,
+.ant-drawer-content {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 251, 254, 0.96)) !important;
+  border: 1px solid var(--ci-lab-line) !important;
+  box-shadow: 0 28px 80px rgba(18, 34, 58, 0.16) !important;
+}
+
+.ant-modal-header,
+.ant-drawer-header {
+  background:
+    linear-gradient(180deg, rgba(248, 251, 255, 0.98), rgba(243, 248, 252, 0.98)),
+    repeating-linear-gradient(90deg, rgba(47, 95, 173, 0.045) 0 1px, transparent 1px 22px) !important;
+  border-bottom-color: var(--ci-lab-line-soft) !important;
+}
+
+.ant-modal-title,
+.ant-drawer-title {
+  color: var(--ci-lab-ink) !important;
+  font-weight: 760 !important;
+}
+
+.ant-descriptions-bordered .ant-descriptions-view {
+  border-color: var(--ci-lab-line) !important;
+}
+
+.ant-descriptions-bordered .ant-descriptions-item-label {
+  color: var(--ci-lab-muted) !important;
+  background:
+    linear-gradient(180deg, rgba(248, 251, 255, 0.98), rgba(243, 248, 252, 0.98)) !important;
+  border-color: var(--ci-lab-line-soft) !important;
+}
+
+.ant-descriptions-bordered .ant-descriptions-item-content {
+  color: var(--ci-lab-text) !important;
+  border-color: var(--ci-lab-line-soft) !important;
+}
+
+.ant-tabs-nav {
+  background:
+    linear-gradient(180deg, rgba(248, 251, 255, 0.98), rgba(243, 248, 252, 0.98)) !important;
+  border: 1px solid var(--ci-lab-line-soft);
+}
+
+.ant-tabs-tab-active {
+  border-color: var(--ci-lab-line) !important;
+}
+
+.ci-detail-header {
+  min-width: 0;
+}
+
+.ci-inline-form {
+  row-gap: 10px;
+}
+
+@keyframes ci-lab-trace-shift {
+  0% {
+    transform: translateX(-5%);
+  }
+
+  100% {
+    transform: translateX(5%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ci-content::after {
+    animation: none;
+  }
+}
+
+/* ============================================
+   Lab Quality Pass — 更明确的企业实验室质感
+   目标：刷新后能明显感知骨架、面板和数据表的品质提升
+   ============================================ */
+.ci-sider {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(246, 250, 253, 0.96)),
+    repeating-linear-gradient(0deg, rgba(47, 95, 173, 0.038) 0 1px, transparent 1px 34px) !important;
+  border-right: 1px solid var(--ci-lab-line-strong) !important;
+  box-shadow: 1px 0 0 rgba(255, 255, 255, 0.82), 10px 0 34px rgba(20, 38, 61, 0.055) !important;
+}
+
+.ci-sider-label {
+  color: var(--ci-lab-subtle) !important;
+  font-family: var(--ci-font-mono);
+  letter-spacing: 0.08em !important;
+}
+
+.ci-menu .ant-menu-item {
+  border: 1px solid transparent;
+}
+
+.ci-menu .ant-menu-item-selected {
+  background:
+    linear-gradient(180deg, rgba(238, 245, 255, 0.92), rgba(247, 251, 255, 0.92)),
+    repeating-linear-gradient(90deg, rgba(47, 95, 173, 0.055) 0 1px, transparent 1px 18px) !important;
+  border-color: rgba(47, 95, 173, 0.16);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.78), 0 8px 20px rgba(47, 95, 173, 0.08) !important;
+}
+
+.ci-menu .ant-menu-item-selected::after {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 6px;
+  height: 6px;
+  background: var(--ci-lab-cyan);
+  border-radius: 50%;
+  box-shadow: 0 0 0 3px rgba(12, 117, 132, 0.10);
+  content: "";
+}
+
+.ci-header {
+  border-bottom-color: var(--ci-lab-line-strong) !important;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.8), 0 10px 26px rgba(20, 38, 61, 0.045) !important;
+}
+
+.ci-header::before {
+  position: absolute;
+  right: 24px;
+  bottom: -1px;
+  left: 24px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(47, 95, 173, 0.36), rgba(12, 117, 132, 0.26), transparent);
+  content: "";
+}
+
+.ci-header-context-title {
+  color: var(--ci-lab-ink) !important;
+  font-weight: 760 !important;
+}
+
+.ci-header-context-desc {
+  color: var(--ci-lab-muted) !important;
+}
+
+.ci-content {
+  background:
+    linear-gradient(180deg, rgba(249, 252, 255, 0.92), rgba(240, 247, 251, 0.96)),
+    repeating-linear-gradient(90deg, rgba(47, 95, 173, 0.06) 0 1px, transparent 1px 72px),
+    repeating-linear-gradient(0deg, rgba(12, 117, 132, 0.045) 0 1px, transparent 1px 72px) !important;
+}
+
+.ci-content::before {
+  opacity: 0.46;
+}
+
+.ci-content::after {
+  opacity: 0.52;
+}
+
+.ci-page > .ant-card:not(.ci-stat-card):not(.ci-kpi-card)::after,
+.ci-workspace > .ant-card::after,
+.ci-workspace-card::after,
+.ci-table-card::after,
+.ci-filter-card::after,
+.ci-systems-table-card::after,
+.ci-prompt-library::after,
+.ci-prompt-lab::after,
+.ci-push-console::after,
+.ci-token-console::after,
+.ci-dashboard-card::after {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 18px;
+  height: 18px;
+  border-top: 1px solid rgba(12, 117, 132, 0.28);
+  border-right: 1px solid rgba(12, 117, 132, 0.28);
+  content: "";
+  pointer-events: none;
+}
+
+.ant-card .ant-card-head-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ant-card .ant-card-head-title::before {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 auto;
+  background: var(--ci-lab-cyan);
+  border-radius: 50%;
+  box-shadow: 0 0 0 3px rgba(12, 117, 132, 0.10);
+  content: "";
+}
+
+.ant-card .ant-card .ant-card-head-title::before,
+.ci-dashboard-page .ant-card-head-title::before {
+  display: none;
+}
+
+.ant-table-wrapper {
+  position: relative;
+}
+
+.ant-table-wrapper::before {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  z-index: 2;
+  height: 2px;
+  background: linear-gradient(90deg, var(--ci-lab-blue), rgba(12, 117, 132, 0.58), transparent);
+  opacity: 0.74;
+  content: "";
+}
+
+.ant-table-tbody > tr > td:first-child {
+  position: relative;
+}
+
+.ant-table-tbody > tr:hover > td:first-child::before {
+  position: absolute;
+  top: 12px;
+  bottom: 12px;
+  left: 0;
+  width: 2px;
+  background: var(--ci-lab-cyan);
+  border-radius: 0 2px 2px 0;
+  content: "";
+}
+
+.ci-stat-card,
+.ci-token-page .ci-stat-card,
+.ci-task-detail-page .ci-stat-card {
+  position: relative;
+  min-height: 118px;
+  border-color: var(--ci-lab-line) !important;
+}
+
+.ci-stat-card::after {
+  position: absolute;
+  right: 16px;
+  bottom: 12px;
+  left: 16px;
+  height: 1px;
+  background: repeating-linear-gradient(90deg, rgba(102, 116, 135, 0.26) 0 6px, transparent 6px 12px);
+  content: "";
+}
+
+.ci-stat-card .ant-card-body {
+  display: flex;
+  min-height: 116px;
+  align-items: center;
+}
+
+.ci-stat-card .ant-statistic {
+  width: 100%;
+}
+
+.ci-filter-card .ant-form-item-label > label,
+.ci-inline-form .ant-form-item-label > label {
+  color: var(--ci-lab-muted) !important;
+  font-family: var(--ci-font-mono);
+  font-size: 11px !important;
+  font-weight: 800 !important;
+}
