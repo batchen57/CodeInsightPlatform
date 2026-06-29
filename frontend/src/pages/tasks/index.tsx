@@ -305,6 +305,29 @@ const Tasks: React.FC = () => {
     });
   }, [form, selectedSystemId]);
 
+  /** 后端 EntryPointConfig 的默认排除规则（与 Java 端 new EntryPointConfig() 保持一致） */
+  const DEFAULT_EXCLUDE_CLASSPATHS = ['**/*Test', '**/*Tests', '**/*TestCase'];
+
+  /** 返回带后端默认值的扫描配置 */
+  const buildScanConfigWithDefaults = (config: EntryScanConfig | Record<string, unknown> | undefined): EntryScanConfig => {
+    const base = (config || {}) as EntryScanConfig;
+    return {
+      ...base,
+      excludeClasspaths: Array.isArray(base.excludeClasspaths) && base.excludeClasspaths.length > 0
+        ? base.excludeClasspaths
+        : DEFAULT_EXCLUDE_CLASSPATHS,
+    };
+  };
+
+  /** 将后端返回的 entryScanConfig（JSON 字符串或对象）统一转为对象 */
+  const parseRepoEntryScanConfig = (repo: Repository | undefined) => {
+    if (!repo?.entryScanConfig) return buildScanConfigWithDefaults(undefined);
+    if (typeof repo.entryScanConfig === 'string') {
+      try { return buildScanConfigWithDefaults(JSON.parse(repo.entryScanConfig)); } catch { return buildScanConfigWithDefaults(undefined); }
+    }
+    return buildScanConfigWithDefaults(repo.entryScanConfig);
+  };
+
   // 选中仓库时，从仓库默认配置初始化策略步骤表单的 entryScanConfig
   useEffect(() => {
     if (!selectedRepositoryId) {
@@ -362,29 +385,6 @@ const Tasks: React.FC = () => {
   const closeReviewDrawer = () => {
     setReviewDrawerOpen(false);
     setReviewTaskId(null);
-  };
-
-  /** 后端 EntryPointConfig 的默认排除规则（与 Java 端 new EntryPointConfig() 保持一致） */
-  const DEFAULT_EXCLUDE_CLASSPATHS = ['**/*Test', '**/*Tests', '**/*TestCase'];
-
-  /** 返回带后端默认值的扫描配置 */
-  const buildScanConfigWithDefaults = (config: EntryScanConfig | Record<string, unknown> | undefined): EntryScanConfig => {
-    const base = (config || {}) as EntryScanConfig;
-    return {
-      ...base,
-      excludeClasspaths: Array.isArray(base.excludeClasspaths) && base.excludeClasspaths.length > 0
-        ? base.excludeClasspaths
-        : DEFAULT_EXCLUDE_CLASSPATHS,
-    };
-  };
-
-  /** 将后端返回的 entryScanConfig（JSON 字符串或对象）统一转为对象 */
-  const parseRepoEntryScanConfig = (repo: Repository | undefined) => {
-    if (!repo?.entryScanConfig) return buildScanConfigWithDefaults(undefined);
-    if (typeof repo.entryScanConfig === 'string') {
-      try { return buildScanConfigWithDefaults(JSON.parse(repo.entryScanConfig)); } catch { return buildScanConfigWithDefaults(undefined); }
-    }
-    return buildScanConfigWithDefaults(repo.entryScanConfig);
   };
 
   // 一键同步仓库默认扫描配置

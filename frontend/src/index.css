@@ -1291,9 +1291,9 @@ body {
 .ci-hero-content h2 {
   max-width: 720px;
   margin: 16px 0 10px;
-  font-size: clamp(24px, 2.2vw, 31px);
+  font-size: 28px;
   font-weight: 760;
-  letter-spacing: -0.035em;
+  letter-spacing: 0;
 }
 
 .ci-hero-content p {
@@ -1758,7 +1758,7 @@ body {
 }
 
 .ci-hero-content h2 {
-  font-size: clamp(27px, 2.2vw, 34px);
+  font-size: 30px;
 }
 
 .ci-hero-actions-panel {

@@ -69,6 +69,16 @@ const versionStatusLabel: Record<string, string> = {
   FAILED: '失败',
 };
 
+const chartColors = {
+  primary: '#356AC3',
+  info: '#0E7490',
+  green: '#10B981',
+  gold: '#D89A2F',
+  red: '#C73B4D',
+  axis: '#64748B',
+  line: '#E2E8F0',
+};
+
 /**
  * 仪表盘看板页面组件 (Dashboard)
  * 呈现整个系统的全局 KPI 指标卡片（系统数、运行中任务数、待复核队列、Token总开销），
@@ -137,20 +147,20 @@ const Dashboard: React.FC = () => {
 
   // ECharts 配置：Token 每日消耗趋势折线图参数对象
   const lineOption = {
-    color: ['#2563eb'],
+    color: [chartColors.primary],
     tooltip: { trigger: 'axis' },
     grid: { top: 28, right: 22, bottom: 30, left: 48 },
     xAxis: {
       type: 'category',
       boundaryGap: false,
       data: chartData?.dailyTrends?.map((item) => item.date) ?? [],
-      axisLine: { lineStyle: { color: '#dbe4ef' } },
-      axisLabel: { color: '#667085' },
+      axisLine: { lineStyle: { color: chartColors.line } },
+      axisLabel: { color: chartColors.axis },
     },
     yAxis: {
       type: 'value',
-      axisLabel: { color: '#667085' },
-      splitLine: { lineStyle: { color: '#edf2f7' } },
+      axisLabel: { color: chartColors.axis },
+      splitLine: { lineStyle: { color: '#EEF2F7' } },
     },
     series: [
       {
@@ -160,16 +170,16 @@ const Dashboard: React.FC = () => {
         smooth: true,
         symbolSize: 7,
         lineStyle: { width: 3 },
-        areaStyle: { color: 'rgba(37, 99, 235, 0.10)' },
+        areaStyle: { color: 'rgba(53, 106, 195, 0.10)' },
       },
     ],
   };
 
   // ECharts 配置：各型号大模型 Token 占比环形图参数对象
   const donutOption = {
-    color: ['#2563eb', '#0891b2', '#16a34a', '#d97706', '#dc2626'],
+    color: [chartColors.primary, chartColors.info, chartColors.green, chartColors.gold, chartColors.red],
     tooltip: { trigger: 'item' },
-    legend: { bottom: 0, icon: 'circle', textStyle: { color: '#667085' } },
+    legend: { bottom: 0, icon: 'circle', textStyle: { color: chartColors.axis } },
     series: [
       {
         name: '模型 Token',
@@ -229,7 +239,7 @@ const Dashboard: React.FC = () => {
       change: '+2',
       changeUp: true,
       icon: <ProjectOutlined />,
-      accent: '#3F74D8',
+      accent: chartColors.primary,
       sparkData: sparkSeries(1, Math.max(stats.systems, 4)),
     },
     {
@@ -239,7 +249,7 @@ const Dashboard: React.FC = () => {
       change: stats.activeTasks > 0 ? '运行中' : '空闲',
       changeUp: stats.activeTasks > 0,
       icon: <PlayCircleOutlined />,
-      accent: '#7C5CD8',
+      accent: chartColors.info,
       sparkData: sparkSeries(2, Math.max(stats.activeTasks, 3)),
     },
     {
@@ -249,7 +259,7 @@ const Dashboard: React.FC = () => {
       change: stats.pendingReviews > 0 ? `待处理 ${stats.pendingReviews}` : '已清空',
       changeUp: stats.pendingReviews > 0,
       icon: <FileDoneOutlined />,
-      accent: '#D89A2F',
+      accent: chartColors.gold,
       sparkData: sparkSeries(3, Math.max(stats.pendingReviews, 2)),
     },
     {
@@ -259,7 +269,7 @@ const Dashboard: React.FC = () => {
       change: '本周',
       changeUp: true,
       icon: <DollarOutlined />,
-      accent: '#10B981',
+      accent: chartColors.green,
       sparkData: chartData?.dailyTrends?.slice(-7).map((d) => d.tokens) ?? sparkSeries(4, 1000),
     },
   ];
@@ -270,9 +280,9 @@ const Dashboard: React.FC = () => {
       <section className="ci-hero-panel">
         <div className="ci-hero-content">
           <Space size={8} wrap>
-            <Tag style={{ background: 'rgba(37, 99, 235, 0.15)', border: '1px solid rgba(37, 99, 235, 0.3)', color: '#60a5fa' }}>MVP 流程</Tag>
-            <Tag style={{ background: 'rgba(22, 163, 74, 0.15)', border: '1px solid rgba(22, 163, 74, 0.3)', color: '#4ade80' }}>人工复核</Tag>
-            <Tag style={{ background: 'rgba(8, 145, 178, 0.15)', border: '1px solid rgba(8, 145, 178, 0.3)', color: '#22d3ee' }}>Token 审计</Tag>
+            <Tag className="ci-hero-tag">MVP 流程</Tag>
+            <Tag className="ci-hero-tag">人工复核</Tag>
+            <Tag className="ci-hero-tag">Token 审计</Tag>
           </Space>
           <h2>把代码库转化为可复核、可追溯的代码知识资产</h2>
           <p>
@@ -283,7 +293,7 @@ const Dashboard: React.FC = () => {
         {/* 快捷菜单入口操作板 */}
         <div className="ci-hero-actions-panel">
           <div className="ci-hero-actions-title">
-            <ThunderboltOutlined style={{ color: '#38bdf8' }} /> 快捷操作
+            <ThunderboltOutlined /> 快捷操作
           </div>
           <Link to="/tasks" className="ci-hero-action-btn">
             <span>新建反编译分析任务</span>
@@ -382,8 +392,8 @@ const Dashboard: React.FC = () => {
                             size="small"
                             status={task.status === 'FAILED' ? 'exception' : task.status === 'CONFIRMED' || task.status === 'PUSHED' ? 'success' : 'active'}
                             strokeColor={task.status === 'FAILED' ? undefined : {
-                              '0%': '#2563eb',
-                              '100%': '#0891b2',
+                              '0%': chartColors.primary,
+                              '100%': chartColors.info,
                             }}
                           />
                         </div>

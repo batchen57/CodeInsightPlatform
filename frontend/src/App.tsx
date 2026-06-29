@@ -9,17 +9,17 @@ function App() {
       locale={zhCN}
       theme={{
         token: {
-          colorPrimary: '#3F74D8',
-          colorInfo: '#4A9BE8',
+          colorPrimary: '#356AC3',
+          colorInfo: '#0E7490',
           colorSuccess: '#10B981',
           colorWarning: '#D89A2F',
           colorError: '#DC2626',
-          colorText: '#161923',
+          colorText: '#121826',
           colorTextSecondary: '#64748B',
-          colorBgLayout: '#F6F9FF',
+          colorBgLayout: '#F5F7FB',
           colorBgContainer: '#FFFFFF',
-          colorBorder: '#E5EAF5',
-          colorBorderSecondary: '#F1F5F9',
+          colorBorder: '#E2E8F0',
+          colorBorderSecondary: '#EEF2F7',
           borderRadius: 6,
           borderRadiusLG: 8,
           fontFamily:
@@ -38,9 +38,9 @@ function App() {
             headerFontSizeSM: 13,
           },
           Table: {
-            headerBg: '#F6F9FF',
+            headerBg: '#F8FAFC',
             headerColor: '#64748B',
-            rowHoverBg: '#F6F9FF',
+            rowHoverBg: '#F8FAFC',
             cellPaddingBlock: 12,
             cellPaddingInline: 16,
           },

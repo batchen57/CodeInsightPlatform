@@ -33,7 +33,7 @@
   border-radius: var(--ci-radius-md);
   font-weight: 500;
   padding-inline: 16px;
-  transition: background-color 180ms ease, border-color 180ms ease, color 180ms ease, box-shadow 180ms ease;
+  transition: background-color 180ms ease, border-color 180ms ease, color 180ms ease, box-shadow 180ms ease, transform 160ms ease;
 }
 
 .ant-btn:not(:disabled):hover {
@@ -46,6 +46,7 @@
   background: var(--ci-primary-bg) !important;
   border-color: var(--ci-primary) !important;
   color: var(--ci-primary-hover) !important;
+  transform: translateY(1px);
 }
 
 /* Primary 按钮(主蓝实色) */
@@ -387,7 +388,13 @@
 }
 
 .ant-card:hover {
-  border-color: var(--ci-primary) !important;
+  border-color: var(--ci-border-hover) !important;
+  box-shadow: var(--ci-shadow-card-hover);
+}
+
+.ant-card-hoverable:hover,
+.ci-dashboard-card:hover {
+  border-color: color-mix(in srgb, var(--ci-primary) 38%, var(--ci-border)) !important;
   box-shadow: var(--ci-shadow-card-hover);
 }
 
@@ -472,7 +479,7 @@
 
 .ant-table-tbody > tr:hover > td,
 .ant-table-tbody > tr.ant-table-row-hover > td {
-  background: var(--ci-page-bg) !important;
+  background: var(--ci-surface-2) !important;
 }
 
 .ant-table-tbody > tr.ant-table-row-selected > td {

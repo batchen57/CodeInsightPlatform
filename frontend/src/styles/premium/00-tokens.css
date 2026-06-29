@@ -10,15 +10,15 @@
 
 :root {
   /* ============ 主色 ============ */
-  --ci-primary: #3F74D8;
-  --ci-primary-hover: #2F5FB8;
-  --ci-primary-active: #1E4A98;
-  --ci-info: #4A9BE8;
-  --ci-primary-bg: #EDF4FF;
-  --ci-primary-bg-hover: #F0F7FF;
-  --ci-page-bg: #F6F9FF;
+  --ci-primary: #356AC3;
+  --ci-primary-hover: #2858A8;
+  --ci-primary-active: #1D467F;
+  --ci-info: #0E7490;
+  --ci-primary-bg: #EEF5FF;
+  --ci-primary-bg-hover: #F5F9FF;
+  --ci-page-bg: #F5F7FB;
   --ci-surface: #FFFFFF;
-  --ci-surface-2: #FAFBFF;
+  --ci-surface-2: #F8FAFC;
 
   /* ============ 辅助色(状态点缀) ============ */
   --ci-accent-purple: #7C5CD8;
@@ -38,18 +38,18 @@
   --ci-accent-green-ink: #047857;
 
   /* ============ 中性色 ============ */
-  --ci-ink: #161923;
+  --ci-ink: #121826;
   --ci-text: #475569;
   --ci-text-secondary: #64748B;
   --ci-text-tertiary: #94A3B8;
-  --ci-border: #E5EAF5;
+  --ci-border: #E2E8F0;
   --ci-border-hover: #CBD5E1;
-  --ci-divider: #F1F5F9;
+  --ci-divider: #EEF2F7;
 
   /* ============ 状态胶囊(6 状态) ============ */
-  --ci-status-primary-dot: #3F74D8;
-  --ci-status-primary-bg: #EDF4FF;
-  --ci-status-primary-text: #2F5FB8;
+  --ci-status-primary-dot: #356AC3;
+  --ci-status-primary-bg: #EEF5FF;
+  --ci-status-primary-text: #2858A8;
 
   --ci-status-purple-dot: #7C5CD8;
   --ci-status-purple-bg: #F3EEFF;
@@ -118,12 +118,12 @@
   --ci-radius-pill: 999px;
 
   /* ============ 阴影(弱化) ============ */
-  --ci-shadow-card: 0 1px 2px rgba(15, 23, 42, 0.04);
-  --ci-shadow-card-hover: 0 2px 8px rgba(63, 116, 216, 0.06);
+  --ci-shadow-card: 0 1px 2px rgba(15, 23, 42, 0.04), 0 8px 24px rgba(15, 23, 42, 0.035);
+  --ci-shadow-card-hover: 0 2px 8px rgba(15, 23, 42, 0.05), 0 14px 34px rgba(53, 106, 195, 0.07);
   --ci-shadow-modal: 0 20px 60px rgba(15, 23, 42, 0.12);
-  --ci-shadow-button-primary: 0 0 0 3px rgba(63, 116, 216, 0.12);
-  --ci-shadow-button-primary-active: 0 0 0 3px rgba(63, 116, 216, 0.16);
-  --ci-shadow-input-focus: 0 0 0 3px rgba(63, 116, 216, 0.08);
+  --ci-shadow-button-primary: 0 0 0 3px rgba(53, 106, 195, 0.12);
+  --ci-shadow-button-primary-active: 0 0 0 3px rgba(53, 106, 195, 0.16);
+  --ci-shadow-input-focus: 0 0 0 3px rgba(53, 106, 195, 0.08);
 
   /* ============ 高度 ============ */
   --ci-control-height-sm: 28px;
