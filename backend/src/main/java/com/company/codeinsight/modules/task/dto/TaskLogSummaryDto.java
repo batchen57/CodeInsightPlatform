@@ -39,8 +39,20 @@ public class TaskLogSummaryDto {
     /** 切片/文件级计数 */
     private Counters counters;
 
-    /** AI 调用成功/失败计数 */
+    /** AI 调用成功/失败计数（全量聚合） */
     private AiCalls aiCalls;
+
+    /**
+     * AI_ANALYZING / MODULE_HIERARCHY 阶段（即第一阶段 AI）的调用统计。
+     * 与 docAiCalls 分离，便于前端分别展示两阶段的调用情况。
+     */
+    private AiCalls hierarchyAiCalls;
+
+    /**
+     * GENERATING_DOC 阶段（即第二阶段 AI）的调用统计。
+     * 与 hierarchyAiCalls 分离，便于前端分别展示两阶段的调用情况。
+     */
+    private AiCalls docAiCalls;
 
     /** 当前正在处理的进度（-1 表示未知） */
     private Current current;

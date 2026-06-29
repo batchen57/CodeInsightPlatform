@@ -218,16 +218,22 @@ const Drafts: React.FC = () => {
   const hasInitialTask =
     Number.isFinite(initialSystemIdParam) && initialSystemIdParam > 0 &&
     Number.isFinite(initialTaskIdParam) && initialTaskIdParam > 0;
-  const hasInitialTaskRef = useRef(hasInitialTask);
+  // 标记"初始导航已处理"，防止 URL 清除后 hasInitialTask 变为 false 导致其他 effect 覆写选中项
+  const initialNavigationHandled = useRef(false);
 
   // ============ 顶部筛选状态 ============
   const [statusFilter, setStatusFilter] = useState<StatusFilterKey>('ALL');
   const [previewSystems, setPreviewSystems] = useState<PreviewSystemDto[]>([]);
   const [previewLoading, setPreviewLoading] = useState(false);
-  const [selectedSystemId, setSelectedSystemId] = useState<number | undefined>();
+  // 若有 URL 参数则直接初始化选中系统和任务（同步完成，避免异步竞态）
+  const [selectedSystemId, setSelectedSystemId] = useState<number | undefined>(
+    hasInitialTask ? initialSystemIdParam : undefined,
+  );
   const [tasks, setTasks] = useState<Task[]>([]);
   const [tasksLoading, setTasksLoading] = useState(false);
-  const [selectedTaskId, setSelectedTaskId] = useState<number | undefined>();
+  const [selectedTaskId, setSelectedTaskId] = useState<number | undefined>(
+    hasInitialTask ? initialTaskIdParam : undefined,
+  );
 
   // 选择上下文默认展示系统下所有任务（含 PUSHED / ARCHIVED / FAILED / CANCELLED），
   // 复核人可一键浏览历史任务做只读查阅。原先 'current' / 'all' 的 scope 开关已移除
@@ -377,9 +383,10 @@ const Drafts: React.FC = () => {
     listPreviewSystems()
       .then((list) => {
         setPreviewSystems(list);
-        if (hasInitialTaskRef.current) {
-          setSelectedSystemId(initialSystemIdParam);
-          setSelectedTaskId(initialTaskIdParam);
+        // 初始导航已处理：不触发系统自动选择（避免 URL 清除后 hasInitialTask 变为 false 导致的覆写）
+        if (initialNavigationHandled.current) return;
+        if (hasInitialTask) {
+          initialNavigationHandled.current = true;
           return;
         }
         if (list.length > 0) {
@@ -391,7 +398,7 @@ const Drafts: React.FC = () => {
         message.error('加载可预览系统失败');
       })
       .finally(() => setPreviewLoading(false));
-  }, [demoMode, initialSystemIdParam, initialTaskIdParam]);
+  }, [demoMode]);
 
   // 状态变更：级联重置系统和任务
   const handleStatusFilterChange = (next: StatusFilterKey) => {
@@ -413,8 +420,11 @@ const Drafts: React.FC = () => {
     listReviewableTasks({ systemId: selectedSystemId })
       .then((list) => {
         setTasks(list);
-        if (hasInitialTaskRef.current) {
-          hasInitialTaskRef.current = false;
+        // 初始导航已处理：不清除 URL、不覆写 selectedTaskId
+        if (initialNavigationHandled.current) return;
+        // URL 参数携带了指定任务：标记已处理，保留初始选中项，清除 URL 参数
+        if (hasInitialTask) {
+          initialNavigationHandled.current = true;
           setSearchParams((prev) => {
             const next = new URLSearchParams(prev);
             next.delete('systemId');
@@ -434,7 +444,7 @@ const Drafts: React.FC = () => {
         }
       })
       .catch(() => {
-        message.error('加载任务列表失败');
+        message.error('加载反编译任务失败');
       })
       .finally(() => setTasksLoading(false));
   }, [selectedSystemId, demoMode, setSearchParams]);
@@ -677,6 +687,13 @@ const Drafts: React.FC = () => {
         setWorkspace(ws.workspace);
       } catch {
         /* 忽略，工作区状态在 treeData 中已经反映 */
+      }
+      // 重新拉取任务列表（确认后任务状态已变为 CONFIRMED，tasks 数组需要同步刷新）
+      try {
+        const updatedTasks = await listReviewableTasks({ systemId: selectedSystemId! });
+        setTasks(updatedTasks);
+      } catch {
+        /* 忽略，任务列表刷新失败不影响已确认的草稿 */
       }
     } catch {
       message.error('确认失败，请重试');

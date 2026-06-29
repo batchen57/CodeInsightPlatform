@@ -203,15 +203,24 @@ public class DraftController {
     }
 
     /**
-     * 全局新建任务前置条件查询：扫描所有 ci_knowledge_draft，识别仍处于非终态
-     * （DRAFT / EDITING / REJECTED）的草稿明细，供 TasksPage 新建任务向导第一步之前拦截。
+     * 新建任务前置条件查询：可选按系统+仓库收窄作用域，避免全表扫描。
      *
-     * <p>返回 {@link com.company.codeinsight.modules.draft.dto.RepositoryReadinessDto}，
-     * 字段 ready 为 true 时调用方可放行向导。</p>
+     * <p>当 {@code systemId} 和 {@code repositoryId} 均不传时退化为全局查询
+     * （兼容旧版前端）。建议前端在创建任务向导步骤 0 选择系统+仓库后，
+     * 立即带参调用本接口做精确校验。</p>
+     *
+     * @param systemId     可选：所属业务系统 ID
+     * @param repositoryId 可选：所属代码库 ID
+     * @return {@link com.company.codeinsight.modules.draft.dto.RepositoryReadinessDto}
      */
-    @Operation(summary = "全局新建任务前置条件查询")
+    @Operation(summary = "新建任务前置条件查询（可选按系统+仓库收窄）")
     @GetMapping("/readiness")
-    public ApiResponse<com.company.codeinsight.modules.draft.dto.RepositoryReadinessDto> getReadiness() {
+    public ApiResponse<com.company.codeinsight.modules.draft.dto.RepositoryReadinessDto> getReadiness(
+            @RequestParam(required = false) Long systemId,
+            @RequestParam(required = false) Long repositoryId) {
+        if (systemId != null || repositoryId != null) {
+            return ApiResponse.success(draftService.findReadiness(systemId, repositoryId));
+        }
         return ApiResponse.success(draftService.findGlobalReadiness());
     }
 }

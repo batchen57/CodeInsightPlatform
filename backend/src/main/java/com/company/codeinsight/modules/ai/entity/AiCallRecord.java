@@ -81,6 +81,9 @@ public class AiCallRecord {
      */
     private Long durationMs;
 
+    /** 调用阶段标识：MODULE_HIERARCHY / GENERATING_DOC 等 */
+    private String callStage;
+
     /**
      * 记录创建的时间
      */

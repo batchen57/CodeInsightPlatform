@@ -339,6 +339,11 @@ public class DraftServiceImpl implements DraftService {
         }
         assertNotPushed(draft);
 
+        // 幂等保护：草稿已确认则直接返回
+        if (DraftStatus.CONFIRMED.name().equals(draft.getStatus())) {
+            return;
+        }
+
         // 修改状态为 CONFIRMED
         draft.setStatus(DraftStatus.CONFIRMED.name());
         draft.setUpdatedAt(LocalDateTime.now());
@@ -373,7 +378,7 @@ public class DraftServiceImpl implements DraftService {
             throw new BusinessException("任务 #" + taskId + " 没有关联的草稿工作区");
         }
 
-        // 推送锁定守卫：PUSHING / PUSHED 不允许再次 CONFIRMED
+        // 推送锁定守卫：PUSHING / PUSHED / CONFIRMED 不允许再次 CONFIRMED
         DecompileTask task = taskMapper.selectById(taskId);
         if (task != null) {
             String st = task.getStatus();
@@ -381,6 +386,9 @@ public class DraftServiceImpl implements DraftService {
                 throw new BusinessException("任务 #" + taskId + " 已" +
                         (TaskStatus.PUSHED.name().equals(st) ? "推送" : "在推送") +
                         "，无法再次确认");
+            }
+            if (TaskStatus.CONFIRMED.name().equals(st)) {
+                throw new BusinessException("任务 #" + taskId + " 已确认，无需重复确认");
             }
         }
 
@@ -648,7 +656,7 @@ public class DraftServiceImpl implements DraftService {
 
     /**
      * 全局新建任务前置条件查询：扫描所有 ci_knowledge_draft，识别仍处于非终态
-     * （DRAFT / EDITING / REJECTED）的草稿，组装就绪度 DTO。
+     * （DRAFT / EDITING）的草稿，组装就绪度 DTO。
      *
      * <p>设计要点：</p>
      * <ul>
@@ -704,6 +712,81 @@ public class DraftServiceImpl implements DraftService {
             item.setUpdatedAt(d.getUpdatedAt());
 
             DraftWorkspace ws = workspaceMap.get(d.getWorkspaceId());
+            if (ws != null) {
+                item.setTaskId(ws.getTaskId());
+                item.setSystemId(ws.getSystemId());
+                item.setRepositoryId(ws.getRepositoryId());
+            }
+            items.add(item);
+        }
+        dto.setBlockingDrafts(items);
+        return dto;
+    }
+
+    /**
+     * 基于系统+仓库的新建任务前置条件查询，作用域收窄到指定组合。
+     *
+     * <p>通过 DraftWorkspace 桥接 KnowledgeDraft，只查询属于 {@code systemId + repositoryId}
+     * 组合的未确认草稿。任一参数为空时退化到 {@link #findGlobalReadiness()}。</p>
+     */
+    @Override
+    public RepositoryReadinessDto findReadiness(Long systemId, Long repositoryId) {
+        if (systemId == null && repositoryId == null) {
+            return findGlobalReadiness();
+        }
+        // 非终态白名单
+        List<String> nonTerminal = List.of(
+                DraftStatus.DRAFT.name(),
+                DraftStatus.EDITING.name()
+        );
+
+        // 1. 查询该系统+仓库下的工作区
+        LambdaQueryWrapper<DraftWorkspace> wsQw = new LambdaQueryWrapper<DraftWorkspace>();
+        if (systemId != null) {
+            wsQw.eq(DraftWorkspace::getSystemId, systemId);
+        }
+        if (repositoryId != null) {
+            wsQw.eq(DraftWorkspace::getRepositoryId, repositoryId);
+        }
+        List<DraftWorkspace> workspaces = workspaceMapper.selectList(wsQw);
+        if (workspaces.isEmpty()) {
+            RepositoryReadinessDto dto = new RepositoryReadinessDto();
+            dto.setReady(true);
+            dto.setUnconfirmedCount(0);
+            return dto;
+        }
+        List<Long> workspaceIds = workspaces.stream()
+                .map(DraftWorkspace::getId)
+                .collect(java.util.stream.Collectors.toList());
+
+        // 2. 在这些工作区中查找未确认草稿
+        List<KnowledgeDraft> blocking = draftMapper.selectList(
+                new LambdaQueryWrapper<KnowledgeDraft>()
+                        .in(KnowledgeDraft::getWorkspaceId, workspaceIds)
+                        .in(KnowledgeDraft::getStatus, nonTerminal)
+                        .orderByDesc(KnowledgeDraft::getUpdatedAt)
+        );
+
+        RepositoryReadinessDto dto = new RepositoryReadinessDto();
+        dto.setUnconfirmedCount(blocking.size());
+        dto.setReady(blocking.isEmpty());
+        if (blocking.isEmpty()) {
+            return dto;
+        }
+
+        // 3. 组装明细（工作区信息已在内存中，直接构造索引）
+        java.util.Map<Long, DraftWorkspace> wsMap = workspaces.stream()
+                .collect(java.util.stream.Collectors.toMap(DraftWorkspace::getId, w -> w));
+        List<RepositoryReadinessDto.BlockingDraft> items = new ArrayList<>(blocking.size());
+        for (KnowledgeDraft d : blocking) {
+            RepositoryReadinessDto.BlockingDraft item = new RepositoryReadinessDto.BlockingDraft();
+            item.setDraftId(d.getId());
+            item.setModuleName(d.getModuleName());
+            item.setStatus(d.getStatus());
+            item.setWorkspaceId(d.getWorkspaceId());
+            item.setUpdatedAt(d.getUpdatedAt());
+
+            DraftWorkspace ws = wsMap.get(d.getWorkspaceId());
             if (ws != null) {
                 item.setTaskId(ws.getTaskId());
                 item.setSystemId(ws.getSystemId());

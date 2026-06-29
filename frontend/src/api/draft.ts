@@ -231,7 +231,10 @@ export async function listAllTasksBySystem(systemId: number): Promise<import('..
   // 后端 GET /tasks 返回 ApiResponse<PageResult<Task>>，拦截器解包后 res.data 是 PageResult。
   // 这里显式断言返回结构并取 .records，避免历史上把 PageResult 强转成 Task[] 导致的
   // `tasks.map is not a function` 崩溃。
+  // request.get<T> 在 axios 类型上仍标为 AxiosResponse<T>，response 拦截器实际解包为 T；
+  // 这里用 unknown 中转一次拿到 Page，再安全取 records。
   type Page = { records: import('../types').Task[]; total: number; size: number; current: number };
-  const page = await request.get<Page>(`/tasks`, { params: { current: 1, size: 200, systemId } });
+  const response = await request.get<Page>(`/tasks`, { params: { current: 1, size: 200, systemId } });
+  const page = response as unknown as Page;
   return page?.records ?? [];
 }

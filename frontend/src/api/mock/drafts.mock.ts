@@ -730,7 +730,7 @@ export async function mockListTaskComments(
   const ws = workspaces.find((w) => w.taskId === taskId);
   if (!ws) return [];
   const draftMap = new Map<number, KnowledgeDraft>();
-  for (const d of drafts) {
+  for (const d of draftStore.values()) {
     if (d.workspaceId === ws.id) draftMap.set(d.id, d);
   }
   return comments

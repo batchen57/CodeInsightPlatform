@@ -8,3 +8,8 @@ spring:
 code-insight:
   ai:
     hierarchy-parallelism: 4   # 模块层级 AI 调用并发数，按模型 API 限流调整
+  schedule:
+    enabled: true             # 是否启用定时任务调度（false 时 ScheduleExecutor 不会装载）
+    poll-interval-ms: 60000    # 主轮询间隔（毫秒），到点扫描到期 schedule
+    queue-poll-interval-ms: 30000  # 队列消费间隔（QUEUE 策略）
+    lock-ttl-seconds: 30       # Redis 分布式锁 TTL

@@ -7,6 +7,8 @@ import Prompts from '../pages/prompts';
 import Tasks from '../pages/tasks';
 import TaskDetail from '../pages/tasks/detail';
 import HierarchyReview from '../pages/tasks/hierarchy-review';
+import Schedules from '../pages/schedules';
+import ScheduleDetail from '../pages/schedules/detail';
 import Drafts from '../pages/drafts';
 import Push from '../pages/push';
 import TokenAudit from '../pages/token-audit';
@@ -49,7 +51,7 @@ export const router = createHashRouter([
         element: <Prompts />,
       },
       {
-        path: 'tasks', // 扫描分析任务列表
+        path: 'tasks', // 手动下发的反编译任务
         element: <Tasks />,
       },
       {
@@ -59,6 +61,14 @@ export const router = createHashRouter([
       {
         path: 'tasks/:id', // 任务执行详情与流程监控
         element: <TaskDetail />,
+      },
+      {
+        path: 'schedules', // 定时任务配置列表
+        element: <Schedules />,
+      },
+      {
+        path: 'schedules/:id', // 定时任务详情 + 触发历史
+        element: <ScheduleDetail />,
       },
       {
         path: 'drafts', // 知识草稿复核与编辑器协同工作区

@@ -23,11 +23,12 @@ import java.time.LocalDateTime;
 /**
  * 反编译任务「新建前置条件」就绪度拦截的集成测试。
  *
- * <p>验证 {@link com.company.codeinsight.modules.task.service.impl.DecompileTaskServiceImpl#validateNoUnconfirmedDrafts()}
+ * <p>验证 {@link com.company.codeinsight.modules.task.service.impl.DecompileTaskServiceImpl#validateNoUnconfirmedDrafts(Long, Long)}
  * 在 createInitialTask / createIncrementalTask 入口处生效：</p>
  * <ul>
- *   <li>只要全局存在任意 DRAFT / EDITING / REJECTED 状态的草稿，新任务创建应抛 BusinessException</li>
- *   <li>全局草稿全部 CONFIRMED / PUSHED / ARCHIVED 时，新任务可正常创建</li>
+ *   <li>只要当前系统+仓库下存在任意 DRAFT / EDITING 状态的草稿，新任务创建应抛 BusinessException</li>
+ *   <li>当前系统+仓库草稿全部 CONFIRMED / PUSHED / ARCHIVED 时，新任务可正常创建</li>
+ *   <li>其他系统+仓库的未确认草稿不影响当前任务创建</li>
  * </ul>
  */
 @SpringBootTest(properties = {
@@ -74,14 +75,11 @@ public class DecompileTaskReadinessTest {
     }
 
     /**
-     * 存在 DRAFT 草稿时，createInitialTask 应被前置条件拦截。
-     * 注：validateTaskSource 会先校验 repository 存在性，所以这里只用一个会触发 readiness 校验的快速路径：
-     * 通过反射直接调用私有方法（保证不依赖外部 repository/system 数据）。
-     * 实际拦截语义在 createInitialTask 中调用，所以也通过 reflectively 调用来验证。
+     * 存在 DRAFT 草稿时，当前系统+仓库的校验应被拦截。
      */
     @Test
     public void testReadinessGateBlocksWhenDraftPending() throws Exception {
-        // 准备一个 DRAFT 状态的草稿
+        // 准备一个 DRAFT 状态的草稿（属于 9999/9999）
         DraftWorkspace ws = new DraftWorkspace();
         ws.setTaskId(8001L);
         ws.setSystemId(9999L);
@@ -106,13 +104,13 @@ public class DecompileTaskReadinessTest {
         draft.setUpdatedAt(LocalDateTime.now());
         draftMapper.insert(draft);
 
-        // 反射直接调用私有 validateNoUnconfirmedDrafts，应该抛 BusinessException
+        // 反射调用私有 validateNoUnconfirmedDrafts(systemId, repositoryId)，应该抛 BusinessException
         java.lang.reflect.Method m = com.company.codeinsight.modules.task.service.impl.DecompileTaskServiceImpl.class
-                .getDeclaredMethod("validateNoUnconfirmedDrafts");
+                .getDeclaredMethod("validateNoUnconfirmedDrafts", Long.class, Long.class);
         m.setAccessible(true);
         BusinessException ex = Assertions.assertThrows(BusinessException.class, () -> {
             try {
-                m.invoke(decompileTaskService);
+                m.invoke(decompileTaskService, 9999L, 9999L);
             } catch (java.lang.reflect.InvocationTargetException e) {
                 throw (BusinessException) e.getCause();
             }
@@ -121,14 +119,14 @@ public class DecompileTaskReadinessTest {
     }
 
     /**
-     * 全局草稿全部 CONFIRMED 时，校验方法应直接通过不抛错。
+     * 当前系统+仓库草稿全部 CONFIRMED 时，校验方法应直接通过不抛错。
      */
     @Test
     public void testReadinessGatePassesWhenAllConfirmed() throws Exception {
         // 先清空所有非终态草稿
         clearNonTerminalDrafts();
 
-        // 准备一个工作区与一条 CONFIRMED 草稿
+        // 准备一个工作区与一条 CONFIRMED 草稿（属于 9999/9999）
         DraftWorkspace ws = new DraftWorkspace();
         ws.setTaskId(8002L);
         ws.setSystemId(9999L);
@@ -153,13 +151,60 @@ public class DecompileTaskReadinessTest {
         draft.setUpdatedAt(LocalDateTime.now());
         draftMapper.insert(draft);
 
-        // 反射调用私有方法，应直接通过
+        // 反射调用私有方法(9999, 9999)，应直接通过
         java.lang.reflect.Method m = com.company.codeinsight.modules.task.service.impl.DecompileTaskServiceImpl.class
-                .getDeclaredMethod("validateNoUnconfirmedDrafts");
+                .getDeclaredMethod("validateNoUnconfirmedDrafts", Long.class, Long.class);
         m.setAccessible(true);
         Assertions.assertDoesNotThrow(() -> {
             try {
-                m.invoke(decompileTaskService);
+                m.invoke(decompileTaskService, 9999L, 9999L);
+            } catch (java.lang.reflect.InvocationTargetException e) {
+                throw e.getCause();
+            }
+        });
+    }
+
+    /**
+     * 其他系统+仓库的未确认草稿不影响当前系统+仓库的任务创建。
+     * 验证作用域收窄正确。
+     */
+    @Test
+    public void testReadinessGateIgnoresOtherSystemsDrafts() throws Exception {
+        // 先清空所有非终态草稿
+        clearNonTerminalDrafts();
+
+        // 在其他系统(8888/8888)下创建一个 DRAFT 草稿
+        DraftWorkspace otherWs = new DraftWorkspace();
+        otherWs.setTaskId(8003L);
+        otherWs.setSystemId(8888L);
+        otherWs.setRepositoryId(8888L);
+        otherWs.setStatus("ACTIVE");
+        otherWs.setCreatedAt(LocalDateTime.now());
+        otherWs.setUpdatedAt(LocalDateTime.now());
+        workspaceMapper.insert(otherWs);
+
+        File tempFile = File.createTempFile("OtherDraft", ".md");
+        tempFile.deleteOnExit();
+        Files.writeString(tempFile.toPath(), "# other system draft");
+
+        KnowledgeDraft otherDraft = new KnowledgeDraft();
+        otherDraft.setWorkspaceId(otherWs.getId());
+        otherDraft.setFilePath("OtherDraft.md");
+        otherDraft.setModuleName("其他系统模块");
+        otherDraft.setContentUri(tempFile.toURI().toString());
+        otherDraft.setStatus(DraftStatus.DRAFT.name());
+        otherDraft.setHash("hash-other");
+        otherDraft.setCreatedAt(LocalDateTime.now());
+        otherDraft.setUpdatedAt(LocalDateTime.now());
+        draftMapper.insert(otherDraft);
+
+        // 当前系统(9999/9999)下没有任何草稿，校验应直接通过
+        java.lang.reflect.Method m = com.company.codeinsight.modules.task.service.impl.DecompileTaskServiceImpl.class
+                .getDeclaredMethod("validateNoUnconfirmedDrafts", Long.class, Long.class);
+        m.setAccessible(true);
+        Assertions.assertDoesNotThrow(() -> {
+            try {
+                m.invoke(decompileTaskService, 9999L, 9999L);
             } catch (java.lang.reflect.InvocationTargetException e) {
                 throw e.getCause();
             }

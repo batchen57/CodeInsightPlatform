@@ -19,6 +19,7 @@ import {
 } from 'antd';
 import {
   CheckCircleOutlined,
+  ClockCircleOutlined,
   CloseCircleOutlined,
   EditOutlined,
   EyeOutlined,
@@ -29,7 +30,7 @@ import {
   SyncOutlined,
   UnorderedListOutlined,
 } from '@ant-design/icons';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import {
   createIncrementalTask,
   createInitialTask,
@@ -95,6 +96,26 @@ const Tasks: React.FC = () => {
   const [filterSystemId, setFilterSystemId] = useState<number | undefined>();
   const [filterStatus, setFilterStatus] = useState<string | undefined>();
   const [filterType, setFilterType] = useState<string | undefined>();
+  // 来源筛选：MANUAL 手动触发 / SCHEDULED 定时触发
+  // 手动下发页默认只看手动触发的任务；用户可切到 SCHEDULED 视图查看所有定时触发的任务
+  // 也支持通过 URL ?triggerSource=SCHEDULED 直接进入定时触发视图
+  const initialSource = (() => {
+    const q = searchParams.get('triggerSource');
+    return q === 'SCHEDULED' ? 'SCHEDULED' : 'MANUAL';
+  })();
+  const [filterTriggerSource, setFilterTriggerSource] = useState<'MANUAL' | 'SCHEDULED'>(initialSource);
+
+  /**
+   * 切换触发来源时同步写回 URL，便于分享/刷新仍保持当前视图。
+   */
+  const switchTriggerSource = (next: 'MANUAL' | 'SCHEDULED') => {
+    setFilterTriggerSource(next);
+    setCurrent(1);
+    const sp = new URLSearchParams(searchParams);
+    if (next === 'MANUAL') sp.delete('triggerSource');
+    else sp.set('triggerSource', next);
+    setSearchParams(sp, { replace: true });
+  };
 
   // 顶部状态分组 chip：ALL / RUNNING / PENDING_REVIEW / CONFIRMED / CLOSED
   // 选中后把对应状态列表作为 statuses 参数传给 listTasks（后端用 SQL IN 过滤）。
@@ -154,10 +175,10 @@ const Tasks: React.FC = () => {
   const [readinessLoading, setReadinessLoading] = useState(false);
   const [readinessModalOpen, setReadinessModalOpen] = useState(false);
 
-  const refreshReadiness = useCallback(async () => {
+  const refreshReadiness = useCallback(async (systemId?: number, repositoryId?: number) => {
     setReadinessLoading(true);
     try {
-      const data = await getRepositoryReadiness();
+      const data = await getRepositoryReadiness({ systemId, repositoryId });
       setReadiness(data);
       return data;
     } catch {
@@ -169,11 +190,11 @@ const Tasks: React.FC = () => {
   }, []);
 
   /**
-   * 通用前置条件闸门：先异步拿 readiness，不通过就阻断当前动作。
+   * 通用前置条件闸门：先异步拿 readiness（带当前表单选中的系统+仓库过滤），不通过就阻断当前动作。
    * 用法：在 onClick 回调里 `await ensureReadinessOrBlock()`，返回 false 即不再继续。
    */
-  const ensureReadinessOrBlock = useCallback(async (): Promise<boolean> => {
-    const data = await refreshReadiness();
+  const ensureReadinessOrBlock = useCallback(async (systemId?: number, repositoryId?: number): Promise<boolean> => {
+    const data = await refreshReadiness(systemId, repositoryId);
     if (data && !data.ready) {
       setReadinessModalOpen(true);
       return false;
@@ -200,6 +221,7 @@ const Tasks: React.FC = () => {
           status: filterStatus,
           statuses: groupStatuses ?? undefined,
           type: filterType,
+          triggerSource: filterTriggerSource,
         });
         setTasks(data.records);
         setTotal(data.total);
@@ -207,7 +229,7 @@ const Tasks: React.FC = () => {
         setLoading(false);
       }
     },
-    [current, filterStatus, filterSystemId, filterType, size, activeGroup],
+    [current, filterStatus, filterSystemId, filterType, size, activeGroup, filterTriggerSource],
   );
 
   // 拉取 chip 角标用的状态分组统计（按当前系统过滤）
@@ -226,6 +248,12 @@ const Tasks: React.FC = () => {
     setFilterStatus(undefined);
     setCurrent(1);
   };
+
+  /**
+   * triggerSource 由后端 listTasks 接口直接过滤，表格直接渲染 tasks。
+   * （之前在 client 端做 useMemo 切是为了不侵入后端；现在 listTasks 已支持 triggerSource 参数）
+   */
+  const visibleTasks = tasks;
 
   /**
    * REVIEWING 状态细分：判断任务是否因为有 REJECTED 草稿而卡在"复核中"，
@@ -406,8 +434,9 @@ const Tasks: React.FC = () => {
 
   // 向导最终步骤：执行新建任务表单落盘
   const handleCreateTask = async () => {
-    // 兜底再校验一次就绪度，防止向导步骤间状态变更
-    if (!(await ensureReadinessOrBlock())) return;
+    // 兜底再校验一次就绪度（带当前系统+仓库过滤），防止向导步骤间状态变更
+    const vals = form.getFieldsValue(['systemId', 'repositoryId']);
+    if (!(await ensureReadinessOrBlock(vals.systemId, vals.repositoryId))) return;
 
     const values = form.getFieldsValue();
     const payload = {
@@ -463,6 +492,26 @@ const Tasks: React.FC = () => {
       key: 'type',
       width: 140,
       render: (type: Task['type']) => <Tag color={type === 'INITIAL' ? 'geekblue' : 'green'}>{type === 'INITIAL' ? '全量扫描' : '增量扫描'}</Tag>,
+    },
+    {
+      title: '来源',
+      dataIndex: 'triggerSource',
+      key: 'triggerSource',
+      width: 130,
+      render: (source: string | undefined, record: Task) => {
+        if (source === 'SCHEDULED') {
+          return (
+            <Tooltip title="由定时任务触发">
+              <Tag color="blue">
+                <Link to={`/schedules/${record.scheduleId}`} onClick={(e) => e.stopPropagation()}>
+                  定时 #{record.scheduleId}
+                </Link>
+              </Tag>
+            </Tooltip>
+          );
+        }
+        return <Tag>手动</Tag>;
+      },
     },
     {
       title: 'AI模型',
@@ -582,6 +631,60 @@ const Tasks: React.FC = () => {
             })}
           </Space>
         </div>
+        {/* 触发来源 Tab：与状态分组正交，可叠加；默认 MANUAL = 手动下发语义 */}
+        <div
+          className="ci-trigger-source-tabs"
+          style={{
+            marginTop: 12,
+            borderTop: '1px dashed #e5e7eb',
+            paddingTop: 12,
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            flexWrap: 'wrap',
+            gap: 8,
+          }}
+        >
+          <Space size={8}>
+            <span style={{ color: '#888', marginRight: 4 }}>触发来源：</span>
+            {([
+              { key: 'MANUAL',    label: '手动触发' },
+              { key: 'SCHEDULED', label: '定时触发' },
+            ] as { key: 'MANUAL' | 'SCHEDULED'; label: string }[]).map((tab) => {
+              const active = filterTriggerSource === tab.key;
+              return (
+                <Button
+                  key={tab.key}
+                  size="small"
+                  type={active ? 'primary' : 'default'}
+                  onClick={() => switchTriggerSource(tab.key)}
+                >
+                  {tab.label}
+                </Button>
+              );
+            })}
+          </Space>
+          {/* 跨视图快速入口：手动下发页 → 切换到定时触发视图 */}
+          {filterTriggerSource === 'MANUAL' ? (
+            <Button
+              type="link"
+              size="small"
+              icon={<ClockCircleOutlined />}
+              onClick={() => switchTriggerSource('SCHEDULED')}
+            >
+              查看定时触发的任务 →
+            </Button>
+          ) : (
+            <Button
+              type="link"
+              size="small"
+              icon={<UnorderedListOutlined />}
+              onClick={() => switchTriggerSource('MANUAL')}
+            >
+              ← 返回手动下发
+            </Button>
+          )}
+        </div>
       </Card>
 
       {/* 顶部多条件联合过滤器 */}
@@ -628,6 +731,7 @@ const Tasks: React.FC = () => {
                   setFilterSystemId(undefined);
                   setFilterStatus(undefined);
                   setFilterType(undefined);
+                  switchTriggerSource('MANUAL');
                   setActiveGroup('ALL');
                   setCurrent(1);
                 }}
@@ -645,7 +749,7 @@ const Tasks: React.FC = () => {
       {/* 任务队列主数据表 */}
       <Card title="任务执行队列">
         <Table
-          dataSource={tasks}
+          dataSource={visibleTasks}
           columns={columns}
           rowKey="id"
           loading={loading}
@@ -681,10 +785,10 @@ const Tasks: React.FC = () => {
                 type="primary"
                 loading={readinessLoading}
                 onClick={async () => {
-                  // 第一步要先校验就绪度：仅当选择来源后才有意义
+                  // 第一步要先校验就绪度：仅当选择来源后才有意义，带参精确校验
                   if (currentStep === 0) {
-                    await form.validateFields(['systemId', 'repositoryId']);
-                    if (!(await ensureReadinessOrBlock())) return;
+                    const vals = await form.validateFields(['systemId', 'repositoryId']);
+                    if (!(await ensureReadinessOrBlock(vals.systemId, vals.repositoryId))) return;
                   }
                   if (currentStep === 1) {
                     await form.validateFields(['taskType', 'modularizePromptId', 'documentPromptId', 'modelName']);

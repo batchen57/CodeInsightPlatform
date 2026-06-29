@@ -108,5 +108,22 @@ public class DecompileTask extends BaseEntity {
      */
     @TableField("require_hierarchy_review")
     private Boolean requireHierarchyReview;
+
+    /**
+     * 任务触发来源：
+     * <ul>
+     *   <li>MANUAL - 前端用户手动创建并启动（默认）</li>
+     *   <li>SCHEDULED - 由定时任务（ci_schedule_task）触发，{@link #scheduleId} 非空</li>
+     * </ul>
+     */
+    @TableField("trigger_source")
+    private String triggerSource;
+
+    /**
+     * 触发该任务的定时配置 ID（FK → ci_schedule_task.id）
+     * <p>仅当 {@link #triggerSource} = SCHEDULED 时非空；手动触发的任务为 null。
+     */
+    @TableField("schedule_id")
+    private Long scheduleId;
 }
 

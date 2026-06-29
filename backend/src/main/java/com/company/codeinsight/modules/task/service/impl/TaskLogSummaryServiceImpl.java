@@ -123,6 +123,13 @@ public class TaskLogSummaryServiceImpl implements TaskLogSummaryService {
         dto.setStatus(task.getStatus());
         dto.setProgress(task.getProgress() == null ? 0 : task.getProgress());
         dto.setDurationMs(task.getDurationMs() == null ? 0L : task.getDurationMs());
+        // 运行中任务实时耗时：当 endedAt 为空且 startedAt 不为空时，按当前时间计算实时耗时
+        if (task.getEndedAt() == null && task.getStartedAt() != null) {
+            long realDuration = java.time.Duration.between(task.getStartedAt(), LocalDateTime.now()).toMillis();
+            if (realDuration > dto.getDurationMs()) {
+                dto.setDurationMs(realDuration);
+            }
+        }
         dto.setStartedAt(task.getStartedAt());
         dto.setEndedAt(task.getEndedAt());
         dto.setModelName(task.getModelName());
@@ -167,7 +174,25 @@ public class TaskLogSummaryServiceImpl implements TaskLogSummaryService {
         counters.setTotalFiles(totalFiles == null ? 0 : totalFiles.intValue());
         dto.setCounters(counters);
 
-        // 4. aiCalls
+        // 4. aiCalls — 按 call_stage 分两组：MODULE_HIERARCHY（含 AI_ANALYZING）和 GENERATING_DOC
+        java.util.function.Function<String, TaskLogSummaryDto.AiCalls> countByStage = (stage) -> {
+            TaskLogSummaryDto.AiCalls c = new TaskLogSummaryDto.AiCalls();
+            LambdaQueryWrapper<AiCallRecord> totalW = new LambdaQueryWrapper<AiCallRecord>()
+                    .eq(AiCallRecord::getTaskId, taskId)
+                    .eq(AiCallRecord::getCallStage, stage);
+            Long total = aiCallRecordMapper.selectCount(totalW);
+            Long ok = aiCallRecordMapper.selectCount(
+                    new LambdaQueryWrapper<AiCallRecord>()
+                            .eq(AiCallRecord::getTaskId, taskId)
+                            .eq(AiCallRecord::getCallStage, stage)
+                            .eq(AiCallRecord::getIsSuccess, 1)
+            );
+            c.setTotal(total == null ? 0 : total.intValue());
+            c.setSuccess(ok == null ? 0 : ok.intValue());
+            c.setFailed((total == null ? 0 : total.intValue()) - (ok == null ? 0 : ok.intValue()));
+            return c;
+        };
+        // 全量聚合（保持兼容）
         TaskLogSummaryDto.AiCalls aiCalls = new TaskLogSummaryDto.AiCalls();
         Long aiTotal = aiCallRecordMapper.selectCount(
                 new LambdaQueryWrapper<AiCallRecord>().eq(AiCallRecord::getTaskId, taskId)
@@ -177,15 +202,13 @@ public class TaskLogSummaryServiceImpl implements TaskLogSummaryService {
                         .eq(AiCallRecord::getTaskId, taskId)
                         .eq(AiCallRecord::getIsSuccess, 1)
         );
-        Long aiFail = aiCallRecordMapper.selectCount(
-                new LambdaQueryWrapper<AiCallRecord>()
-                        .eq(AiCallRecord::getTaskId, taskId)
-                        .eq(AiCallRecord::getIsSuccess, 0)
-        );
         aiCalls.setTotal(aiTotal == null ? 0 : aiTotal.intValue());
         aiCalls.setSuccess(aiOk == null ? 0 : aiOk.intValue());
-        aiCalls.setFailed(aiFail == null ? 0 : aiFail.intValue());
+        aiCalls.setFailed(aiTotal == null ? 0 : (aiTotal.intValue() - (aiOk == null ? 0 : aiOk.intValue())));
         dto.setAiCalls(aiCalls);
+        // 分组统计
+        dto.setHierarchyAiCalls(countByStage.apply("MODULE_HIERARCHY"));
+        dto.setDocAiCalls(countByStage.apply("MODULE_DOC"));
 
         // 5. current: 模块数
         TaskLogSummaryDto.Current current = new TaskLogSummaryDto.Current();
@@ -326,6 +349,10 @@ public class TaskLogSummaryServiceImpl implements TaskLogSummaryService {
             if (begin.find()) {
                 String key = begin.group(2);
                 long tsMs = parseTs(begin.group(1));
+                // 阶段切换：先将上一阶段标记为 done（避免所有历史阶段都卡在 running 状态）
+                if (active != null && "running".equals(active.getStatus())) {
+                    active.setStatus("done");
+                }
                 PipelineStageStatDto s = started.get(key);
                 if (s != null) {
                     s.setStartedAt(toLocalDateTime(begin.group(1)));

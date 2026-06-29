@@ -1439,6 +1439,7 @@ public class AiSummaryServiceImpl implements AiSummaryService {
         record.setErrorReason(errorMsg);
         record.setDurationMs(duration);
         record.setCreatedAt(LocalDateTime.now());
+        record.setCallStage(callStage);
 
         // 模拟请求和响应存储
         String stageTag = callStage == null ? "call" : callStage.toLowerCase();

@@ -449,10 +449,24 @@ public class ModuleHierarchyServiceImpl implements ModuleHierarchyService {
             // 归一化 AI 输出的 ID：后端约定 prefix + 4 位 Base62 = 5 位总长，
             // 但 AI 可能按 "5 位 Base62" 字面理解为 prefix + 5 位 = 6 位，
             // 此处统一截断为 5 位后再做冲突检测与复用。
+            String rawModId = modId;
             modId = normalizeAiNodeId(modId, 'm', hierarchy.getModules().keySet());
             ModuleDto module = hierarchy.getModules().get(modId);
             if (module == null) {
-                module = new ModuleDto();
+                // 归一化后未匹配到模块：检查原始截断前的 ID（AI 输出的原值）是否存在于 map 中。
+                // 场景：DB 中有历史遗留的 6 位 ID（如 mA1b2C），AI 本次输出同样的 6 位值，
+                // 归一化截断为 5 位 (mA1b2) 后与 map 中的 key (mA1b2C) 不一致。
+                // 此时应将遗留模块重命名到归一化后的 5 位 ID，避免 persistAll 保存重复。
+                if (!modId.equals(rawModId)) {
+                    module = hierarchy.getModules().get(rawModId);
+                    if (module != null) {
+                        log.info("将历史遗留 6 位模块 ID {} 重命名为 5 位 ID {}", rawModId, modId);
+                        hierarchy.getModules().remove(rawModId);
+                    }
+                }
+                if (module == null) {
+                    module = new ModuleDto();
+                }
                 module.setId(modId);
                 hierarchy.getModules().put(modId, module);
             }
@@ -466,6 +480,7 @@ public class ModuleHierarchyServiceImpl implements ModuleHierarchyService {
             for (JsonNode subNode : subsNode) {
                 String subId = subNode.path("id").asText("");
                 if (!StringUtils.hasText(subId)) continue;
+                String rawSubId = subId;
                 subId = normalizeAiNodeId(subId, 's', existingSubModuleIds);
                 if (existingSubModuleIds.contains(subId) && !module.getSubModules().containsKey(subId)) {
                     log.warn("AI 输出子模块 ID {} 与同任务其他模块冲突，重新生成", subId);
@@ -473,7 +488,17 @@ public class ModuleHierarchyServiceImpl implements ModuleHierarchyService {
                 }
                 SubModuleDto sub = module.getSubModules().get(subId);
                 if (sub == null) {
-                    sub = new SubModuleDto();
+                    // 兼容历史遗留 6 位 ID：查原始截断前的 key
+                    if (!subId.equals(rawSubId)) {
+                        sub = module.getSubModules().get(rawSubId);
+                        if (sub != null) {
+                            log.info("将历史遗留 6 位子模块 ID {} 重命名为 5 位 ID {}", rawSubId, subId);
+                            module.getSubModules().remove(rawSubId);
+                        }
+                    }
+                    if (sub == null) {
+                        sub = new SubModuleDto();
+                    }
                     sub.setId(subId);
                     module.getSubModules().put(subId, sub);
                     existingSubModuleIds.add(subId);
@@ -488,6 +513,7 @@ public class ModuleHierarchyServiceImpl implements ModuleHierarchyService {
                 for (JsonNode fnNode : fnsNode) {
                     String fnId = fnNode.path("id").asText("");
                     if (!StringUtils.hasText(fnId)) continue;
+                    String rawFnId = fnId;
                     fnId = normalizeAiNodeId(fnId, 'f', existingFunctionIds);
                     if (existingFunctionIds.contains(fnId) && !sub.getFunctions().containsKey(fnId)) {
                         log.warn("AI 输出功能 ID {} 与同任务其他子模块冲突，重新生成", fnId);
@@ -495,7 +521,17 @@ public class ModuleHierarchyServiceImpl implements ModuleHierarchyService {
                     }
                     FunctionDto fn = sub.getFunctions().get(fnId);
                     if (fn == null) {
-                        fn = new FunctionDto();
+                        // 兼容历史遗留 6 位 ID：查原始截断前的 key
+                        if (!fnId.equals(rawFnId)) {
+                            fn = sub.getFunctions().get(rawFnId);
+                            if (fn != null) {
+                                log.info("将历史遗留 6 位功能 ID {} 重命名为 5 位 ID {}", rawFnId, fnId);
+                                sub.getFunctions().remove(rawFnId);
+                            }
+                        }
+                        if (fn == null) {
+                            fn = new FunctionDto();
+                        }
                         fn.setId(fnId);
                         sub.getFunctions().put(fnId, fn);
                         existingFunctionIds.add(fnId);
@@ -573,6 +609,7 @@ public class ModuleHierarchyServiceImpl implements ModuleHierarchyService {
         if (hierarchy.getModules().isEmpty()) {
             return;
         }
+        LocalDateTime now = LocalDateTime.now();
         List<ModuleHierarchyNode> rows = new ArrayList<>();
         for (ModuleDto m : hierarchy.getModules().values()) {
             ModuleHierarchyNode modRow = new ModuleHierarchyNode();
@@ -584,6 +621,8 @@ public class ModuleHierarchyServiceImpl implements ModuleHierarchyService {
             modRow.setName(m.getModuleName());
             modRow.setKeywords(serializeJsonArray(m.getKeywords()));
             modRow.setClassPaths(null);
+            modRow.setCreatedAt(now);
+            modRow.setUpdatedAt(now);
             rows.add(modRow);
         }
         nodeMapper.batchInsert(rows);
@@ -618,6 +657,8 @@ public class ModuleHierarchyServiceImpl implements ModuleHierarchyService {
                 subRow.setName(sm.getSubModuleName());
                 subRow.setKeywords(serializeJsonArray(sm.getKeywords()));
                 subRow.setClassPaths(null);
+                subRow.setCreatedAt(now);
+                subRow.setUpdatedAt(now);
                 subRows.add(subRow);
             }
         }
@@ -657,6 +698,8 @@ public class ModuleHierarchyServiceImpl implements ModuleHierarchyService {
                     fnRow.setKeywords(null);
                     fnRow.setClassPaths(serializeJsonArray(new ArrayList<>(fn.getClassPaths())));
                     fnRow.setMethodSignatures(serializeJsonArray(new ArrayList<>(fn.getMethodSignatures())));
+                    fnRow.setCreatedAt(now);
+                    fnRow.setUpdatedAt(now);
                     fnRows.add(fnRow);
                 }
             }

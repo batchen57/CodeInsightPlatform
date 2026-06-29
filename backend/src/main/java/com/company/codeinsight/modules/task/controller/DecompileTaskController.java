@@ -94,8 +94,10 @@ public class DecompileTaskController {
             @RequestParam(required = false) Long systemId,
             @RequestParam(required = false) String status,
             @RequestParam(required = false) String type,
-            @RequestParam(name = "statuses", required = false) java.util.List<String> statuses) {
-        Page<DecompileTask> page = decompileTaskService.listTasksPage(current, size, systemId, status, type, statuses);
+            @RequestParam(name = "statuses", required = false) java.util.List<String> statuses,
+            @RequestParam(required = false) Long scheduleId,
+            @RequestParam(required = false) String triggerSource) {
+        Page<DecompileTask> page = decompileTaskService.listTasksPage(current, size, systemId, status, type, statuses, scheduleId, triggerSource);
         PageResult<DecompileTask> result = new PageResult<>(page.getTotal(), page.getSize(), page.getCurrent(), page.getRecords());
         return ApiResponse.success(result);
     }

@@ -65,6 +65,10 @@ export interface Task {
   entryScanConfig?: EntryScanConfig;
   /** 是否启用模块层级调试（人工复核断点）；undefined 时按 TRUE 处理 */
   requireHierarchyReview?: boolean;
+  /** 触发来源：MANUAL 手动触发 / SCHEDULED 定时调度触发 */
+  triggerSource?: 'MANUAL' | 'SCHEDULED' | string;
+  /** 触发该任务的调度配置 ID（triggerSource=SCHEDULED 时非空） */
+  scheduleId?: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -106,6 +110,10 @@ export interface TaskLogSummary {
     chunksPending: number;
   };
   aiCalls: { total: number; success: number; failed: number };
+  /** AI_ANALYZING / MODULE_HIERARCHY 阶段（第一段 AI）的调用统计 */
+  hierarchyAiCalls?: { total: number; success: number; failed: number };
+  /** GENERATING_DOC 阶段（第二段 AI）的调用统计 */
+  docAiCalls?: { total: number; success: number; failed: number };
   /** 当前正在处理的进度索引；-1 表示未知 */
   current: {
     fileIndex: number;
@@ -301,5 +309,87 @@ export interface AiModelTestResult {
   durationMs: number;
   message: string;
   responseSummary?: string;
+}
+
+/* ===========================================================
+ * 定时任务调度（schedule）
+ * =========================================================== */
+
+/** 触发策略：INCREMENTAL 增量扫描 / INITIAL 全量扫描 */
+export type FireStrategy = 'INCREMENTAL' | 'INITIAL';
+
+/** 冲突策略：SKIP 上一次未结束则跳过 / QUEUE 排队等待 / PARALLEL 允许并发 */
+export type OverlapStrategy = 'SKIP' | 'QUEUE' | 'PARALLEL';
+
+/** 触发状态：CREATED / RUNNING / SUCCESS / FAILED / SKIPPED / QUEUED */
+export type FireStatus =
+  | 'CREATED'
+  | 'RUNNING'
+  | 'SUCCESS'
+  | 'FAILED'
+  | 'SKIPPED'
+  | 'QUEUED'
+  | string;
+
+/**
+ * 定时任务调度配置（对应 ci_schedule_task 表）
+ */
+export interface ScheduleTask {
+  id: number;
+  systemId: number;
+  repositoryId: number;
+  name: string;
+  description?: string;
+  /** Spring 6 位 cron 表达式：秒 分 时 日 月 周 */
+  cronExpression: string;
+  /** 时区，默认 Asia/Shanghai */
+  timezone: string;
+  /** 是否启用：0-禁用 1-启用 */
+  enabled: number;
+  fireStrategy: FireStrategy;
+  overlapStrategy: OverlapStrategy;
+  modularizePromptId?: number;
+  documentPromptId?: number;
+  modelName?: string;
+  entryScanConfig?: EntryScanConfig;
+  /** 是否启用模块层级调试断点：0-否 1-是 */
+  requireHierarchyReview?: number;
+  lastFiredAt?: string;
+  /** 最近一次触发产生的反编译任务 ID */
+  lastTaskId?: number;
+  /** 最近一次触发状态 */
+  lastStatus?: FireStatus;
+  /** 下一次触发时间（cron 计算结果） */
+  nextFireAt?: string;
+  totalFired: number;
+  totalSuccess: number;
+  totalFailed: number;
+  totalSkipped: number;
+  createdBy?: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** 定时任务触发记录（对应 ci_schedule_fire_record 表） */
+export interface ScheduleFireRecord {
+  id: number;
+  scheduleId: number;
+  /** 本次触发创建的反编译任务 ID（SKIPPED 时为空） */
+  taskId?: number;
+  fireTime: string;
+  plannedTime: string;
+  status: FireStatus;
+  skipReason?: string;
+  errorMessage?: string;
+  durationMs?: number;
+  createdAt: string;
+}
+
+/** 立即触发接口返回 */
+export interface TriggerNowResult {
+  scheduleId: number;
+  taskId?: number;
+  fireRecordId?: number;
+  status?: FireStatus;
 }
 

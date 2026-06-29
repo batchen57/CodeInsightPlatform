@@ -31,6 +31,10 @@ export const listTasks = (params: {
   /** 多状态过滤（与 status 互斥，AXIOS 会自动序列化为 ?statuses=A&statuses=B） */
   statuses?: string[];
   type?: string;
+  /** 按 scheduleId 过滤（用于定时任务详情页联动） */
+  scheduleId?: number;
+  /** 按触发来源过滤：MANUAL / SCHEDULED */
+  triggerSource?: 'MANUAL' | 'SCHEDULED' | string;
 }): Promise<PageResult<Task>> => {
   return request.get('/tasks', { params });
 };
@@ -78,12 +82,18 @@ export interface RepositoryReadiness {
 }
 
 /**
- * 全局新建任务前置条件查询：
- * 任何 ci_knowledge_draft 仍处于 DRAFT / EDITING / REJECTED 时即返回 ready=false。
- * 后端对应接口：GET /api/drafts/readiness。
+ * 新建任务前置条件查询：可选按系统+仓库收窄作用域。
+ *
+ * 当 systemId 和 repositoryId 均不传时退化为全局查询（兼容旧场景）。
+ * 建议在创建任务向导步骤 0 选择系统+仓库后带参调用，实现精确校验，
+ * 避免 A 系统的未确认草稿阻塞 B 系统创建任务。
+ *
+ * 后端对应接口：GET /api/drafts/readiness?systemId=X&repositoryId=Y
  */
-export const getRepositoryReadiness = (): Promise<RepositoryReadiness> => {
-  return request.get('/drafts/readiness');
+export const getRepositoryReadiness = (
+  params: { systemId?: number; repositoryId?: number } = {},
+): Promise<RepositoryReadiness> => {
+  return request.get('/drafts/readiness', { params });
 };
 
 export const getTask = (id: number): Promise<Task> => {

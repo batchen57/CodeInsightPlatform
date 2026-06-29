@@ -17,9 +17,11 @@ public interface DecompileTaskService extends IService<DecompileTask> {
     /**
      * 分页、条件查询分析任务列表
      *
-     * @param statuses 多状态过滤（如 chip 分组过滤时使用），与 status 单值互斥
+     * @param statuses      多状态过滤（如 chip 分组过滤时使用），与 status 单值互斥
+     * @param scheduleId    触发该任务的 schedule 配置 ID（仅查询由指定定时任务触发的实例时使用），与 triggerSource 互斥
+     * @param triggerSource 触发来源：MANUAL / SCHEDULED；与 scheduleId 互斥
      */
-    Page<DecompileTask> listTasksPage(int current, int size, Long systemId, String status, String type, List<String> statuses);
+    Page<DecompileTask> listTasksPage(int current, int size, Long systemId, String status, String type, List<String> statuses, Long scheduleId, String triggerSource);
 
     /**
      * 按状态分组统计任务数量，供任务中心顶部 chips 角标使用。
@@ -61,6 +63,31 @@ public interface DecompileTaskService extends IService<DecompileTask> {
                                         Long modularizePromptId, Long documentPromptId,
                                         String modelName,
                                         EntryPointConfig entryScanConfig, Boolean requireHierarchyReview);
+
+    /**
+     * 创建一个全量任务，并打上触发来源标签。
+     *
+     * <p>主要用于定时任务调度：每次 cron tick 会生成一条 ci_task 记录，
+     * 通过 {@code triggerSource=SCHEDULED} + {@code scheduleId} 把该任务与具体的调度配置关联起来，
+     * 便于前端在任务列表做来源筛选与回链到调度详情。</p>
+     *
+     * @param triggerSource 触发来源（MANUAL / SCHEDULED）；为 null 时按 MANUAL 处理
+     * @param scheduleId    调度配置 ID（仅 SCHEDULED 时非空）
+     */
+    DecompileTask createInitialTask(Long systemId, Long repositoryId,
+                                    Long modularizePromptId, Long documentPromptId,
+                                    String modelName,
+                                    EntryPointConfig entryScanConfig, Boolean requireHierarchyReview,
+                                    String triggerSource, Long scheduleId);
+
+    /**
+     * 创建一个增量任务，并打上触发来源标签（同上）。
+     */
+    DecompileTask createIncrementalTask(Long systemId, Long repositoryId,
+                                        Long modularizePromptId, Long documentPromptId,
+                                        String modelName,
+                                        EntryPointConfig entryScanConfig, Boolean requireHierarchyReview,
+                                        String triggerSource, Long scheduleId);
 
     /**
      * 触发异步执行引擎以启动该分析任务

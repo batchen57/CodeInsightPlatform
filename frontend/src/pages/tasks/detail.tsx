@@ -213,28 +213,27 @@ const timelineItem = (s: PipelineStageStat) => {
   };
 };
 
+  // 当前进行中的阶段中文名（用于 Timeline 中高亮提示 + 友好提示的默认值）
+  const currentStageLabel = summary?.pipeline?.find((s) => s.status === 'running')?.label ?? '';
+
   // 友好提示：失败时不暴露具体异常，仅指向"查看完整日志"
   const friendlyHint = (() => {
     if (!task) return '';
+    const durMs = summary?.durationMs || task.durationMs || 0;
+    const sec = durMs > 0 ? (durMs / 1000).toFixed(1) : '0.0';
     if (task.status === 'FAILED') {
       return '任务失败，请查看完整日志';
     }
     if (['PUSHED', 'CANCELLED', 'ARCHIVED'].includes(task.status)) {
-      const sec = task.durationMs ? (task.durationMs / 1000).toFixed(1) : '0.0';
       return `任务已结束 · 累计耗时 ${sec} 秒`;
     }
     if (['PENDING_REVIEW', 'REVIEWING', 'CONFIRMED'].includes(task.status)) {
-      const sec = task.durationMs ? (task.durationMs / 1000).toFixed(1) : '0.0';
       return `等待人工复核 · 累计耗时 ${sec} 秒`;
     }
     const done = summary?.pipeline?.filter((s) => s.status === 'done' || s.status === 'skipped').length ?? 0;
     const total = summary?.pipeline?.length ?? 8;
-    const sec = task.durationMs ? (task.durationMs / 1000).toFixed(1) : '0.0';
-    return `正在：${meta?.label ?? task.status} · 已完成 ${done}/${total} 阶段 · 累计 ${sec} 秒`;
+    return `正在：${currentStageLabel || meta?.label || task.status} · 已完成 ${done}/${total} 阶段 · 累计 ${sec} 秒`;
   })();
-
-  // 当前进行中的阶段中文名（用于 Timeline 中高亮提示）
-  const currentStageLabel = summary?.pipeline?.find((s) => s.status === 'running')?.label ?? '';
 
   // Mock 模式 / 真实模型文案
   const aiModeLabel = summary?.aiMock ? 'Mock 模式' : '真实模型';
@@ -251,7 +250,7 @@ const timelineItem = (s: PipelineStageStat) => {
         showIcon
         message="任务不存在"
         description={`未找到任务 #${taskId}。`}
-        action={<Button onClick={() => navigate('/tasks')}>返回任务列表</Button>}
+        action={<Button onClick={() => navigate('/tasks')}>返回手动下发</Button>}
       />
     );
   }
@@ -434,14 +433,14 @@ const timelineItem = (s: PipelineStageStat) => {
               status={task.status === 'FAILED' ? 'exception' : 'active'}
             />
 
-            {/* 2. 4 列 KPI：扫描文件 / 代码切片 / AI 成功 / AI 失败 */}
+            {/* 2. KPI 行：扫描文件 / 代码切片 / AI_ANALYZING AI / GENERATING_DOC AI */}
             <div className="ci-kpi-grid" style={{ marginTop: 12 }}>
               <Card size="small" className="ci-stat-card">
                 <Statistic
                   title="扫描文件"
                   value={
                     summary
-                      ? `${Math.max(summary.current.chunkIndex, 0)} / ${summary.counters.totalFiles || summary.current.totalFiles}`
+                      ? `${summary.counters.totalFiles || summary.current.totalFiles || 0}`
                       : 0
                   }
                   valueStyle={{ fontSize: 20 }}
@@ -449,32 +448,45 @@ const timelineItem = (s: PipelineStageStat) => {
               </Card>
               <Card size="small" className="ci-stat-card">
                 <Statistic
-                  title="代码切片（已处理/总数）"
+                  title="代码切片"
                   value={
                     summary
-                      ? `${(summary.counters.chunksAnalyzed + summary.counters.chunksFailed)} / ${summary.counters.totalChunks}`
-                      : '0 / 0'
+                      ? summary.counters.totalChunks || summary.current.totalChunks || 0
+                      : 0
                   }
                   valueStyle={{ fontSize: 20 }}
                 />
               </Card>
               <Card size="small" className="ci-stat-card">
                 <Statistic
-                  title="AI 成功"
-                  value={summary?.aiCalls.success ?? 0}
+                  title="模块提炼 AI"
+                  value={summary?.hierarchyAiCalls?.success ?? summary?.aiCalls.success ?? 0}
                   valueStyle={{ color: '#16a34a', fontSize: 20 }}
                   prefix={<CheckCircleOutlined />}
+                  suffix={
+                    <Text type="secondary" style={{ fontSize: 12 }}>
+                      / {(summary?.hierarchyAiCalls?.total ?? 0)} 调用
+                      {(summary?.hierarchyAiCalls?.failed ?? 0) > 0 &&
+                        <Text type="danger" style={{ fontSize: 12 }}> · {(summary?.hierarchyAiCalls?.failed ?? 0)} 失败</Text>
+                      }
+                    </Text>
+                  }
                 />
               </Card>
               <Card size="small" className="ci-stat-card">
                 <Statistic
-                  title="AI 失败"
-                  value={summary?.aiCalls.failed ?? 0}
-                  valueStyle={{
-                    color: (summary?.aiCalls.failed ?? 0) > 0 ? '#dc2626' : undefined,
-                    fontSize: 20,
-                  }}
-                  prefix={<CloseCircleOutlined />}
+                  title="文档生成 AI"
+                  value={summary?.docAiCalls?.success ?? 0}
+                  valueStyle={{ color: '#16a34a', fontSize: 20 }}
+                  prefix={<CheckCircleOutlined />}
+                  suffix={
+                    <Text type="secondary" style={{ fontSize: 12 }}>
+                      / {(summary?.docAiCalls?.total ?? 0)} 调用
+                      {(summary?.docAiCalls?.failed ?? 0) > 0 &&
+                        <Text type="danger" style={{ fontSize: 12 }}> · {(summary?.docAiCalls?.failed ?? 0)} 失败</Text>
+                      }
+                    </Text>
+                  }
                 />
               </Card>
             </div>

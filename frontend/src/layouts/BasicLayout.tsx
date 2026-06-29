@@ -1,5 +1,5 @@
-import React, { useMemo, useState } from 'react';
-import { Avatar, Badge, Button, Dropdown, Layout, Menu, Space, Tag, Tooltip, Typography } from 'antd';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Avatar, Badge, Breadcrumb, Button, Dropdown, Layout, Menu, Space, Tag, Tooltip, Typography } from 'antd';
 import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
   ApartmentOutlined,
@@ -7,6 +7,7 @@ import {
   BarChartOutlined,
   BellOutlined,
   BranchesOutlined,
+  ClockCircleOutlined,
   CloudUploadOutlined,
   CodeOutlined,
   DashboardOutlined,
@@ -20,6 +21,7 @@ import {
   PlayCircleOutlined,
   SettingOutlined,
   SwapOutlined,
+  UnorderedListOutlined,
   UserOutlined,
 } from '@ant-design/icons';
 import { useAuthStore } from '../stores/auth';
@@ -27,11 +29,22 @@ import { useAuthStore } from '../stores/auth';
 const { Header, Content, Sider } = Layout;
 const { Text, Title } = Typography;
 
+interface NavItem {
+  key: string;
+  icon: React.ReactNode;
+  label: React.ReactNode;
+  title: string;
+  description: string;
+  /** 子菜单：用于把『手动下发 / 定时任务』挂在『反编译任务』下 */
+  children?: NavItem[];
+}
+
 /**
  * 侧边栏导航条数据源配置
  * 定义左侧菜单各个模块的路由路径、图标、标题文本以及详细的功能解释说明说明。
+ * 支持父子结构：父菜单本身可点击进入默认页，下方子菜单用于聚合相关子页面。
  */
-const navigation = [
+const navigation: NavItem[] = [
   {
     key: '/',
     icon: <DashboardOutlined />,
@@ -63,9 +76,27 @@ const navigation = [
   {
     key: '/tasks',
     icon: <PlayCircleOutlined />,
-    label: <Link to="/tasks">反编译任务</Link>,
+    // 父菜单 label 不用 Link，保留纯文本：点击只展开/折叠，避免 SubMenu 渲染带链接标题时样式发暗；
+    // 默认进入父菜单时直接跳到第一个子页（手动下发）。
+    label: '反编译任务',
     title: '反编译任务',
-    description: '创建、启动、终止、重试并监控代码知识生成任务。',
+    description: '管理反编译任务：手动下发的实例与按 cron 周期触发的定时调度配置。',
+    children: [
+      {
+        key: '/tasks',
+        icon: <UnorderedListOutlined />,
+        label: <Link to="/tasks">手动下发</Link>,
+        title: '手动下发的反编译任务',
+        description: '查看由用户手动创建并启动的反编译任务实例，支持启动 / 终止 / 重试 / 进入复核。',
+      },
+      {
+        key: '/schedules',
+        icon: <ClockCircleOutlined />,
+        label: <Link to="/schedules">定时任务</Link>,
+        title: '定时任务调度',
+        description: '配置 cron 表达式，按指定周期自动创建并执行反编译任务；支持跳过 / 排队 / 并行三种冲突策略。',
+      },
+    ],
   },
   {
     key: '/tasks/hierarchy-review',
@@ -105,17 +136,72 @@ const navigation = [
 ];
 
 /**
- * 辅助定位匹配当前选中的侧边栏高亮菜单项 Key 值
- * 当路径同时匹配多个菜单（如 /tasks 与 /tasks/hierarchy-review）时，按 key 长度倒序优先匹配最具体的项
+ * 把 NavItem 树拍平为 AntD Menu items 需要的结构。
+ * 子项 key 在父项 key 之下，selectedKey 取最深匹配。
  */
-const getSelectedKey = (pathname: string) => {
-  if (pathname === '/') {
-    return '/';
+const buildMenuItems = (items: NavItem[]): { menuItems: any[]; flatMap: Map<string, NavItem> } => {
+  const flatMap = new Map<string, NavItem>();
+  const menuItems = items.map((item) => {
+    flatMap.set(item.key, item);
+    const mi: any = { key: item.key, icon: item.icon, label: item.label };
+    if (item.children && item.children.length > 0) {
+      mi.children = item.children.map((c) => {
+        flatMap.set(c.key, c);
+        return { key: c.key, icon: c.icon, label: c.label };
+      });
+    }
+    return mi;
+  });
+  return { menuItems, flatMap };
+};
+
+const { menuItems, flatMap: navFlatMap } = buildMenuItems(navigation);
+
+/**
+ * 计算 selectedKey 与 openKeys：
+ * - selectedKey 取最深匹配的菜单 key（子菜单优先于父菜单）
+ * - selectedKeys 额外包含所有祖先父菜单 key，让父菜单在子项被选中时也高亮
+ * - openKeys 取所有祖先父菜单 key
+ */
+const computeMenuState = (pathname: string) => {
+  let selectedKey = '/';
+  let bestDepth = -1;
+  const selectedKeys = new Set<string>(['/']);
+  const openKeys = new Set<string>();
+
+  const visit = (item: NavItem, ancestors: string[]) => {
+    const matches =
+      item.key === '/'
+        ? pathname === '/'
+        : pathname === item.key || pathname.startsWith(item.key + '/');
+    if (matches) {
+      const depth = item.key.split('/').length;
+      if (depth > bestDepth) {
+        bestDepth = depth;
+        selectedKey = item.key;
+      }
+      selectedKeys.add(item.key);
+      ancestors.forEach((a) => {
+        selectedKeys.add(a);
+        openKeys.add(a);
+      });
+    }
+    if (item.children) {
+      for (const child of item.children) {
+        visit(child, [...ancestors, item.key]);
+      }
+    }
+  };
+
+  for (const item of navigation) {
+    visit(item, []);
   }
-  const matches = navigation
-    .filter((item) => item.key !== '/' && pathname.startsWith(item.key))
-    .sort((a, b) => b.key.length - a.key.length);
-  return matches[0]?.key ?? '/';
+
+  return {
+    selectedKey,
+    selectedKeys: Array.from(selectedKeys),
+    openKeys: Array.from(openKeys),
+  };
 };
 
 /**
@@ -127,18 +213,50 @@ const BasicLayout: React.FC = () => {
   const [collapsed, setCollapsed] = useState(false);
   // 控制移动端小屏幕自适应的状态
   const [isMobile, setIsMobile] = useState(false);
-  
+
   const location = useLocation();
   const navigate = useNavigate();
   const session = useAuthStore((state) => state.session);
   const clearSession = useAuthStore((state) => state.clearSession);
-  const selectedKey = getSelectedKey(location.pathname);
-  
+
+  // 计算当前选中的菜单 key 与需要展开的父菜单 key
+  const { selectedKey, selectedKeys, openKeys: initialOpenKeys } = useMemo(
+    () => computeMenuState(location.pathname),
+    [location.pathname],
+  );
+  // 用户也可手动展开/折叠父菜单
+  // 行为约定：
+  // - 初次进入页面：openKeys 初始化为命中路径的父菜单（initialOpenKeys）
+  // - 路由变化且命中其他父菜单：自动把新父菜单追加到 openKeys（不删除用户已展开的）
+  // - 用户手动操作过一次后：不再受路由变化影响（除非用户再次操作）
+  const [openKeys, setOpenKeys] = useState<string[]>(initialOpenKeys);
+  const userTouchedRef = useRef(false);
+  useEffect(() => {
+    if (userTouchedRef.current) return;
+    setOpenKeys(initialOpenKeys);
+  }, [initialOpenKeys]);
+
+  const handleOpenChange = (keys: string[]) => {
+    userTouchedRef.current = true;
+    setOpenKeys(keys);
+  };
+
   // 实时估算当前页面配置数据以更新页头标题解释
+  // 优先取子菜单（如 /schedules 命中"定时任务"），否则回退到父菜单
   const currentPage = useMemo(
-    () => navigation.find((item) => item.key === selectedKey) ?? navigation[0],
+    () => navFlatMap.get(selectedKey) ?? navigation[0],
     [selectedKey],
   );
+
+  // 如果当前选中的是子菜单，取其父菜单用于面包屑
+  const parentNavItem = useMemo(() => {
+    for (const item of navigation) {
+      if (item.children?.some((c) => c.key === selectedKey)) {
+        return item;
+      }
+    }
+    return null;
+  }, [selectedKey]);
 
   const handleLogout = () => {
     clearSession();
@@ -178,9 +296,15 @@ const BasicLayout: React.FC = () => {
           {!collapsed && <span className="ci-sider-label">核心流程</span>}
           <Menu
             mode="inline"
-            selectedKeys={[selectedKey]}
-            items={navigation.map(({ key, icon, label }) => ({ key, icon, label }))}
-            onClick={() => isMobile && setCollapsed(true)}
+            selectedKeys={selectedKeys}
+            openKeys={openKeys}
+            onOpenChange={handleOpenChange}
+            onClick={() => {
+              if (isMobile) setCollapsed(true);
+              // 父菜单（带 children 的项）点击不跳转——只通过 onOpenChange 展开/折叠。
+              // 必须用户点击某个具体子菜单项才路由跳转。
+            }}
+            items={menuItems}
             className="ci-menu"
           />
         </div>
@@ -259,6 +383,15 @@ const BasicLayout: React.FC = () => {
           {/* 统一的面包屑及描述页头 */}
           <section className="ci-page-heading">
             <div className="ci-page-heading-copy">
+              {parentNavItem && (
+                <Breadcrumb
+                  className="ci-page-breadcrumb"
+                  items={[
+                    { title: <Link to={parentNavItem.key}>{parentNavItem.title}</Link> },
+                    { title: currentPage.title },
+                  ]}
+                />
+              )}
               <Text className="ci-page-kicker">WORKSPACE</Text>
               <Title level={2}>{currentPage.title}</Title>
               <Text type="secondary">{currentPage.description}</Text>

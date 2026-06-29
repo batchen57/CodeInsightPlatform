@@ -140,5 +140,17 @@ public interface DraftService {
      * @return 就绪度聚合 DTO；阻塞列表为空时 ready=true
      */
     com.company.codeinsight.modules.draft.dto.RepositoryReadinessDto findGlobalReadiness();
+
+    /**
+     * 基于系统+仓库的新建任务前置条件查询，作用域收窄到指定组合。
+     *
+     * <p>与 {@link #findGlobalReadiness()} 的区别：只检查属于 {@code systemId + repositoryId}
+     * 组合的未确认草稿，避免 A 系统的草稿阻塞 B 系统创建任务。</p>
+     *
+     * @param systemId     业务系统 ID（为空时退化为全局查询）
+     * @param repositoryId 代码库 ID（为空时仅按 systemId 过滤）
+     * @return 就绪度聚合 DTO
+     */
+    com.company.codeinsight.modules.draft.dto.RepositoryReadinessDto findReadiness(Long systemId, Long repositoryId);
 }
 

@@ -85,11 +85,14 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
     @Autowired
     private KnowledgeDraftMapper draftMapper;
 
+    @Autowired
+    private com.company.codeinsight.modules.draft.mapper.DraftWorkspaceMapper workspaceMapper;
+
     /**
      * 分页获取任务列表
      */
     @Override
-    public Page<DecompileTask> listTasksPage(int current, int size, Long systemId, String status, String type, List<String> statuses) {
+    public Page<DecompileTask> listTasksPage(int current, int size, Long systemId, String status, String type, List<String> statuses, Long scheduleId, String triggerSource) {
         Page<DecompileTask> page = new Page<>(current, size);
         LambdaQueryWrapper<DecompileTask> queryWrapper = new LambdaQueryWrapper<>();
         queryWrapper.eq(systemId != null, DecompileTask::getSystemId, systemId)
@@ -97,6 +100,10 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
                 .eq(StringUtils.hasText(status), DecompileTask::getStatus, status)
                 .in(statuses != null && !statuses.isEmpty(), DecompileTask::getStatus, statuses)
                 .eq(StringUtils.hasText(type), DecompileTask::getType, type)
+                // 按 scheduleId 过滤（用于定时任务详情页查看该 schedule 触发的所有反编译任务）
+                .eq(scheduleId != null, DecompileTask::getScheduleId, scheduleId)
+                // 按 triggerSource 过滤（手动下发 / 定时触发视图）
+                .eq(StringUtils.hasText(triggerSource), DecompileTask::getTriggerSource, triggerSource)
                 .orderByDesc(DecompileTask::getCreatedAt);
         return this.page(page, queryWrapper);
     }
@@ -161,7 +168,7 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
                                            Boolean requireHierarchyReview) {
         // 验证系统和仓库的从属合法性
         validateTaskSource(systemId, repositoryId);
-        validateNoUnconfirmedDrafts();
+        validateNoUnconfirmedDrafts(systemId, repositoryId);
         DecompileTask task = new DecompileTask();
         task.setSystemId(systemId);
         task.setRepositoryId(repositoryId);
@@ -201,7 +208,7 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
                                                com.company.codeinsight.modules.entrypoint.model.EntryPointConfig entryScanConfig,
                                                Boolean requireHierarchyReview) {
         validateTaskSource(systemId, repositoryId);
-        validateNoUnconfirmedDrafts();
+        validateNoUnconfirmedDrafts(systemId, repositoryId);
         DecompileTask task = new DecompileTask();
         task.setSystemId(systemId);
         task.setRepositoryId(repositoryId);
@@ -226,6 +233,64 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
 
         this.save(task);
         return task;
+    }
+
+    /**
+     * 创建全量任务，并打上触发来源标签。
+     * <p>复用 {@link #createInitialTask(Long, Long, Long, Long, String, com.company.codeinsight.modules.entrypoint.model.EntryPointConfig, Boolean)}，
+     * 保存后回填 triggerSource / scheduleId（避免在原方法签名里追加与现有调用方无关的参数）。</p>
+     */
+    @Override
+    @Transactional
+    public DecompileTask createInitialTask(Long systemId, Long repositoryId,
+                                           Long modularizePromptId, Long documentPromptId,
+                                           String modelName,
+                                           com.company.codeinsight.modules.entrypoint.model.EntryPointConfig entryScanConfig,
+                                           Boolean requireHierarchyReview,
+                                           String triggerSource, Long scheduleId) {
+        DecompileTask task = createInitialTask(systemId, repositoryId,
+                modularizePromptId, documentPromptId, modelName, entryScanConfig, requireHierarchyReview);
+        applyTriggerSource(task.getId(), triggerSource, scheduleId);
+        task.setTriggerSource(normalizeTriggerSource(triggerSource));
+        task.setScheduleId(scheduleId);
+        return task;
+    }
+
+    /**
+     * 创建增量任务，并打上触发来源标签。
+     */
+    @Override
+    @Transactional
+    public DecompileTask createIncrementalTask(Long systemId, Long repositoryId,
+                                               Long modularizePromptId, Long documentPromptId,
+                                               String modelName,
+                                               com.company.codeinsight.modules.entrypoint.model.EntryPointConfig entryScanConfig,
+                                               Boolean requireHierarchyReview,
+                                               String triggerSource, Long scheduleId) {
+        DecompileTask task = createIncrementalTask(systemId, repositoryId,
+                modularizePromptId, documentPromptId, modelName, entryScanConfig, requireHierarchyReview);
+        applyTriggerSource(task.getId(), triggerSource, scheduleId);
+        task.setTriggerSource(normalizeTriggerSource(triggerSource));
+        task.setScheduleId(scheduleId);
+        return task;
+    }
+
+    /**
+     * 把 trigger_source / schedule_id 写回刚保存的 task 行。
+     * <p>为了避免在 {@link #createInitialTask} 内部加可选参数打断原签名，
+     * 这里用 lambdaUpdate 仅更新这两列。</p>
+     */
+    private void applyTriggerSource(Long taskId, String triggerSource, Long scheduleId) {
+        String normalized = normalizeTriggerSource(triggerSource);
+        this.lambdaUpdate()
+                .eq(DecompileTask::getId, taskId)
+                .set(DecompileTask::getTriggerSource, normalized)
+                .set(DecompileTask::getScheduleId, "SCHEDULED".equals(normalized) ? scheduleId : null)
+                .update();
+    }
+
+    private static String normalizeTriggerSource(String triggerSource) {
+        return "SCHEDULED".equalsIgnoreCase(triggerSource) ? "SCHEDULED" : "MANUAL";
     }
 
     /**
@@ -278,19 +343,32 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
     }
 
     /**
-     * 业务前置条件：全局任意一个草稿仍处于非终态时禁止新建任务。
+     * 业务前置条件：基于当前系统+仓库校验未确认草稿，禁止新建任务。
      *
      * <p>非终态白名单与 {@link com.company.codeinsight.modules.draft.service.impl.DraftServiceImpl#findGlobalReadiness()}
      * 保持一致：DRAFT / EDITING 视为未完成。CONFIRMED / PUSHED / ARCHIVED 算"已消化"。
-     * 自 v0.3 起 REJECTED 已从枚举移除，存量 REJECTED 由 schema.sql 末尾的迁移刷为 DRAFT，
-     * 故本校验不再单独判 REJECTED。</p>
      *
-     * <p>为什么放在 service 层而不是 controller：避免前端绕过向导直接 POST 时绕过校验；
-     * 状态机层也无法拦截（状态机只管"任务已经创建之后"的流转）。</p>
+     * <p>通过 DraftWorkspace 桥接 KnowledgeDraft，只检查属于当前 systemId + repositoryId 组合的草稿，
+     * 避免 A 系统的未确认草稿阻塞 B 系统创建任务。</p>
      */
-    private void validateNoUnconfirmedDrafts() {
+    private void validateNoUnconfirmedDrafts(Long systemId, Long repositoryId) {
+        // 1. 查询该系统+仓库下的工作区
+        List<com.company.codeinsight.modules.draft.entity.DraftWorkspace> workspaces = workspaceMapper.selectList(
+                new LambdaQueryWrapper<com.company.codeinsight.modules.draft.entity.DraftWorkspace>()
+                        .eq(com.company.codeinsight.modules.draft.entity.DraftWorkspace::getSystemId, systemId)
+                        .eq(com.company.codeinsight.modules.draft.entity.DraftWorkspace::getRepositoryId, repositoryId)
+        );
+        if (workspaces.isEmpty()) {
+            return; // 无工作区 = 该组合尚无草稿，直接放行
+        }
+        List<Long> workspaceIds = workspaces.stream()
+                .map(com.company.codeinsight.modules.draft.entity.DraftWorkspace::getId)
+                .collect(java.util.stream.Collectors.toList());
+
+        // 2. 在这些工作区中查找未确认草稿
         long blocking = draftMapper.selectCount(
                 new LambdaQueryWrapper<KnowledgeDraft>()
+                        .in(KnowledgeDraft::getWorkspaceId, workspaceIds)
                         .notIn(KnowledgeDraft::getStatus, java.util.List.of(
                                 DraftStatus.CONFIRMED.name(),
                                 DraftStatus.PUSHED.name(),
@@ -298,7 +376,7 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
                         ))
         );
         if (blocking > 0) {
-            throw new BusinessException("当前仍有 " + blocking +
+            throw new BusinessException("当前系统和代码库下仍有 " + blocking +
                     " 个草稿未确认，无法新建任务。请前往「复核工作区」完成确认。");
         }
     }
