@@ -40,13 +40,23 @@
 /* 背景柔光球：颜色与点阵呼应，单层不抢戏 */
 .login-orb {
   position: absolute;
-  z-index: 0;
+  z-index: 1;
   pointer-events: none;
   width: 24rem;
   height: 24rem;
   border-radius: 50%;
   filter: blur(80px);
   opacity: 0.4;
+}
+
+/* 代码雨画布：在底纹之上、卡片之下 */
+.ci-code-rain {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  width: 100% !important;
+  height: 100% !important;
 }
 .login-orb--tl {
   top: -10rem;

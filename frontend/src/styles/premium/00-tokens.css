@@ -1,0 +1,142 @@
+/**
+ * CodeInsight 设计 Token
+ * 所有颜色、字号、间距、圆角、阴影的唯一来源。
+ * 组件样式和 AntD ConfigProvider 都从这里取值,禁止在别处写死。
+ *
+ * 命名规范:
+ *   --ci-{category}-{name}
+ *   category: primary / info / bg / text / border / accent / status / space / radius / shadow / font / z
+ */
+
+:root {
+  /* ============ 主色 ============ */
+  --ci-primary: #3F74D8;
+  --ci-primary-hover: #2F5FB8;
+  --ci-primary-active: #1E4A98;
+  --ci-info: #4A9BE8;
+  --ci-primary-bg: #EDF4FF;
+  --ci-primary-bg-hover: #F0F7FF;
+  --ci-page-bg: #F6F9FF;
+  --ci-surface: #FFFFFF;
+  --ci-surface-2: #FAFBFF;
+
+  /* ============ 辅助色(状态点缀) ============ */
+  --ci-accent-purple: #7C5CD8;
+  --ci-accent-purple-bg: #F3EEFF;
+  --ci-accent-purple-ink: #5E3FB8;
+
+  --ci-accent-gold: #D89A2F;
+  --ci-accent-gold-bg: #FDF6E3;
+  --ci-accent-gold-ink: #A56A0F;
+
+  --ci-accent-red: #DC2626;
+  --ci-accent-red-bg: #FEE2E2;
+  --ci-accent-red-ink: #991B1B;
+
+  --ci-accent-green: #10B981;
+  --ci-accent-green-bg: #D1FAE5;
+  --ci-accent-green-ink: #047857;
+
+  /* ============ 中性色 ============ */
+  --ci-ink: #161923;
+  --ci-text: #475569;
+  --ci-text-secondary: #64748B;
+  --ci-text-tertiary: #94A3B8;
+  --ci-border: #E5EAF5;
+  --ci-border-hover: #CBD5E1;
+  --ci-divider: #F1F5F9;
+
+  /* ============ 状态胶囊(6 状态) ============ */
+  --ci-status-primary-dot: #3F74D8;
+  --ci-status-primary-bg: #EDF4FF;
+  --ci-status-primary-text: #2F5FB8;
+
+  --ci-status-purple-dot: #7C5CD8;
+  --ci-status-purple-bg: #F3EEFF;
+  --ci-status-purple-text: #5E3FB8;
+
+  --ci-status-gray-dot: #94A3B8;
+  --ci-status-gray-bg: #F1F5F9;
+  --ci-status-gray-text: #475569;
+
+  --ci-status-gold-dot: #D89A2F;
+  --ci-status-gold-bg: #FDF6E3;
+  --ci-status-gold-text: #A56A0F;
+
+  --ci-status-red-dot: #DC2626;
+  --ci-status-red-bg: #FEE2E2;
+  --ci-status-red-text: #991B1B;
+
+  --ci-status-green-dot: #10B981;
+  --ci-status-green-bg: #D1FAE5;
+  --ci-status-green-text: #047857;
+
+  /* ============ 字号 ============ */
+  --ci-font-size-xs: 11px;
+  --ci-font-size-sm: 12px;
+  --ci-font-size-base: 13px;
+  --ci-font-size-md: 14px;
+  --ci-font-size-lg: 16px;
+  --ci-font-size-xl: 18px;
+  --ci-font-size-2xl: 20px;
+  --ci-font-size-3xl: 28px;
+  --ci-font-size-4xl: 32px;
+
+  /* ============ 字重 ============ */
+  --ci-font-weight-regular: 400;
+  --ci-font-weight-medium: 500;
+  --ci-font-weight-semibold: 600;
+  --ci-font-weight-bold: 700;
+
+  /* ============ 行高 ============ */
+  --ci-line-height-tight: 1.2;
+  --ci-line-height-base: 1.5;
+  --ci-line-height-relaxed: 1.7;
+
+  /* ============ 字体 ============ */
+  --ci-font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', sans-serif;
+  --ci-font-mono: 'JetBrains Mono', 'IBM Plex Mono', ui-monospace, SFMono-Regular, 'Cascadia Mono', Menlo, monospace;
+
+  /* ============ 间距(4 倍数) ============ */
+  --ci-space-1: 4px;
+  --ci-space-2: 8px;
+  --ci-space-3: 12px;
+  --ci-space-4: 16px;
+  --ci-space-5: 20px;
+  --ci-space-6: 24px;
+  --ci-space-7: 28px;
+  --ci-space-8: 32px;
+  --ci-space-10: 40px;
+  --ci-space-12: 48px;
+  --ci-space-16: 64px;
+
+  /* ============ 圆角(克制,工程化) ============ */
+  --ci-radius-sm: 4px;
+  --ci-radius-md: 6px;
+  --ci-radius-lg: 8px;
+  --ci-radius-xl: 10px;
+  --ci-radius-pill: 999px;
+
+  /* ============ 阴影(弱化) ============ */
+  --ci-shadow-card: 0 1px 2px rgba(15, 23, 42, 0.04);
+  --ci-shadow-card-hover: 0 2px 8px rgba(63, 116, 216, 0.06);
+  --ci-shadow-modal: 0 20px 60px rgba(15, 23, 42, 0.12);
+  --ci-shadow-button-primary: 0 0 0 3px rgba(63, 116, 216, 0.12);
+  --ci-shadow-button-primary-active: 0 0 0 3px rgba(63, 116, 216, 0.16);
+  --ci-shadow-input-focus: 0 0 0 3px rgba(63, 116, 216, 0.08);
+
+  /* ============ 高度 ============ */
+  --ci-control-height-sm: 28px;
+  --ci-control-height-md: 32px;
+  --ci-control-height-lg: 36px;
+  --ci-control-height-xl: 40px;
+
+  /* ============ 层级 ============ */
+  --ci-z-dropdown: 1000;
+  --ci-z-sticky: 1020;
+  --ci-z-modal-backdrop: 1040;
+  --ci-z-modal: 1050;
+  --ci-z-popover: 1060;
+  --ci-z-tooltip: 1070;
+  --ci-z-toast: 1080;
+}

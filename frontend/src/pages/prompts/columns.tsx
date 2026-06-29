@@ -1,6 +1,6 @@
 import { Button, Popconfirm, Space, Switch, Tag, Tooltip, Typography } from 'antd';
 import type { TableProps } from 'antd';
-import { CopyOutlined, PlayCircleOutlined } from '@ant-design/icons';
+import { CopyOutlined,DeleteOutlined, PlayCircleOutlined } from '@ant-design/icons';
 import type { Prompt } from '../../types';
 import { formatDateTime } from './utils';
 
@@ -83,9 +83,7 @@ export const createPromptColumns = ({
           okText="确定"
           cancelText="取消"
         >
-          <Button size="small" danger>
-            删除
-          </Button>
+          <Button size="small" danger icon={<DeleteOutlined />} />
         </Popconfirm>
       </Space>
     ),

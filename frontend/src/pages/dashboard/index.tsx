@@ -183,35 +183,84 @@ const Dashboard: React.FC = () => {
     ],
   };
 
+  // 生成 sparkline 7 天数据(实际接入时由 API 提供)
+  const sparkSeries = (seed: number, base: number) =>
+    Array.from({ length: 7 }, (_, i) =>
+      Math.max(0, Math.round(base + Math.sin((i + seed) * 0.7) * (base * 0.18 + 1))),
+    );
+
+  // 简化 sparkline 配置:无坐标轴、无 tooltip,只画一条平滑线
+  const buildSparkOption = (color: string, data: number[]) => ({
+    color: [color],
+    grid: { top: 2, right: 2, bottom: 2, left: 2 },
+    xAxis: { type: 'category', show: false, data: data.map((_, i) => i) },
+    yAxis: { type: 'value', show: false, scale: true },
+    tooltip: { show: false },
+    series: [
+      {
+        type: 'line',
+        data,
+        smooth: true,
+        symbol: 'none',
+        lineStyle: { width: 1.5 },
+        areaStyle: {
+          color: {
+            type: 'linear',
+            x: 0,
+            y: 0,
+            x2: 0,
+            y2: 1,
+            colorStops: [
+              { offset: 0, color: color + '33' },
+              { offset: 1, color: color + '00' },
+            ],
+          },
+        },
+      },
+    ],
+  });
+
   // KPI 顶部卡片元配置数组
   const kpis = [
     {
       label: '已接入系统',
       value: stats.systems,
       meta: '已配置的业务系统',
+      change: '+2',
+      changeUp: true,
       icon: <ProjectOutlined />,
-      accent: '#2563eb',
+      accent: '#3F74D8',
+      sparkData: sparkSeries(1, Math.max(stats.systems, 4)),
     },
     {
       label: '运行中任务',
       value: stats.activeTasks,
-      meta: '正在拉取、解析或生成',
+      meta: '正在拉取 / 解析 / 生成',
+      change: stats.activeTasks > 0 ? '运行中' : '空闲',
+      changeUp: stats.activeTasks > 0,
       icon: <PlayCircleOutlined />,
-      accent: '#0891b2',
+      accent: '#7C5CD8',
+      sparkData: sparkSeries(2, Math.max(stats.activeTasks, 3)),
     },
     {
       label: '复核队列',
       value: stats.pendingReviews,
       meta: '等待负责人复核的草稿',
+      change: stats.pendingReviews > 0 ? `待处理 ${stats.pendingReviews}` : '已清空',
+      changeUp: stats.pendingReviews > 0,
       icon: <FileDoneOutlined />,
-      accent: '#d97706',
+      accent: '#D89A2F',
+      sparkData: sparkSeries(3, Math.max(stats.pendingReviews, 2)),
     },
     {
       label: 'Token 用量',
       value: stats.todayTokens.toLocaleString(),
       meta: `预计 $${Number(stats.cost || 0).toFixed(4)}`,
+      change: '本周',
+      changeUp: true,
       icon: <DollarOutlined />,
-      accent: '#16a34a',
+      accent: '#10B981',
+      sparkData: chartData?.dailyTrends?.slice(-7).map((d) => d.tokens) ?? sparkSeries(4, 1000),
     },
   ];
 
@@ -261,8 +310,22 @@ const Dashboard: React.FC = () => {
             </div>
             <div className="ci-kpi-card-body">
               <div className="ci-kpi-value">{item.value}</div>
-              <div className="ci-kpi-meta">{item.meta}</div>
+              <div className="ci-kpi-meta">
+                <span className="ci-kpi-meta-main">{item.meta}</span>
+                <span className={`ci-kpi-meta-change ${item.changeUp ? 'is-up' : 'is-neutral'}`}>
+                  {item.change}
+                </span>
+              </div>
             </div>
+            {item.sparkData && item.sparkData.length > 0 && (
+              <div className="ci-kpi-spark">
+                <ReactECharts
+                  option={buildSparkOption(item.accent, item.sparkData)}
+                  style={{ height: '100%' }}
+                  opts={{ renderer: 'svg' }}
+                />
+              </div>
+            )}
           </div>
         ))}
       </div>

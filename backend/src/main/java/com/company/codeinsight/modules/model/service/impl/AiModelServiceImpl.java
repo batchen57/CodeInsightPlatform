@@ -39,6 +39,11 @@ public class AiModelServiceImpl extends ServiceImpl<AiModelMapper, AiModel> impl
     @Autowired
     private TokenUsageAuditMapper tokenUsageAuditMapper;
 
+    /**
+     * 全局 Mock AI 只影响任务/提示词等 AI 业务链路。
+     * 模型配置页的“测试连接”必须验证当前模型自身的真实接口配置，不能被该开关短路。
+     */
+    @SuppressWarnings("unused")
     @Value("${code-insight.ai.mock:true}")
     private boolean mockAiEnabled;
 
@@ -156,14 +161,6 @@ public class AiModelServiceImpl extends ServiceImpl<AiModelMapper, AiModel> impl
             throw new BusinessException("模型不存在");
         }
         long started = System.currentTimeMillis();
-        if (mockAiEnabled) {
-            AiModelTestResult result = new AiModelTestResult();
-            result.setSuccess(true);
-            result.setDurationMs(System.currentTimeMillis() - started);
-            result.setMessage("Mock 模型测试通过");
-            result.setResponseSummary("已使用本地 Mock AI 完成轻量连通性验证。");
-            return result;
-        }
         if (!StringUtils.hasText(model.getBaseUrl())) {
             return buildTestResult(false, started, "模型接口地址未配置", null, model.getApiKey());
         }

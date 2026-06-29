@@ -17,6 +17,7 @@ import { useAuthStore } from '../../stores/auth';
 import type { LoginRequest } from '../../types';
 import BrandMark from './BrandMark';
 import OtpInput from './OtpInput';
+import CodeRain from '../../components/CodeRain';
 import './index.css';
 
 const { Text, Title } = Typography;
@@ -72,6 +73,9 @@ const Login: React.FC = () => {
 
   return (
     <main className="login-screen">
+      {/* 代码雨背景动效 — 科技感(代码相关) */}
+      <CodeRain />
+
       <div className="login-orb login-orb--tl" aria-hidden="true" />
       <div className="login-orb login-orb--br" aria-hidden="true" />
 
