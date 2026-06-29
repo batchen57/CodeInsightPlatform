@@ -24,6 +24,11 @@ public interface TokenAuditService {
     void logTokenUsage(Long systemId, Long taskId, String modelName, int inputTokens, int outputTokens, String type, boolean isSuccess);
 
     /**
+     * 同上，额外记录触发用户 ID（用于用户级额度校验与审计）。
+     */
+    void logTokenUsage(Long systemId, Long taskId, Long userId, String modelName, int inputTokens, int outputTokens, String type, boolean isSuccess);
+
+    /**
      * 分页、条件查询明细记录列表
      */
     Page<TokenUsageAudit> listAuditPage(int current, int size, Long systemId, String modelName, String type);
@@ -52,5 +57,15 @@ public interface TokenAuditService {
      * @return 当前月份消耗的 Token 总数
      */
     int getSystemMonthlyTokens(Long systemId);
+
+    /**
+     * 获取指定用户当日（本地日历 00:00 起）已消耗的 Token 数。
+     */
+    int getUserDailyTokens(Long userId);
+
+    /**
+     * 获取指定用户当月（自然月 1 号 00:00 起）已消耗的 Token 数。
+     */
+    int getUserMonthlyTokens(Long userId);
 }
 

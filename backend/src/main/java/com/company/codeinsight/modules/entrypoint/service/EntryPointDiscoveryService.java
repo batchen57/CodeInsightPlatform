@@ -1,5 +1,6 @@
 package com.company.codeinsight.modules.entrypoint.service;
 
+import com.company.codeinsight.modules.entrypoint.model.DiscoveredEntrypoint;
 import com.company.codeinsight.modules.entrypoint.model.EntryPoint;
 import com.company.codeinsight.modules.entrypoint.model.EntryPointConfig;
 
@@ -18,6 +19,21 @@ public interface EntryPointDiscoveryService {
 
     /** 新调用：传自定义 EntryPointConfig */
     List<EntryPoint> discoverEntries(Long taskId, File projectDir, EntryPointConfig config);
+
+    /**
+     * 在 {@link #discoverEntries(Long, File, EntryPointConfig)} 基础上，每条入口额外附带 {@code DiscoveredMethod} 列表
+     * <p>仅用于 ENTRYPOINT_REVIEW 阶段落表 ci_entrypoint.methods_json；不参与 AI 调度逻辑。</p>
+     *
+     * <p>方法抽取策略：
+     * <ul>
+     *   <li>CONTROLLER：仅含 {@code requestMapping != null} 的方法（即带 @RequestMapping / @GetMapping / @PostMapping 等）</li>
+     *   <li>SCHEDULED_JOB / MQ_LISTENER / COMPONENT：当前 parser 暂未抽取方法级注解，
+     *       回退为该类所有非 private 方法，{@code annotation} 字段填 {@code "class-level: @xxx"}</li>
+     *   <li>APPLICATION / MAIN：{@code main()} 方法</li>
+     * </ul>
+     * </p>
+     */
+    List<DiscoveredEntrypoint> discoverEntriesWithMethods(Long taskId, File projectDir, EntryPointConfig config);
 
     /** 兼容旧调用 */
     String collectReachableSource(Long taskId, String entryClassName, File projectDir);

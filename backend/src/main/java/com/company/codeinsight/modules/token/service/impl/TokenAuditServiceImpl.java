@@ -37,8 +37,13 @@ public class TokenAuditServiceImpl implements TokenAuditService {
      */
     @Override
     public void logTokenUsage(Long systemId, Long taskId, String modelName, int inputTokens, int outputTokens, String type, boolean isSuccess) {
+        logTokenUsage(systemId, taskId, null, modelName, inputTokens, outputTokens, type, isSuccess);
+    }
+
+    @Override
+    public void logTokenUsage(Long systemId, Long taskId, Long userId, String modelName, int inputTokens, int outputTokens, String type, boolean isSuccess) {
         int total = inputTokens + outputTokens;
-        
+
         // 计算计费费用：输入每百万 Token 约 2 美元，输出每百万 Token 约 6 美元
         double costVal = (inputTokens * 0.000002) + (outputTokens * 0.000006);
         BigDecimal cost = BigDecimal.valueOf(costVal).setScale(6, RoundingMode.HALF_UP);
@@ -46,6 +51,7 @@ public class TokenAuditServiceImpl implements TokenAuditService {
         TokenUsageAudit audit = new TokenUsageAudit();
         audit.setSystemId(systemId != null ? systemId : 0L);
         audit.setTaskId(taskId != null ? taskId : 0L);
+        audit.setUserId(userId);
         audit.setPromptVersion(1); // 默认提示词版本
         audit.setModelName(modelName != null ? modelName : "MiniMax-M3");
         audit.setInputTokens(inputTokens);
@@ -184,6 +190,30 @@ public class TokenAuditServiceImpl implements TokenAuditService {
         List<TokenUsageAudit> list = auditMapper.selectList(
                 new LambdaQueryWrapper<TokenUsageAudit>()
                         .eq(TokenUsageAudit::getSystemId, systemId)
+                        .ge(TokenUsageAudit::getCreatedAt, startOfMonth)
+        );
+        return list.stream().mapToInt(TokenUsageAudit::getTotalTokens).sum();
+    }
+
+    @Override
+    public int getUserDailyTokens(Long userId) {
+        if (userId == null) return 0;
+        LocalDateTime startOfDay = LocalDateTime.now().withHour(0).withMinute(0).withSecond(0).withNano(0);
+        List<TokenUsageAudit> list = auditMapper.selectList(
+                new LambdaQueryWrapper<TokenUsageAudit>()
+                        .eq(TokenUsageAudit::getUserId, userId)
+                        .ge(TokenUsageAudit::getCreatedAt, startOfDay)
+        );
+        return list.stream().mapToInt(TokenUsageAudit::getTotalTokens).sum();
+    }
+
+    @Override
+    public int getUserMonthlyTokens(Long userId) {
+        if (userId == null) return 0;
+        LocalDateTime startOfMonth = LocalDateTime.now().withDayOfMonth(1).withHour(0).withMinute(0).withSecond(0).withNano(0);
+        List<TokenUsageAudit> list = auditMapper.selectList(
+                new LambdaQueryWrapper<TokenUsageAudit>()
+                        .eq(TokenUsageAudit::getUserId, userId)
                         .ge(TokenUsageAudit::getCreatedAt, startOfMonth)
         );
         return list.stream().mapToInt(TokenUsageAudit::getTotalTokens).sum();

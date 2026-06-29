@@ -50,4 +50,7 @@ public class ScheduleTaskCreateDto {
 
     /** 是否启用模块层级调试断点；null 时按默认 TRUE */
     private Boolean requireHierarchyReview;
+
+    /** 是否启用知识入口复核断点；null 时按默认 TRUE */
+    private Boolean requireEntrypointReview;
 }

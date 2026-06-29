@@ -13,3 +13,5 @@ code-insight:
     poll-interval-ms: 60000    # 主轮询间隔（毫秒），到点扫描到期 schedule
     queue-poll-interval-ms: 30000  # 队列消费间隔（QUEUE 策略）
     lock-ttl-seconds: 30       # Redis 分布式锁 TTL
+  task:
+    queue-dispatch-interval-ms: 5000   # 任务队列调度器轮询间隔（毫秒），TaskQueueDispatcher 周期

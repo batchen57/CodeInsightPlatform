@@ -167,13 +167,39 @@ public class DecompilePromptController {
 
     /**
      * 调试试跑提示词模板：提交测试源码片断，实时调度大模型分析返回归纳结果以辅助调试
+     * <p>如果请求里带 {@code resolvedContent}（前端已替换占位符），后端直接使用，不再二次替换。</p>
      */
     @Operation(summary = "试跑提示词模板")
     @PostMapping("/{id}/test-run")
     public ApiResponse<PromptTestResultDto> testRun(@PathVariable Long id, @RequestBody TestRunRequest request) {
-        PromptTestResultDto result = decompilePromptService.testRun(id, request.getSampleCode(), request.getModelId());
+        PromptTestResultDto result = decompilePromptService.testRun(
+                id, request.getSampleCode(), request.getModelId(), request.getResolvedContent());
         operationLogService.logOperation(null, null, "TEST_RUN_PROMPT", "试跑提示词模板, ID: " + id + ", 消耗时间: " + result.getDurationMs() + "ms", null, true);
         return ApiResponse.success(result);
+    }
+
+    /**
+     * 将指定提示词设为该 prompt_type 的默认；
+     * 不修改 content/version/name，单纯切换 is_default 标志。
+     * 同一 prompt_type 只能有一条默认（数据库 partial unique index 兜底）。
+     */
+    @Operation(summary = "设为默认提示词")
+    @PostMapping("/{id}/default")
+    public ApiResponse<DecompilePrompt> setDefault(@PathVariable Long id) {
+        DecompilePrompt prompt = decompilePromptService.getById(id);
+        if (prompt == null) {
+            throw new BusinessException("提示词模板不存在");
+        }
+        if (prompt.getStatus() == null || prompt.getStatus() == 0) {
+            throw new BusinessException("已禁用的提示词不能设为默认");
+        }
+        // 先把同类型下其他提示词的 is_default 清掉
+        clearDefaultPrompts(prompt.getPromptType(), id, 1);
+        prompt.setIsDefault(1);
+        decompilePromptService.updateById(prompt);
+        operationLogService.logOperation(null, null, "SET_DEFAULT_PROMPT",
+                "设置默认提示词: ID=" + id + ", name=" + prompt.getName() + ", type=" + prompt.getPromptType(), null, true);
+        return ApiResponse.success(prompt);
     }
 
     /**
@@ -185,7 +211,7 @@ public class DecompilePromptController {
         StreamingResponseBody body = outputStream -> {
             long started = System.currentTimeMillis();
             try {
-                decompilePromptService.testRunStream(id, request.getSampleCode(), request.getModelId(), event -> {
+                decompilePromptService.testRunStream(id, request.getSampleCode(), request.getModelId(), request.getResolvedContent(), event -> {
                     try {
                         outputStream.write((objectMapper.writeValueAsString(event) + "\n").getBytes(StandardCharsets.UTF_8));
                         outputStream.flush();
@@ -211,13 +237,18 @@ public class DecompilePromptController {
     @Data
     public static class TestRunRequest {
         /**
-         * 用于测试输入的一段样例源码（如 Java 方法代码）
+         * 用于测试输入的一段样例源码（如 Java 方法代码），同时也是 source_code 占位符的默认值
          */
         private String sampleCode;
         /**
          * 所需测试调用的 AI 大模型 ID
          */
         private Long modelId;
+        /**
+         * 前端已替换占位符的最终 prompt 正文。
+         * 如果非空,后端直接使用该内容调用 AI,不再做占位符替换和 class/method 解析。
+         */
+        private String resolvedContent;
     }
 
     private void clearDefaultPrompts(String promptType, Long excludeId, Integer isDefault) {

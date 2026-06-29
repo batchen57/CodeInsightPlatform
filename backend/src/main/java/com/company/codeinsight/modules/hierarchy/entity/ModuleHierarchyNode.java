@@ -51,6 +51,13 @@ public class ModuleHierarchyNode {
     @TableField("method_signatures")
     private String methodSignatures;
 
+    /**
+     * 人工逐项复核确认标记：TRUE=已被用户在 MODULE_HIERARCHY_REVIEW 复核页勾选为已确认；
+     * FALSE=未确认（默认）。仅作为审计痕迹，不影响 AI 流程。
+     */
+    @TableField("confirmed")
+    private Boolean confirmed;
+
     private LocalDateTime createdAt;
 
     private LocalDateTime updatedAt;

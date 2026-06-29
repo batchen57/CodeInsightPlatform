@@ -1,5 +1,9 @@
 package com.company.codeinsight.modules.hierarchy.model;
 
+import com.company.codeinsight.common.util.jackson.YnBooleanDeserializer;
+import com.company.codeinsight.common.util.jackson.YnBooleanSerializer;
+import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
+import com.fasterxml.jackson.databind.annotation.JsonSerialize;
 import lombok.Data;
 
 import java.util.ArrayList;
@@ -22,6 +26,13 @@ public class SubModuleDto {
 
     /** 关键词列表 */
     private List<String> keywords = new ArrayList<>();
+
+    /**
+     * 人工逐项复核确认标记：JSON 中以 "Y" / "N" 字符串形式呈现
+     */
+    @JsonSerialize(using = YnBooleanSerializer.class)
+    @JsonDeserialize(using = YnBooleanDeserializer.class)
+    private Boolean confirmed;
 
     /** 功能列表（按 function_id 索引） */
     private Map<String, FunctionDto> functions = new LinkedHashMap<>();

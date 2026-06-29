@@ -20,4 +20,5 @@ public class ScheduleTaskUpdateDto {
     private String modelName;
     private com.company.codeinsight.modules.entrypoint.model.EntryPointConfig entryScanConfig;
     private Boolean requireHierarchyReview;
+    private Boolean requireEntrypointReview;
 }

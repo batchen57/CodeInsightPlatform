@@ -14,11 +14,13 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.Map;
+
 /**
  * 业务系统应用管理控制器
- * 提供接入应用系统的新增登记、信息编辑、详情获取、分页模糊条件筛选、启停状态维护以及软删除端点。
+ * 提供接入应用系统的新增登记、信息编辑、详情获取、分页模糊条件筛选、状态机切换以及软删除端点。
  */
-@Tag(name = "系统管理", description = "系统的增删改查及启停接口")
+@Tag(name = "系统管理", description = "系统的增删改查及状态切换接口")
 @RestController
 @RequestMapping("/systems")
 @Validated
@@ -30,17 +32,15 @@ public class SystemApplicationController {
     @Autowired
     private OperationLogService operationLogService;
 
-    @Operation(summary = "新增系统")
+    @Operation(summary = "新增系统（向导 Step 1：基本信息）")
     @PostMapping
     public ApiResponse<SystemApplication> createSystem(@Valid @RequestBody SystemApplication system) {
-        system.setId(null);
-        system.setStatus(1);
-        systemApplicationService.save(system);
-        operationLogService.logOperation(system.getId(), null, "CREATE_SYSTEM", "创建系统: " + system.getName(), null, true);
-        return ApiResponse.success(system);
+        SystemApplication created = systemApplicationService.createSystemDraft(system);
+        operationLogService.logOperation(created.getId(), null, "CREATE_SYSTEM", "创建系统: " + created.getName(), null, true);
+        return ApiResponse.success(created);
     }
 
-    @Operation(summary = "编辑系统")
+    @Operation(summary = "编辑系统（基本信息 / 提示词绑定）")
     @PutMapping("/{id}")
     public ApiResponse<SystemApplication> updateSystem(@PathVariable Long id, @Valid @RequestBody SystemApplication system) {
         system.setId(id);
@@ -63,17 +63,34 @@ public class SystemApplicationController {
             @RequestParam(defaultValue = "10") int size,
             @RequestParam(required = false) String name,
             @RequestParam(required = false) String owner,
-            @RequestParam(required = false) Integer status) {
-        Page<SystemSummaryVO> page = systemApplicationService.listSystemsPage(current, size, name, owner, status);
+            @RequestParam(required = false) Integer status,
+            @RequestParam(required = false) String state) {
+        Page<SystemSummaryVO> page = systemApplicationService.listSystemsPage(current, size, name, owner, status, state);
         PageResult<SystemSummaryVO> result = new PageResult<>(page.getTotal(), page.getSize(), page.getCurrent(), page.getRecords());
         return ApiResponse.success(result);
     }
 
-    @Operation(summary = "启用/停用系统")
+    /**
+     * 旧 status 切换端点（1=启用 / 0=停用），已废弃，新代码请用 {@link #changeState}
+     */
+    @Operation(summary = "[已废弃] 启用/停用系统")
+    @Deprecated
     @PutMapping("/{id}/status")
     public ApiResponse<Void> changeStatus(@PathVariable Long id, @RequestParam Integer status) {
         systemApplicationService.changeStatus(id, status);
         operationLogService.logOperation(id, null, "CHANGE_SYSTEM_STATUS", "修改系统状态为: " + (status == 1 ? "启用" : "停用"), null, true);
+        return ApiResponse.success();
+    }
+
+    /**
+     * 状态机切换端点（仅允许 ACTIVE / DISABLED 两个目标态）
+     */
+    @Operation(summary = "状态机切换：ACTIVE / DISABLED")
+    @PutMapping("/{id}/state")
+    public ApiResponse<Void> changeState(@PathVariable Long id, @RequestBody Map<String, String> body) {
+        String target = body == null ? null : body.get("target");
+        systemApplicationService.changeState(id, target);
+        operationLogService.logOperation(id, null, "CHANGE_SYSTEM_STATE", "修改系统状态为: " + target, null, true);
         return ApiResponse.success();
     }
 

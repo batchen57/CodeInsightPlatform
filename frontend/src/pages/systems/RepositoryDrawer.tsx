@@ -64,6 +64,9 @@ const RepositoryDrawer: React.FC<Props> = ({
         <Space direction="vertical" size={18} style={{ width: '100%' }}>
           <Card size="small" title="系统信息">
             <Descriptions column={3} size="small">
+              <Descriptions.Item label="中文名称">
+                {system.nameCn || '未填写'}
+              </Descriptions.Item>
               <Descriptions.Item label="负责人">
                 <Tag color="blue">{system.owner}</Tag>
               </Descriptions.Item>

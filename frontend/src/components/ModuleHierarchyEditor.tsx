@@ -2,17 +2,20 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Alert,
   Button,
+  Checkbox,
   Empty,
   Input,
   Popconfirm,
   Select,
   Space,
+  Tabs,
   Tag,
   Tooltip,
   Typography,
   message,
 } from 'antd';
 import {
+  CheckCircleOutlined,
   DeleteOutlined,
   HolderOutlined,
   LoadingOutlined,
@@ -26,6 +29,7 @@ import {
   resumeModuleHierarchyReview,
 } from '../api/task';
 import type { FunctionNode, ModuleHierarchy, ModuleNode, SubModuleNode } from '../types';
+import ModuleHierarchyJsonEditor from './ModuleHierarchyJsonEditor';
 
 const { Text } = Typography;
 
@@ -513,6 +517,16 @@ const ModuleHierarchyEditor: React.FC<ModuleHierarchyEditorProps> = ({
               maxTagCount={3}
               popupMatchSelectWidth={false}
             />
+            <Tooltip title={mod.confirmed ? '已确认（点击取消）' : '未确认（点击标记为已确认）'}>
+              <Checkbox
+                checked={!!mod.confirmed}
+                onChange={(e) => updateModule(mod.id, { ...mod, confirmed: e.target.checked })}
+                onClick={(e) => e.stopPropagation()}
+                style={{ marginLeft: 4 }}
+              >
+                {mod.confirmed ? '已确认' : '未确认'}
+              </Checkbox>
+            </Tooltip>
             <span className="ci-tree-node-actions">
               <Tooltip title="新增子模块">
                 <Button
@@ -577,6 +591,18 @@ const ModuleHierarchyEditor: React.FC<ModuleHierarchyEditorProps> = ({
               maxTagCount={3}
               popupMatchSelectWidth={false}
             />
+            <Tooltip title={sub.confirmed ? '已确认（点击取消）' : '未确认（点击标记为已确认）'}>
+              <Checkbox
+                checked={!!sub.confirmed}
+                onChange={(e) =>
+                  updateSubModule(modId, sub.id, { ...sub, confirmed: e.target.checked })
+                }
+                onClick={(e) => e.stopPropagation()}
+                style={{ marginLeft: 4 }}
+              >
+                {sub.confirmed ? '已确认' : '未确认'}
+              </Checkbox>
+            </Tooltip>
             <span className="ci-tree-node-actions">
               <Tooltip title="新增功能">
                 <Button
@@ -644,6 +670,18 @@ const ModuleHierarchyEditor: React.FC<ModuleHierarchyEditorProps> = ({
               popupMatchSelectWidth={false}
             />
           </Tooltip>
+          <Tooltip title={fn.confirmed ? '已确认（点击取消）' : '未确认（点击标记为已确认）'}>
+            <Checkbox
+              checked={!!fn.confirmed}
+              onChange={(e) =>
+                updateFunction(modId, subId, fn.id, { ...fn, confirmed: e.target.checked })
+              }
+              onClick={(e) => e.stopPropagation()}
+              style={{ marginLeft: 4 }}
+            >
+              {fn.confirmed ? '已确认' : '未确认'}
+            </Checkbox>
+          </Tooltip>
           <span className="ci-tree-node-actions">
             <Popconfirm
               title="确认删除该功能节点？"
@@ -685,6 +723,35 @@ const ModuleHierarchyEditor: React.FC<ModuleHierarchyEditorProps> = ({
 
   const moduleCount = Object.keys(hierarchy?.modules ?? {}).length;
 
+  // 当前激活的 tab：tree（默认）/ json
+  const [activeTab, setActiveTab] = useState<'tree' | 'json'>('tree');
+
+  // 批量确认操作
+  const handleConfirmAll = (value: boolean) => {
+    setHierarchy((prev) => {
+      if (!prev) return prev;
+      const modules = { ...(prev.modules ?? {}) };
+      for (const modKey of Object.keys(modules)) {
+        const mod = modules[modKey];
+        if (!mod) continue;
+        const newSubModules: Record<string, SubModuleNode> = { ...(mod.subModules ?? {}) };
+        for (const subKey of Object.keys(newSubModules)) {
+          const sub = newSubModules[subKey];
+          if (!sub) continue;
+          const newFns: Record<string, FunctionNode> = { ...(sub.functions ?? {}) };
+          for (const fnKey of Object.keys(newFns)) {
+            const fn = newFns[fnKey];
+            if (!fn) continue;
+            newFns[fnKey] = { ...fn, confirmed: value };
+          }
+          newSubModules[subKey] = { ...sub, confirmed: value, functions: newFns };
+        }
+        modules[modKey] = { ...mod, confirmed: value, subModules: newSubModules };
+      }
+      return { ...prev, modules };
+    });
+  };
+
   if (loading) {
     return (
       <div style={{ padding: 48, textAlign: 'center' }}>
@@ -717,11 +784,15 @@ const ModuleHierarchyEditor: React.FC<ModuleHierarchyEditorProps> = ({
                 拖拽 <HolderOutlined /> 手柄可移动子模块（放入另一模块）或功能（放入另一子模块），同层间隙放置可排序。
               </li>
               <li>
+                每个节点右侧带「已确认/未确认」复选框，用于逐项标记人工复核进度；JSON 中以 <Text code>"Y"</Text> / <Text code>"N"</Text>{' '}
+                呈现。也可以切换到 <b>JSON 编辑</b> tab 直接基于 JSON 文本快速批量修改。
+              </li>
+              <li>
                 功能节点的「类路径」与其它字段一起整体落表 <Text code>ci_module_hierarchy</Text>
                 （FUNCTION 行 class_paths 列），服务重启不会丢失。
               </li>
               <li>
-                「类路径」仅在调用 AI 时被剥离，不会出现在 analyze / module_doc 提示词中。
+                「类路径」与「已确认」仅在调用 AI 时被剥离，不会出现在 analyze / module_doc 提示词中。
               </li>
               <li>
                 点击「保存并继续」将落表 ModuleHierarchy 并推进流水线至 GENERATING_DOC。
@@ -762,41 +833,78 @@ const ModuleHierarchyEditor: React.FC<ModuleHierarchyEditorProps> = ({
               全部折叠
             </Button>
           )}
+          {moduleCount > 0 && (
+            <>
+              <Button
+                size="small"
+                icon={<CheckCircleOutlined />}
+                onClick={() => handleConfirmAll(true)}
+              >
+                全部标记为已确认
+              </Button>
+              <Button size="small" onClick={() => handleConfirmAll(false)}>
+                取消全部确认
+              </Button>
+            </>
+          )}
         </Space>
         {renderSubmit && renderSubmit(handleSubmit, saving)}
       </div>
 
-      {/* 树容器 */}
-      {moduleCount === 0 ? (
-        <Empty description="尚无模块，点击上方「新增模块」按钮添加" />
-      ) : (
-        <div className="ci-hierarchy-tree-container">
-          <Tree
-            className="ci-hierarchy-tree"
-            treeData={treeData}
-            titleRender={titleRender}
-            draggable={{
-              icon: false,
-              nodeDraggable: () => true,
-            }}
-            allowDrop={allowDrop}
-            onDrop={onDrop}
-            expandedKeys={expandedKeys}
-            onExpand={(keys) => setExpandedKeys(keys)}
-            blockNode
-            showLine={{ showLeafIcon: false }}
-            motion={{
-              motionName: '',
-              motionAppear: false,
-              onAppearStart: () => ({ height: 0, opacity: 0 }),
-              onAppearActive: () => ({ height: 'auto', opacity: 1 }),
-              onLeaveStart: () => ({ height: 'auto', opacity: 1 }),
-              onLeaveActive: () => ({ height: 0, opacity: 0 }),
-            }}
-            virtual={false}
-          />
-        </div>
-      )}
+      <Tabs
+        activeKey={activeTab}
+        onChange={(k) => setActiveTab(k as 'tree' | 'json')}
+        items={[
+          {
+            key: 'tree',
+            label: '树形编辑',
+            children: (
+              <>
+                {moduleCount === 0 ? (
+                  <Empty description="尚无模块，点击上方「新增模块」按钮添加" />
+                ) : (
+                  <div className="ci-hierarchy-tree-container">
+                    <Tree
+                      className="ci-hierarchy-tree"
+                      treeData={treeData}
+                      titleRender={titleRender}
+                      draggable={{
+                        icon: false,
+                        nodeDraggable: () => true,
+                      }}
+                      allowDrop={allowDrop}
+                      onDrop={onDrop}
+                      expandedKeys={expandedKeys}
+                      onExpand={(keys) => setExpandedKeys(keys)}
+                      blockNode
+                      showLine={{ showLeafIcon: false }}
+                      motion={{
+                        motionName: '',
+                        motionAppear: false,
+                        onAppearStart: () => ({ height: 0, opacity: 0 }),
+                        onAppearActive: () => ({ height: 'auto', opacity: 1 }),
+                        onLeaveStart: () => ({ height: 'auto', opacity: 1 }),
+                        onLeaveActive: () => ({ height: 0, opacity: 0 }),
+                      }}
+                      virtual={false}
+                    />
+                  </div>
+                )}
+              </>
+            ),
+          },
+          {
+            key: 'json',
+            label: 'JSON 编辑',
+            children: (
+              <ModuleHierarchyJsonEditor
+                value={hierarchy}
+                onChange={(next) => setHierarchy(next)}
+              />
+            ),
+          },
+        ]}
+      />
     </div>
   );
 };

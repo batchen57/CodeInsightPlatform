@@ -1,5 +1,12 @@
 import request from './request';
-import type { EntryScanConfig, ModuleHierarchy, PageResult, Task, TaskLogSummary } from '../types';
+import type {
+  EntrypointReviewItem,
+  EntryScanConfig,
+  ModuleHierarchy,
+  PageResult,
+  Task,
+  TaskLogSummary,
+} from '../types';
 
 export interface TaskProgress {
   status: string;
@@ -10,17 +17,13 @@ export interface TaskProgress {
 export interface CreateTaskPayload {
   systemId: number;
   repositoryId: number;
-  /** 已废弃：请使用 modularizePromptVersion / documentPromptVersion */
-  promptVersion?: number;
-  /** 模块提取提示词版本（对应 ci_prompt.prompt_type=MODULARIZE），不传则后端兜底为默认版本 */
-  modularizePromptVersion?: number;
-  /** 文档生成提示词版本（对应 ci_prompt.prompt_type=DOCUMENT_GENERATION），不传则后端兜底为默认版本 */
-  documentPromptVersion?: number;
   modelName?: string;
   /** 入口扫描配置（可选；不传则走默认 Controller/JOB/MQ 兜底） */
   entryScanConfig?: EntryScanConfig;
   /** 是否启用模块层级调试（人工复核断点）；不传则按默认 TRUE 处理 */
   requireHierarchyReview?: boolean;
+  /** 是否启用知识入口复核（人工复核断点，介于 SPLITTING_TASK 与 AI_ANALYZING 之间）；不传则按默认 TRUE 处理 */
+  requireEntrypointReview?: boolean;
 }
 
 export const listTasks = (params: {
@@ -35,6 +38,14 @@ export const listTasks = (params: {
   scheduleId?: number;
   /** 按触发来源过滤：MANUAL / SCHEDULED */
   triggerSource?: 'MANUAL' | 'SCHEDULED' | string;
+  /** 简单搜索：纯数字按 id 精确匹配，否则按 model_name LIKE */
+  keyword?: string;
+  /** 精准搜索：模型名精确匹配 */
+  modelName?: string;
+  /** 精准搜索：创建时间下界（ISO timestamp，可空） */
+  createdAtStart?: string;
+  /** 精准搜索：创建时间上界（ISO timestamp，可空） */
+  createdAtEnd?: string;
 }): Promise<PageResult<Task>> => {
   return request.get('/tasks', { params });
 };
@@ -161,4 +172,45 @@ export const replaceModuleHierarchy = (id: number, payload: ModuleHierarchy): Pr
 /** 模块层级复核完成后恢复流水线 */
 export const resumeModuleHierarchyReview = (id: number): Promise<void> => {
   return request.post(`/tasks/${id}/module-hierarchy/resume`);
+};
+
+/** 拉取任务的知识入口复核清单（人工复核断点用，只读） */
+export const getEntrypointReview = (id: number): Promise<EntrypointReviewItem[]> => {
+  return request.get(`/tasks/${id}/entrypoints`);
+};
+
+/** 知识入口复核完成后恢复流水线（确认并继续） */
+export const resumeEntrypointReview = (id: number): Promise<void> => {
+  return request.post(`/tasks/${id}/entrypoints/resume`);
+};
+
+/** 知识入口复核驳回（终止任务） */
+export const rejectEntrypointReview = (id: number, reason?: string): Promise<void> => {
+  return request.post(`/tasks/${id}/entrypoints/reject`, { reason });
+};
+
+// ========== 任务队列管控 ==========
+
+/** 取消队列中的 PENDING 任务（PENDING → CANCELLED） */
+export const cancelQueuedTask = (id: number): Promise<void> => {
+  return request.post(`/tasks/${id}/cancel`);
+};
+
+/** 调整任务优先级（0-100，仅 PENDING 可调） */
+export const setTaskPriority = (id: number, priority: number): Promise<void> => {
+  return request.put(`/tasks/${id}/priority`, { priority });
+};
+
+/** 队列列表（PENDING 任务，priority DESC + created_at ASC） */
+export const listQueuedTasks = (params: {
+  current: number;
+  size: number;
+  systemId?: number;
+}): Promise<PageResult<Task>> => {
+  return request.get('/tasks/queue', { params });
+};
+
+/** 队列总览（总数 + 平均等待时长） */
+export const getQueueSummary = (): Promise<{ total: number; avgWaitSeconds: number }> => {
+  return request.get('/tasks/queue/summary');
 };

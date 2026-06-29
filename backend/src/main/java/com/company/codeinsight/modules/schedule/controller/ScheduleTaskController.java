@@ -148,7 +148,8 @@ public class ScheduleTaskController {
             @RequestParam(required = false) String type,
             @RequestParam(name = "statuses", required = false) List<String> statuses) {
         Page<DecompileTask> p = decompileTaskService.listTasksPage(
-                current, size, null, status, type, statuses, id, "SCHEDULED");
+                current, size, null, status, type, statuses, id, "SCHEDULED",
+                null, null, null, null);
         return ApiResponse.success(new PageResult<>(p.getTotal(), p.getSize(), p.getCurrent(), p.getRecords()));
     }
 }

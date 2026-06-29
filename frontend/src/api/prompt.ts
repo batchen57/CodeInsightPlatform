@@ -50,8 +50,21 @@ export const changePromptStatus = (id: number, status: number): Promise<void> =>
   return request.put(`/prompts/${id}/status`, null, { params: { status } });
 };
 
-export const testRunPrompt = (id: number, sampleCode: string, modelId?: number): Promise<PromptTestResult> => {
-  return request.post(`/prompts/${id}/test-run`, { sampleCode, modelId });
+/**
+ * 将指定提示词设为该 prompt_type 的默认；
+ * 不修改 content/version/name，单纯切换 is_default 标志。
+ */
+export const setDefaultPrompt = (id: number): Promise<Prompt> => {
+  return request.post(`/prompts/${id}/default`);
+};
+
+export const testRunPrompt = (
+  id: number,
+  sampleCode: string,
+  modelId?: number,
+  resolvedContent?: string,
+): Promise<PromptTestResult> => {
+  return request.post(`/prompts/${id}/test-run`, { sampleCode, modelId, resolvedContent });
 };
 
 export const testRunPromptStream = async (
@@ -60,6 +73,7 @@ export const testRunPromptStream = async (
   modelId: number | undefined,
   onEvent: (event: PromptTestStreamEvent) => void,
   signal?: AbortSignal,
+  resolvedContent?: string,
 ): Promise<void> => {
   const baseUrl = (import.meta.env.VITE_API_BASE_URL || '/api').replace(/\/$/, '');
   const session = useAuthStore.getState().session;
@@ -69,7 +83,7 @@ export const testRunPromptStream = async (
       'Content-Type': 'application/json',
       ...(session?.token ? { Authorization: `Bearer ${session.token}` } : {}),
     },
-    body: JSON.stringify({ sampleCode, modelId }),
+    body: JSON.stringify({ sampleCode, modelId, resolvedContent }),
     signal,
   });
 

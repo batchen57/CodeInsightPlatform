@@ -69,6 +69,10 @@ public class ScheduleTask extends BaseEntity {
     @TableField("require_hierarchy_review")
     private Integer requireHierarchyReview;
 
+    /** 是否启用知识入口复核断点；触发任务时复制到 ci_task */
+    @TableField("require_entrypoint_review")
+    private Integer requireEntrypointReview;
+
     /** 最近一次触发时间 */
     @TableField("last_fired_at")
     private LocalDateTime lastFiredAt;

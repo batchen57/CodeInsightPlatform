@@ -1,15 +1,20 @@
 package com.company.codeinsight.modules.auth.service.impl;
 
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.company.codeinsight.common.exception.BusinessException;
 import com.company.codeinsight.modules.auth.dto.LoginRequest;
 import com.company.codeinsight.modules.auth.dto.LoginResponse;
+import com.company.codeinsight.modules.auth.entity.UserAccount;
+import com.company.codeinsight.modules.auth.mapper.UserAccountMapper;
 import com.company.codeinsight.modules.auth.service.AuthService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
+import java.time.LocalDateTime;
 import java.util.UUID;
 
 /**
@@ -30,6 +35,9 @@ public class AuthServiceImpl implements AuthService {
     @Value("${code-insight.auth.admin-display-name:平台管理员}")
     private String adminDisplayName;
 
+    @Autowired
+    private UserAccountMapper userAccountMapper;
+
     private static final long EXPIRES_IN_SECONDS = 8 * 60 * 60L;
 
     @Override
@@ -49,6 +57,16 @@ public class AuthServiceImpl implements AuthService {
         // 占位：真实场景下此处调用 UM / 平安令牌接口二次校验
         if (!otp.matches("^\\d{6}$")) {
             throw new BusinessException("平安令牌格式不正确");
+        }
+
+        // 写回最近登录时间（基础配置-权限管理占位页用得到）
+        try {
+            userAccountMapper.update(null, new LambdaUpdateWrapper<UserAccount>()
+                    .eq(UserAccount::getUsername, adminUsername)
+                    .set(UserAccount::getLastLoginAt, LocalDateTime.now()));
+        } catch (Exception e) {
+            // ci_user 表未初始化（旧库）时忽略，不阻塞登录
+            log.debug("更新 last_login_at 失败（ci_user 表不存在？）: {}", e.getMessage());
         }
 
         LoginResponse response = new LoginResponse();

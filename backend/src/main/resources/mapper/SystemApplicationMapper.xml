@@ -31,6 +31,9 @@
             <if test="owner != null and owner != ''">
                 AND s.owner = #{owner}
             </if>
+            <if test="state != null and state != ''">
+                AND s.state = #{state}
+            </if>
             <if test="status != null">
                 AND s.status = #{status}
             </if>

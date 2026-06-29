@@ -21,6 +21,6 @@ public interface SystemApplicationMapper extends BaseMapper<SystemApplication> {
      */
     List<SystemSummaryVO> listSystemsWithSummary(@Param("name") String name,
                                                  @Param("owner") String owner,
-                                                 @Param("status") Integer status);
+                                                 @Param("state") String state);
 }
 

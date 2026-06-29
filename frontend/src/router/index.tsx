@@ -1,19 +1,36 @@
-import { createHashRouter } from 'react-router-dom';
+import { createHashRouter, Navigate } from 'react-router-dom';
 import BasicLayout from '../layouts/BasicLayout';
 import RequireAuth from './RequireAuth';
-import Dashboard from '../pages/dashboard';
+import RequireRole from './RequireRole';
+import TaskOverview from '../pages/dashboard/tasks-overview';
+import AiUsage from '../pages/dashboard/ai-usage';
+import PipelineAnalysis from '../pages/dashboard/pipeline-analysis';
+import SystemCoverage from '../pages/dashboard/system-coverage';
 import Systems from '../pages/systems';
-import Prompts from '../pages/prompts';
 import Tasks from '../pages/tasks';
+import TaskListTab from '../pages/tasks/TaskListTab';
+import TaskQueuePage from '../pages/tasks/queue';
+import TaskDispatchPage from '../pages/tasks/dispatch';
+import JobsList from '../pages/tasks/jobs';
+import JobDetail from '../pages/tasks/jobs/detail';
+import ScheduleFormPage from '../pages/tasks/jobs/ScheduleFormPage';
 import TaskDetail from '../pages/tasks/detail';
 import HierarchyReview from '../pages/tasks/hierarchy-review';
-import Schedules from '../pages/schedules';
-import ScheduleDetail from '../pages/schedules/detail';
+import EntrypointReview from '../pages/tasks/entrypoint-review';
+import SchedulesRedirect from '../pages/schedules';
+import ScheduleDetailRedirect from '../pages/schedules/detail';
+import KnowledgeBrowse from '../pages/knowledge';
 import Drafts from '../pages/drafts';
 import Push from '../pages/push';
 import TokenAudit from '../pages/token-audit';
 import Logs from '../pages/logs';
-import ModelConfig from '../pages/model/config';
+// 基础配置模块
+import BasicSubLayout from '../pages/basic/layout';
+import ModelConfig from '../pages/basic/models';
+import Prompts from '../pages/basic/prompts';
+import DefaultPrompts from '../pages/basic/prompts-defaults';
+import Permissions from '../pages/basic/permissions';
+import QuotaControl from '../pages/basic/quota-control';
 import Login from '../pages/login';
 
 /**
@@ -32,44 +49,87 @@ export const router = createHashRouter([
       <RequireAuth>
         <BasicLayout />
       </RequireAuth>
-    ), // 公共菜单及排版布局
+    ),
     children: [
+      // 默认跳转：进入任务概览（仪表盘第一项）
+      { path: '', element: <Navigate to="/dashboard/tasks" replace /> },
+      // ────────── 仪表盘 / 看板 ──────────
       {
-        path: '', // 默认首页：工作台 Dashboard 看板
-        element: <Dashboard />,
+        path: 'dashboard/tasks', // 任务概览
+        element: <TaskOverview />,
       },
+      {
+        path: 'dashboard/ai-usage', // AI 模型用量
+        element: <AiUsage />,
+      },
+      {
+        path: 'dashboard/pipeline', // 流水线分析
+        element: <PipelineAnalysis />,
+      },
+      {
+        path: 'dashboard/coverage', // 系统覆盖报表
+        element: <SystemCoverage />,
+      },
+      // ────────── 知识生成 ──────────
       {
         path: 'systems', // 系统接入与代码库管理
         element: <Systems />,
       },
+      // 基础配置模块（4 个子页）— UI 层角色门 <RequireRole role="ADMIN">
       {
-        path: 'models', // AI 语言模型配置
-        element: <ModelConfig />,
+        path: 'basic',
+        element: (
+          <RequireRole role="ADMIN">
+            <BasicSubLayout />
+          </RequireRole>
+        ),
+        children: [
+          { index: true, element: <ModelConfig /> },
+          { path: 'models', element: <ModelConfig /> },
+          { path: 'prompts', element: <Prompts /> },
+          { path: 'prompts/defaults', element: <DefaultPrompts /> },
+          { path: 'permissions', element: <Permissions /> },
+          { path: 'quota', element: <QuotaControl /> },
+        ],
       },
+      // 反编译任务主入口：tabbed 容器
       {
-        path: 'prompts', // AI 归纳提示词模板版本管理
-        element: <Prompts />,
-      },
-      {
-        path: 'tasks', // 手动下发的反编译任务
+        path: 'tasks',
         element: <Tasks />,
+        children: [
+          { index: true, element: <TaskListTab /> }, // 默认 /tasks → 任务查询
+          { path: 'query', element: <TaskListTab /> },
+          { path: 'queue', element: <TaskQueuePage /> },
+          { path: 'dispatch', element: <TaskDispatchPage /> },
+          // JOB 配置（原 schedules）— 一组嵌套子路由
+          { path: 'jobs', element: <JobsList /> },
+          { path: 'jobs/new', element: <ScheduleFormPage /> },
+          { path: 'jobs/:id/edit', element: <ScheduleFormPage /> },
+          { path: 'jobs/:id', element: <JobDetail /> },
+        ],
       },
       {
         path: 'tasks/hierarchy-review', // 模块层级调试专用页
         element: <HierarchyReview />,
       },
       {
+        path: 'tasks/entrypoint-review', // 知识入口调试专用页
+        element: <EntrypointReview />,
+      },
+      {
         path: 'tasks/:id', // 任务执行详情与流程监控
         element: <TaskDetail />,
       },
       {
-        path: 'schedules', // 定时任务配置列表
-        element: <Schedules />,
+        path: 'knowledge/browse', // 知识查看（按系统聚合浏览文档 / 索引 / 清单）
+        element: <KnowledgeBrowse />,
       },
-      {
-        path: 'schedules/:id', // 定时任务详情 + 触发历史
-        element: <ScheduleDetail />,
-      },
+      // 旧 /schedules 入口已迁移到 /tasks/jobs；保留重定向避免外部链接 404
+      { path: 'schedules', element: <SchedulesRedirect /> },
+      { path: 'schedules/:id', element: <ScheduleDetailRedirect /> },
+      // 旧 /models / /prompts 入口已迁移到 /basic/models / /basic/prompts
+      { path: 'models', element: <Navigate to="/basic/models" replace /> },
+      { path: 'prompts', element: <Navigate to="/basic/prompts" replace /> },
       {
         path: 'drafts', // 知识草稿复核与编辑器协同工作区
         element: <Drafts />,
@@ -89,4 +149,3 @@ export const router = createHashRouter([
     ],
   },
 ]);
-

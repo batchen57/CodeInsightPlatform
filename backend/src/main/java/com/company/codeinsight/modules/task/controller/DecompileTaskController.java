@@ -5,6 +5,8 @@ import com.company.codeinsight.common.response.ApiResponse;
 import com.company.codeinsight.common.response.PageResult;
 import com.company.codeinsight.modules.draft.dto.SaveDraftRequest;
 import com.company.codeinsight.modules.draft.service.DraftService;
+import com.company.codeinsight.modules.entrypoint.model.EntrypointReviewView;
+import com.company.codeinsight.modules.entrypoint.service.EntrypointReviewService;
 import com.company.codeinsight.modules.hierarchy.model.ModuleHierarchy;
 import com.company.codeinsight.modules.hierarchy.service.ModuleHierarchyService;
 import com.company.codeinsight.modules.log.service.OperationLogService;
@@ -14,6 +16,7 @@ import com.company.codeinsight.modules.task.service.DecompileTaskService;
 import com.company.codeinsight.modules.task.service.TaskLogSummaryService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import java.util.Map;
 import lombok.Data;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.validation.annotation.Validated;
@@ -42,6 +45,9 @@ public class DecompileTaskController {
     private ModuleHierarchyService moduleHierarchyService;
 
     @Autowired
+    private EntrypointReviewService entrypointReviewService;
+
+    @Autowired
     private TaskLogSummaryService taskLogSummaryService;
 
     @org.springframework.beans.factory.annotation.Value("${code-insight.storage.local-path:./storage}")
@@ -55,8 +61,13 @@ public class DecompileTaskController {
     public ApiResponse<DecompileTask> createInitial(@RequestBody TaskCreateRequest request) {
         DecompileTask task = decompileTaskService.createInitialTask(request.getSystemId(), request.getRepositoryId(),
                 request.getModularizePromptId(), request.getDocumentPromptId(),
-                request.getModelName(), request.getEntryScanConfig(), request.getRequireHierarchyReview());
-        operationLogService.logOperation(request.getSystemId(), task.getId(), "CREATE_TASK", "创建全量初始化反编译任务" + (Boolean.TRUE.equals(request.getRequireHierarchyReview()) ? "（启用模块层级调试）" : "（跳过模块层级调试）"), null, true);
+                request.getModelName(), request.getEntryScanConfig(),
+                request.getRequireHierarchyReview(), request.getRequireEntrypointReview());
+        operationLogService.logOperation(request.getSystemId(), task.getId(), "CREATE_TASK",
+                "创建全量初始化反编译任务" +
+                        (Boolean.TRUE.equals(request.getRequireHierarchyReview()) ? "（启用模块层级调试）" : "（跳过模块层级调试）") +
+                        (Boolean.TRUE.equals(request.getRequireEntrypointReview()) ? "（启用知识入口复核）" : "（跳过知识入口复核）"),
+                null, true);
         return ApiResponse.success(task);
     }
 
@@ -68,8 +79,13 @@ public class DecompileTaskController {
     public ApiResponse<DecompileTask> createIncremental(@RequestBody TaskCreateRequest request) {
         DecompileTask task = decompileTaskService.createIncrementalTask(request.getSystemId(), request.getRepositoryId(),
                 request.getModularizePromptId(), request.getDocumentPromptId(),
-                request.getModelName(), request.getEntryScanConfig(), request.getRequireHierarchyReview());
-        operationLogService.logOperation(request.getSystemId(), task.getId(), "CREATE_TASK", "创建增量分析反编译任务" + (Boolean.TRUE.equals(request.getRequireHierarchyReview()) ? "（启用模块层级调试）" : "（跳过模块层级调试）"), null, true);
+                request.getModelName(), request.getEntryScanConfig(),
+                request.getRequireHierarchyReview(), request.getRequireEntrypointReview());
+        operationLogService.logOperation(request.getSystemId(), task.getId(), "CREATE_TASK",
+                "创建增量分析反编译任务" +
+                        (Boolean.TRUE.equals(request.getRequireHierarchyReview()) ? "（启用模块层级调试）" : "（跳过模块层级调试）") +
+                        (Boolean.TRUE.equals(request.getRequireEntrypointReview()) ? "（启用知识入口复核）" : "（跳过知识入口复核）"),
+                null, true);
         return ApiResponse.success(task);
     }
 
@@ -85,6 +101,8 @@ public class DecompileTaskController {
 
     /**
      * 分页多条件查询分析任务列表
+     * <p>支持简单搜索（keyword 匹配任务 ID 或模型名）与精准搜索（创建时间范围 + 模型名精确匹配），
+     * 与状态分组 chips（statuses）、系统、类型、触发来源等条件可叠加。</p>
      */
     @Operation(summary = "任务列表查询")
     @GetMapping
@@ -96,8 +114,14 @@ public class DecompileTaskController {
             @RequestParam(required = false) String type,
             @RequestParam(name = "statuses", required = false) java.util.List<String> statuses,
             @RequestParam(required = false) Long scheduleId,
-            @RequestParam(required = false) String triggerSource) {
-        Page<DecompileTask> page = decompileTaskService.listTasksPage(current, size, systemId, status, type, statuses, scheduleId, triggerSource);
+            @RequestParam(required = false) String triggerSource,
+            @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) String modelName,
+            @RequestParam(required = false) String createdAtStart,
+            @RequestParam(required = false) String createdAtEnd) {
+        Page<DecompileTask> page = decompileTaskService.listTasksPage(
+                current, size, systemId, status, type, statuses, scheduleId, triggerSource,
+                keyword, modelName, createdAtStart, createdAtEnd);
         PageResult<DecompileTask> result = new PageResult<>(page.getTotal(), page.getSize(), page.getCurrent(), page.getRecords());
         return ApiResponse.success(result);
     }
@@ -260,6 +284,109 @@ public class DecompileTaskController {
     }
 
     /**
+     * 查询任务的知识入口复核清单（人工复核断点用）
+     * <p>从 ci_entrypoint 表读取入口列表（methods_json 已在 service 层反序列化为强类型），
+     * 主要用于前端在 ENTRYPOINT_REVIEW 状态下拉取并展示只读入口清单。</p>
+     */
+    @Operation(summary = "查询任务知识入口复核清单")
+    @GetMapping("/{id}/entrypoints")
+    public ApiResponse<java.util.List<EntrypointReviewView>> getEntrypoints(@PathVariable Long id) {
+        DecompileTask task = decompileTaskService.getById(id);
+        if (task == null) {
+            return ApiResponse.error("任务不存在");
+        }
+        return ApiResponse.success(entrypointReviewService.listByTaskId(id));
+    }
+
+    /**
+     * 知识入口人工复核完成后恢复流水线（确认并继续）
+     * <p>仅当任务处于 ENTRYPOINT_REVIEW 时可调用；后续流转 AI_ANALYZING → MODULE_HIERARCHY →（按 requireHierarchyReview
+     * 选择 GENERATING_DOC 或 MODULE_HIERARCHY_REVIEW）。</p>
+     */
+    @Operation(summary = "恢复知识入口复核后流水线")
+    @PostMapping("/{id}/entrypoints/resume")
+    public ApiResponse<Void> resumeEntrypointReview(@PathVariable Long id) {
+        DecompileTask task = decompileTaskService.getById(id);
+        decompileTaskService.resumeAfterEntrypointReview(id);
+        operationLogService.logOperation(
+                task == null ? null : task.getSystemId(),
+                id,
+                "EDIT_ENTRYPOINT_REVIEW",
+                "确认知识入口，开始 AI 提炼模块层级",
+                null, true
+        );
+        return ApiResponse.success();
+    }
+
+    /**
+     * 知识入口人工复核驳回（终止任务）
+     * <p>仅当任务处于 ENTRYPOINT_REVIEW 时可调用；流转到 CANCELLED（不入任何知识资产）。
+     * 驳回理由写入 task.error_reason 与审计日志。</p>
+     */
+    @Operation(summary = "知识入口复核驳回")
+    @PostMapping("/{id}/entrypoints/reject")
+    public ApiResponse<Void> rejectEntrypointReview(@PathVariable Long id, @RequestBody(required = false) RejectRequest body) {
+        DecompileTask task = decompileTaskService.getById(id);
+        String reason = body == null ? null : body.getReason();
+        decompileTaskService.rejectEntrypointReview(id, reason);
+        operationLogService.logOperation(
+                task == null ? null : task.getSystemId(),
+                id,
+                "REJECT_ENTRYPOINT_REVIEW",
+                "驳回知识入口，终止任务" + (reason != null && !reason.isBlank() ? "，理由：" + reason : ""),
+                null, true
+        );
+        return ApiResponse.success();
+    }
+
+    /**
+     * 知识入口驳回请求体
+     */
+    @Data
+    public static class RejectRequest {
+        private String reason;
+    }
+
+    // ========== 任务队列管控 ==========
+
+    @Operation(summary = "取消队列中的 PENDING 任务（PENDING → CANCELLED）")
+    @PostMapping("/{id}/cancel")
+    public ApiResponse<Void> cancelQueuedTask(@PathVariable Long id) {
+        decompileTaskService.cancelQueuedTask(id);
+        operationLogService.logOperation(null, id, "CANCEL_TASK", "队列中取消任务, ID=" + id, null, true);
+        return ApiResponse.success();
+    }
+
+    @Data
+    public static class PriorityRequest {
+        private Integer priority;
+    }
+
+    @Operation(summary = "调整任务优先级（0-100，仅 PENDING 可调）")
+    @PutMapping("/{id}/priority")
+    public ApiResponse<Void> adjustPriority(@PathVariable Long id, @RequestBody PriorityRequest body) {
+        decompileTaskService.adjustPriority(id, body.getPriority());
+        operationLogService.logOperation(null, id, "ADJUST_PRIORITY", "调整任务优先级, ID=" + id + ", priority=" + body.getPriority(), null, true);
+        return ApiResponse.success();
+    }
+
+    @Operation(summary = "队列列表（PENDING 任务，priority DESC + created_at ASC）")
+    @GetMapping("/queue")
+    public ApiResponse<PageResult<DecompileTask>> listQueuedTasks(
+            @RequestParam(defaultValue = "1") int current,
+            @RequestParam(defaultValue = "10") int size,
+            @RequestParam(required = false) Long systemId) {
+        Page<DecompileTask> page = decompileTaskService.listQueuedTasks(current, size, systemId);
+        return ApiResponse.success(new PageResult<>(page.getTotal(), page.getSize(), page.getCurrent(), page.getRecords()));
+    }
+
+    @Operation(summary = "队列总览（总数 + 平均等待时长）")
+    @GetMapping("/queue/summary")
+    public ApiResponse<Map<String, Object>> getQueueSummary() {
+        return ApiResponse.success(decompileTaskService.getQueueSummary());
+    }
+
+    /**
      * 任务中心顶部 chips 角标：按状态分组统计各分组的任务数量。
      * 返回 key 固定为 ALL / RUNNING / PENDING_REVIEW / CONFIRMED / CLOSED。
      *
@@ -288,6 +415,8 @@ public class DecompileTaskController {
         private com.company.codeinsight.modules.entrypoint.model.EntryPointConfig entryScanConfig;
         /** 是否启用模块层级调试断点；null 时按默认 TRUE 处理 */
         private Boolean requireHierarchyReview;
+        /** 是否启用知识入口复核断点；null 时按默认 TRUE 处理 */
+        private Boolean requireEntrypointReview;
     }
 
     /**

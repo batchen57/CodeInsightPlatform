@@ -2,6 +2,8 @@ package com.company.codeinsight.modules.entrypoint.service.impl;
 
 import com.company.codeinsight.modules.callchain.entity.MethodCall;
 import com.company.codeinsight.modules.callchain.service.MethodCallService;
+import com.company.codeinsight.modules.entrypoint.model.DiscoveredEntrypoint;
+import com.company.codeinsight.modules.entrypoint.model.DiscoveredMethod;
 import com.company.codeinsight.modules.entrypoint.model.EntryPoint;
 import com.company.codeinsight.modules.entrypoint.model.EntryPointConfig;
 import com.company.codeinsight.modules.entrypoint.service.EntryPointDiscoveryService;
@@ -53,6 +55,23 @@ public class EntryPointDiscoveryServiceImpl implements EntryPointDiscoveryServic
     @Override
     public List<EntryPoint> discoverEntries(Long taskId, File projectDir, EntryPointConfig config) {
         return discoverEntriesInternal(taskId, projectDir, config);
+    }
+
+    @Override
+    public List<DiscoveredEntrypoint> discoverEntriesWithMethods(Long taskId, File projectDir, EntryPointConfig config) {
+        List<EntryPoint> baseEntries = discoverEntriesInternal(taskId, projectDir, config);
+        if (baseEntries == null || baseEntries.isEmpty()) {
+            return java.util.Collections.emptyList();
+        }
+        List<DiscoveredEntrypoint> result = new java.util.ArrayList<>(baseEntries.size());
+        for (EntryPoint ep : baseEntries) {
+            DiscoveredEntrypoint dep = new DiscoveredEntrypoint();
+            dep.setBase(ep);
+            dep.setMethods(extractMethodsForEntry(projectDir, ep));
+            result.add(dep);
+        }
+        log.info("EntryPointDiscoveryService.discoverEntriesWithMethods done. taskId={} entries={}", taskId, result.size());
+        return result;
     }
 
     @Override
@@ -298,6 +317,135 @@ public class EntryPointDiscoveryServiceImpl implements EntryPointDiscoveryServic
             sb.append(content).append("\n\n");
         }
         return sb.toString();
+    }
+
+    // ============================ method extract helpers ============================
+
+    /**
+     * 根据入口类型从 ParsedClassInfo 中抽取关键方法列表
+     * <ul>
+     *   <li>CONTROLLER：仅 {@code requestMapping != null} 的方法（即带 HTTP mapping 注解）</li>
+     *   <li>SCHEDULED_JOB / MQ_LISTENER / COMPONENT：当前 parser 不存方法级注解，回退为所有非 private 方法，
+     *       annotation 字段填 "class-level: @xxx" 标识</li>
+     *   <li>APPLICATION / MAIN：{@code main(String[])} 方法（hasMainMethod 已识别）</li>
+     * </ul>
+     */
+    private List<DiscoveredMethod> extractMethodsForEntry(File projectDir, EntryPoint entry) {
+        if (entry == null) return java.util.Collections.emptyList();
+        ParsedClassInfo info = null;
+        try {
+            File sourceFile = resolveEntryFile(projectDir, entry);
+            if (sourceFile != null && sourceFile.exists()) {
+                info = javaParserService.parseFile(sourceFile);
+            }
+        } catch (Exception e) {
+            log.warn("extractMethodsForEntry: 解析 {} 失败", entry.getClassName(), e);
+        }
+        if (info == null || info.getMethods() == null || info.getMethods().isEmpty()) {
+            return java.util.Collections.emptyList();
+        }
+        String entryType = entry.getEntryType();
+        List<DiscoveredMethod> out = new java.util.ArrayList<>();
+        if ("CONTROLLER".equals(entryType)) {
+            // 仅保留带 RequestMapping 注解的方法
+            for (ParsedClassInfo.MethodInfo m : info.getMethods()) {
+                if (m.getRequestMapping() == null) continue;
+                DiscoveredMethod dm = new DiscoveredMethod();
+                dm.setMethodName(m.getName());
+                dm.setMethodSignature(buildSignature(entry.getClassName(), m));
+                dm.setAnnotation(extractHttpMappingAnnotation(info, m));
+                dm.setHttpPath(m.getRequestMapping());
+                dm.setHttpMethod(m.getHttpMethod());
+                out.add(dm);
+            }
+        } else if ("APPLICATION".equals(entryType) || "MAIN".equals(entryType)) {
+            for (ParsedClassInfo.MethodInfo m : info.getMethods()) {
+                if ("main".equals(m.getName())) {
+                    DiscoveredMethod dm = new DiscoveredMethod();
+                    dm.setMethodName(m.getName());
+                    dm.setMethodSignature(buildSignature(entry.getClassName(), m));
+                    dm.setAnnotation("main");
+                    out.add(dm);
+                    break;
+                }
+            }
+        } else if ("SCHEDULED_JOB".equals(entryType) || "MQ_LISTENER".equals(entryType) || "COMPONENT".equals(entryType)) {
+            // parser 当前不抽方法级注解，回退为所有非 private 方法 + class-level annotation 标记
+            String classLevelAnn = pickClassLevelAnnotation(info, entryType);
+            for (ParsedClassInfo.MethodInfo m : info.getMethods()) {
+                if (m.getName() == null) continue;
+                if (m.getName().startsWith("lambda$") || m.getName().startsWith("$")) continue;
+                // 过滤 setter/getter 与 private/同步等明显非业务方法
+                if (isLikelyNonBusinessMethod(m)) continue;
+                DiscoveredMethod dm = new DiscoveredMethod();
+                dm.setMethodName(m.getName());
+                dm.setMethodSignature(buildSignature(entry.getClassName(), m));
+                dm.setAnnotation("class-level: " + classLevelAnn);
+                out.add(dm);
+            }
+        } else {
+            // CUSTOM / 其它：返回所有 public 方法
+            for (ParsedClassInfo.MethodInfo m : info.getMethods()) {
+                if (isLikelyNonBusinessMethod(m)) continue;
+                DiscoveredMethod dm = new DiscoveredMethod();
+                dm.setMethodName(m.getName());
+                dm.setMethodSignature(buildSignature(entry.getClassName(), m));
+                out.add(dm);
+            }
+        }
+        return out;
+    }
+
+    private String buildSignature(String fqClassName, ParsedClassInfo.MethodInfo m) {
+        String args = m.getArguments() == null ? "" : m.getArguments();
+        String shortName = fqClassName == null ? "" : (fqClassName.contains(".")
+                ? fqClassName.substring(fqClassName.lastIndexOf('.') + 1) : fqClassName);
+        return (shortName.isEmpty() ? "" : shortName + "#") + m.getName() + "(" + args + ")";
+    }
+
+    private String extractHttpMappingAnnotation(ParsedClassInfo info, ParsedClassInfo.MethodInfo m) {
+        if (m.getHttpMethod() == null) return "RequestMapping";
+        switch (m.getHttpMethod()) {
+            case "GET":    return "GetMapping";
+            case "POST":   return "PostMapping";
+            case "PUT":    return "PutMapping";
+            case "DELETE": return "DeleteMapping";
+            case "PATCH":  return "PatchMapping";
+            default:       return "RequestMapping";
+        }
+    }
+
+    private String pickClassLevelAnnotation(ParsedClassInfo info, String entryType) {
+        if (info == null || info.getAnnotations() == null) return entryType;
+        String prefix = switch (entryType) {
+            case "SCHEDULED_JOB" -> "Scheduled";
+            case "MQ_LISTENER"   -> "Listener";
+            case "COMPONENT"     -> "Component";
+            default              -> null;
+        };
+        if (prefix == null) return entryType;
+        for (String ann : info.getAnnotations()) {
+            if (ann != null && ann.contains(prefix)) return "@" + ann;
+        }
+        return entryType;
+    }
+
+    private boolean isLikelyNonBusinessMethod(ParsedClassInfo.MethodInfo m) {
+        // 过滤标准 getter/setter（无参数且返回类型非 void、名为 getXxx/setXxx/isXxx）
+        String name = m.getName();
+        if (name == null) return true;
+        String lower = name.toLowerCase();
+        if (lower.startsWith("get") && name.length() > 3 && Character.isUpperCase(name.charAt(3))) {
+            // 过滤简单 getter；带参的 getXxx 不在此列
+            return (m.getArguments() == null || m.getArguments().isEmpty());
+        }
+        if (lower.startsWith("set") && name.length() > 3 && Character.isUpperCase(name.charAt(3))) {
+            return (m.getArguments() == null || m.getArguments().isEmpty());
+        }
+        if (lower.startsWith("is") && name.length() > 2 && Character.isUpperCase(name.charAt(2))) {
+            return (m.getArguments() == null || m.getArguments().isEmpty());
+        }
+        return false;
     }
 
     // ============================ rule helpers ============================

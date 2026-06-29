@@ -1,6 +1,7 @@
 package com.company.codeinsight.common.config;
 
 import com.company.codeinsight.common.auth.OperatorHeaderFilter;
+import com.company.codeinsight.modules.auth.mapper.UserAccountMapper;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
@@ -22,8 +23,8 @@ public class SecurityConfig {
      * 后续接入真鉴权时只需把这里替换为从 Spring Security SecurityContextHolder 读取即可。
      */
     @Bean
-    public OperatorHeaderFilter operatorHeaderFilter() {
-        return new OperatorHeaderFilter();
+    public OperatorHeaderFilter operatorHeaderFilter(UserAccountMapper userAccountMapper) {
+        return new OperatorHeaderFilter(userAccountMapper);
     }
 
     /**

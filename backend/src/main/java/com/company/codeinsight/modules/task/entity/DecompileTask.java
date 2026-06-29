@@ -110,6 +110,15 @@ public class DecompileTask extends BaseEntity {
     private Boolean requireHierarchyReview;
 
     /**
+     * 是否启用知识入口复核（人工复核断点，介于 SPLITTING_TASK 与 AI_ANALYZING 之间）
+     * TRUE - 切片完成后停在 ENTRYPOINT_REVIEW，等待用户在页面上确认入口清单后再继续调用 AI
+     * FALSE - 跳过断点，由 SPLITTING_TASK 直接推进至 AI_ANALYZING
+     * 默认 TRUE
+     */
+    @TableField("require_entrypoint_review")
+    private Boolean requireEntrypointReview;
+
+    /**
      * 任务触发来源：
      * <ul>
      *   <li>MANUAL - 前端用户手动创建并启动（默认）</li>
@@ -125,5 +134,12 @@ public class DecompileTask extends BaseEntity {
      */
     @TableField("schedule_id")
     private Long scheduleId;
+
+    /**
+     * 队列优先级 0-100，越大越优先。
+     * <p>SCHEDULED 默认 60（高于手动），MANUAL 默认 50；TaskQueueDispatcher 按此字段 + created_at ASC 排序。</p>
+     */
+    @TableField("priority")
+    private Integer priority;
 }
 

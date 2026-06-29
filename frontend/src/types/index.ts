@@ -1,9 +1,24 @@
+export type SystemState =
+  | 'DRAFT'
+  | 'REPO_CONFIGURED'
+  | 'SCAN_CONFIGURED'
+  | 'PROMPT_CONFIGURED'
+  | 'ACTIVE'
+  | 'DISABLED';
+
 export interface System {
   id: number;
   name: string;
+  nameCn?: string;
   description: string;
   owner: string;
-  status: number; // 0-停用, 1-启用
+  status: number; // 0-停用, 1-启用（已废弃，请使用 state）
+  /** 状态机：DRAFT / REPO_CONFIGURED / SCAN_CONFIGURED / PROMPT_CONFIGURED / ACTIVE / DISABLED */
+  state?: SystemState;
+  /** 系统级模块提取提示词 ID（FK → ci_prompt.id） */
+  modularizePromptId?: number | null;
+  /** 系统级文档生成提示词 ID（FK → ci_prompt.id） */
+  documentPromptId?: number | null;
   createdAt: string;
   updatedAt: string;
   // 以下字段由 /systems 聚合接口返回，list 才有
@@ -65,10 +80,14 @@ export interface Task {
   entryScanConfig?: EntryScanConfig;
   /** 是否启用模块层级调试（人工复核断点）；undefined 时按 TRUE 处理 */
   requireHierarchyReview?: boolean;
+  /** 是否启用知识入口复核（人工复核断点，介于 SPLITTING_TASK 与 AI_ANALYZING 之间）；undefined 时按 TRUE 处理 */
+  requireEntrypointReview?: boolean;
   /** 触发来源：MANUAL 手动触发 / SCHEDULED 定时调度触发 */
   triggerSource?: 'MANUAL' | 'SCHEDULED' | string;
   /** 触发该任务的调度配置 ID（triggerSource=SCHEDULED 时非空） */
   scheduleId?: number;
+  /** 队列优先级 0-100，越大越优先；TaskQueueDispatcher 按此字段排序调度 */
+  priority?: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -154,10 +173,36 @@ export interface ModuleHierarchy {
   modules?: Record<string, ModuleNode>;
 }
 
+/** 知识入口复核视图中的单个方法（只读展示用） */
+export interface EntrypointMethodView {
+  methodName: string;
+  methodSignature?: string;
+  annotation?: string;
+  httpPath?: string;
+  httpMethod?: string;
+}
+
+/** 知识入口复核视图中的单个入口类（只读展示用） */
+export interface EntrypointReviewItem {
+  id: number;
+  taskId: number;
+  systemId: number;
+  className: string;
+  filePath?: string;
+  entryType?: string;
+  annotation?: string;
+  remark?: string;
+  enabled: boolean;
+  sortOrder: number;
+  methods: EntrypointMethodView[];
+}
+
 export interface ModuleNode {
   id: string;
   moduleName: string;
   keywords?: string[];
+  /** 人工逐项复核确认标记：true = 已确认，false/undefined = 未确认；JSON 中以 "Y"/"N" 字符串呈现 */
+  confirmed?: boolean;
   subModules?: Record<string, SubModuleNode>;
 }
 
@@ -165,6 +210,8 @@ export interface SubModuleNode {
   id: string;
   subModuleName: string;
   keywords?: string[];
+  /** 人工逐项复核确认标记 */
+  confirmed?: boolean;
   functions?: Record<string, FunctionNode>;
 }
 
@@ -173,6 +220,8 @@ export interface FunctionNode {
   functionName: string;
   /** 入口类全限定名集合（仅在内存维护，不会写入提示词） */
   classPaths?: string[];
+  /** 人工逐项复核确认标记 */
+  confirmed?: boolean;
 }
 
 export interface PushTask {
@@ -188,6 +237,44 @@ export interface PushTask {
   startedAt?: string;
   completedAt?: string;
   createdAt: string;
+}
+
+/** 知识查看 - 文件类型枚举（与后端 KnowledgeBrowseServiceImpl 常量对齐） */
+export type KnowledgeBrowseFileType = 'DRAFT' | 'INDEX' | 'MANIFEST' | 'ALL';
+
+/** 知识查看 - 单条文件视图（与后端 KnowledgeBrowseItem 对齐） */
+export interface KnowledgeBrowseItem {
+  /** 复合主键：draft:<id> / index:<taskId>:<path> / manifest:<taskId>:<path> */
+  id: string;
+  /** 文件名（不包含父路径） */
+  name: string;
+  /** DRAFT / INDEX / MANIFEST */
+  type: KnowledgeBrowseFileType;
+  taskId?: number;
+  versionId?: number;
+  versionNum?: string;
+  /** 相对路径：draft = ci_knowledge_draft.filePath；index/manifest = docs/code-insight 下的相对路径 */
+  filePath: string;
+  /** 文件字节数 */
+  size: number;
+  /** DRAFT: DRAFT/EDITING/CONFIRMED/PUSHED/ARCHIVED；INDEX/MANIFEST: GENERATED */
+  status: string;
+  /** ISO timestamp */
+  updatedAt: string;
+  /** 数据源标识：DB（draft 行）/ TEMP_REPOS（index/manifest 文件） */
+  source: 'DB' | 'TEMP_REPOS';
+}
+
+/** 知识查看 - 列表查询入参 */
+export interface KnowledgeBrowseQuery {
+  systemId: number;
+  type?: KnowledgeBrowseFileType;
+  keyword?: string;
+  taskId?: number;
+  versionId?: number;
+  status?: string;
+  createdAtStart?: string;
+  createdAtEnd?: string;
 }
 
 export interface KnowledgeDraft {
@@ -354,6 +441,8 @@ export interface ScheduleTask {
   entryScanConfig?: EntryScanConfig;
   /** 是否启用模块层级调试断点：0-否 1-是 */
   requireHierarchyReview?: number;
+  /** 是否启用知识入口复核断点：0-否 1-是；触发任务时复制到 ci_task */
+  requireEntrypointReview?: number;
   lastFiredAt?: string;
   /** 最近一次触发产生的反编译任务 ID */
   lastTaskId?: number;

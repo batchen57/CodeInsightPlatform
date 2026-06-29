@@ -10,6 +10,7 @@ import com.company.codeinsight.modules.prompt.dto.PromptTestStreamEventDto;
 import com.company.codeinsight.modules.prompt.entity.DecompilePrompt;
 import com.company.codeinsight.modules.prompt.mapper.DecompilePromptMapper;
 import com.company.codeinsight.modules.prompt.service.DecompilePromptService;
+import com.company.codeinsight.modules.system.mapper.SystemApplicationMapper;
 import com.company.codeinsight.modules.model.mapper.AiModelMapper;
 import com.company.codeinsight.modules.token.service.TokenAuditService;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -64,6 +65,9 @@ public class DecompilePromptServiceImpl extends ServiceImpl<DecompilePromptMappe
 
     @Autowired
     private TokenAuditService tokenAuditService;
+
+    @Autowired
+    private SystemApplicationMapper systemMapper;
 
     private final HttpClient httpClient = HttpClient.newBuilder().build();
 
@@ -158,6 +162,8 @@ public class DecompilePromptServiceImpl extends ServiceImpl<DecompilePromptMappe
         if (task == null || !StringUtils.hasText(promptType)) {
             return null;
         }
+
+        // ① 任务级显式绑定（任务创建时已快照）
         Long explicitId = DecompilePrompt.TYPE_MODULARIZE.equals(promptType)
                 ? task.getModularizePromptId()
                 : task.getDocumentPromptId();
@@ -167,8 +173,29 @@ public class DecompilePromptServiceImpl extends ServiceImpl<DecompilePromptMappe
                     && promptType.equals(hit.getPromptType())) {
                 return hit.getContent();
             }
-            log.warn("任务 {} 指定 {} id={} 未命中（已禁用或类型不匹配或不存在），回退到默认", task.getId(), promptType, explicitId);
+            log.warn("任务 {} 指定 {} id={} 未命中（已禁用或类型不匹配或不存在），回退到系统/默认", task.getId(), promptType, explicitId);
         }
+
+        // ② 系统级绑定：ci_system.modularize_prompt_id / document_prompt_id
+        if (task.getSystemId() != null) {
+            com.company.codeinsight.modules.system.entity.SystemApplication system =
+                    systemMapper.selectById(task.getSystemId());
+            if (system != null) {
+                Long systemPromptId = DecompilePrompt.TYPE_MODULARIZE.equals(promptType)
+                        ? system.getModularizePromptId()
+                        : system.getDocumentPromptId();
+                if (systemPromptId != null) {
+                    DecompilePrompt hit = this.baseMapper.selectById(systemPromptId);
+                    if (hit != null && Integer.valueOf(1).equals(hit.getStatus())
+                            && promptType.equals(hit.getPromptType())) {
+                        return hit.getContent();
+                    }
+                    log.warn("系统 {} 绑定 {} id={} 未命中，回退到默认", system.getId(), promptType, systemPromptId);
+                }
+            }
+        }
+
+        // ③ 默认提示词：ci_prompt.is_default=1
         DecompilePrompt fallback = this.baseMapper.selectOne(
                 new LambdaQueryWrapper<DecompilePrompt>()
                         .eq(DecompilePrompt::getPromptType, promptType)
@@ -182,25 +209,32 @@ public class DecompilePromptServiceImpl extends ServiceImpl<DecompilePromptMappe
     /**
      * 在线测试运行提示词模板
      * 用一段示例代码和所选模型参数，调用大模型（或使用内置的高保真测试 MOCK 生成器降级流程）。
+     *
+     * @param resolvedContent 前端已替换占位符的最终 prompt 正文。若非空,直接使用,跳过占位符替换。
      */
     @Override
-    public PromptTestResultDto testRun(Long id, String sampleCode, Long modelId) {
+    public PromptTestResultDto testRun(Long id, String sampleCode, Long modelId, String resolvedContent) {
         DecompilePrompt prompt = this.getById(id);
         if (prompt == null) {
             throw new BusinessException("提示词模板不存在");
         }
 
-        // 1. 动态从 Java 示例代码中正则匹配出类名和核心方法名
+        // 1. 动态从 Java 示例代码中正则匹配出类名和核心方法名（仅在未传 resolvedContent 时使用）
         String parsedClass = parseClassName(sampleCode);
         String parsedMethod = parseMethodName(sampleCode);
 
-        // 2. 组装占位符映射
-        Map<String, String> vars = new HashMap<>();
-        vars.put("class_name", parsedClass);
-        vars.put("method_name", parsedMethod);
-        vars.put("source_code", sampleCode != null ? sampleCode : "public class MockTestClass { public void mockExecute() {} }");
-
-        String filledPrompt = replaceVariables(prompt.getContent(), vars);
+        // 2. 组装占位符映射 + 渲染最终 prompt
+        String filledPrompt;
+        if (StringUtils.hasText(resolvedContent)) {
+            // 前端已替换完整 prompt,直接使用
+            filledPrompt = resolvedContent;
+        } else {
+            Map<String, String> vars = new HashMap<>();
+            vars.put("class_name", parsedClass);
+            vars.put("method_name", parsedMethod);
+            vars.put("source_code", sampleCode != null ? sampleCode : "public class MockTestClass { public void mockExecute() {} }");
+            filledPrompt = replaceVariables(prompt.getContent(), vars);
+        }
 
         // 3. 获取大模型配置
         AiModel model = resolveTrialModel(modelId);
@@ -302,7 +336,8 @@ public class DecompilePromptServiceImpl extends ServiceImpl<DecompilePromptMappe
     }
 
     @Override
-    public void testRunStream(Long id, String sampleCode, Long modelId, Consumer<PromptTestStreamEventDto> eventConsumer) {
+    public void testRunStream(Long id, String sampleCode, Long modelId, String resolvedContent,
+                              Consumer<PromptTestStreamEventDto> eventConsumer) {
         DecompilePrompt prompt = this.getById(id);
         if (prompt == null) {
             throw new BusinessException("提示词模板不存在");
@@ -311,12 +346,17 @@ public class DecompilePromptServiceImpl extends ServiceImpl<DecompilePromptMappe
         String parsedClass = parseClassName(sampleCode);
         String parsedMethod = parseMethodName(sampleCode);
 
-        Map<String, String> vars = new HashMap<>();
-        vars.put("class_name", parsedClass);
-        vars.put("method_name", parsedMethod);
-        vars.put("source_code", sampleCode != null ? sampleCode : "public class MockTestClass { public void mockExecute() {} }");
-
-        String filledPrompt = replaceVariables(prompt.getContent(), vars);
+        String filledPrompt;
+        if (StringUtils.hasText(resolvedContent)) {
+            // 前端已替换完整 prompt,直接使用
+            filledPrompt = resolvedContent;
+        } else {
+            Map<String, String> vars = new HashMap<>();
+            vars.put("class_name", parsedClass);
+            vars.put("method_name", parsedMethod);
+            vars.put("source_code", sampleCode != null ? sampleCode : "public class MockTestClass { public void mockExecute() {} }");
+            filledPrompt = replaceVariables(prompt.getContent(), vars);
+        }
         AiModel model = resolveTrialModel(modelId);
         String modelName = model != null ? model.getIdentifier() : this.modelNameProp;
         String activeApiKey = (model != null && StringUtils.hasText(model.getApiKey())) ? model.getApiKey() : this.apiKey;

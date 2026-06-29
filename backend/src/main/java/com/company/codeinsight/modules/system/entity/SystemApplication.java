@@ -32,6 +32,11 @@ public class SystemApplication extends BaseEntity {
     private String name;
 
     /**
+     * 业务系统的中文名称（如 “电子商城系统”、“统一身份认证平台”）
+     */
+    private String nameCn;
+
+    /**
      * 业务系统的描述说明
      */
     private String description;
@@ -43,8 +48,30 @@ public class SystemApplication extends BaseEntity {
 
     /**
      * 系统的启用状态：0-停用, 1-启用
+     * @deprecated 请改用 {@link #state}；本字段保留为历史兼容，由 state 字段同步更新
      */
+    @Deprecated
     private Integer status;
+
+    /**
+     * 系统状态机：DRAFT / REPO_CONFIGURED / SCAN_CONFIGURED / PROMPT_CONFIGURED / ACTIVE / DISABLED
+     */
+    private String state;
+
+    /**
+     * 系统级模块提取提示词 ID（FK → ci_prompt.id）。运行时未设置则回退到默认提示词（is_default=1）。
+     */
+    private Long modularizePromptId;
+
+    /**
+     * 系统级文档生成提示词 ID（FK → ci_prompt.id）。运行时未设置则回退到默认提示词（is_default=1）。
+     */
+    private Long documentPromptId;
+
+    /**
+     * 同时在跑任务上限（系统级并发闸门，TaskQueueDispatcher 调度时取此值控制 Semaphore）。默认 1。
+     */
+    private Integer maxConcurrentTasks;
 
     /**
      * 逻辑删除时间。NULL=未删除，非空=已删除时间。

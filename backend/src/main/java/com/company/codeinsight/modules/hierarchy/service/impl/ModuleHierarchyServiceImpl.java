@@ -7,7 +7,7 @@ import com.company.codeinsight.common.util.PromptTemplateLoader;
 import com.company.codeinsight.modules.ai.service.AiSummaryService;
 import com.company.codeinsight.modules.entrypoint.model.EntryPoint;
 import com.company.codeinsight.modules.entrypoint.model.EntryPointConfig;
-import com.company.codeinsight.modules.entrypoint.model.EntryPointConfigCodec;
+import com.company.codeinsight.modules.entrypoint.service.EntrypointReviewService;
 import com.company.codeinsight.modules.entrypoint.service.EntryPointDiscoveryService;
 import com.company.codeinsight.modules.hierarchy.entity.ModuleHierarchyNode;
 import com.company.codeinsight.modules.hierarchy.mapper.ModuleHierarchyNodeMapper;
@@ -75,10 +75,10 @@ public class ModuleHierarchyServiceImpl implements ModuleHierarchyService {
     private DecompileTaskMapper taskMapper;
 
     @Autowired
-    private com.company.codeinsight.modules.repository.mapper.CodeRepositoryMapper repositoryMapper;
+    private EntryPointDiscoveryService entryPointDiscoveryService;
 
     @Autowired
-    private EntryPointDiscoveryService entryPointDiscoveryService;
+    private EntrypointReviewService entrypointReviewService;
 
     @Autowired
     @Lazy
@@ -133,27 +133,9 @@ public class ModuleHierarchyServiceImpl implements ModuleHierarchyService {
         hierarchy.setTaskId(taskId);
         hierarchy.setSystemId(task.getSystemId());
 
-        // 1.5 从 task 配置还原 EntryPointConfig（任务级 null 时回退到仓库级，再 null 走默认 Controller/JOB/MQ 兜底）
-        EntryPointConfig entryPointConfig = EntryPointConfigCodec.decode(task.getEntryScanConfig());
-        if (entryPointConfig.isIncludeAllEmpty()
-                && entryPointConfig.getEffectiveIncludeAnnotations().isEmpty()
-                && entryPointConfig.getEffectiveIncludeClasspaths().isEmpty()
-                && entryPointConfig.getEffectiveIncludeExtends().isEmpty()
-                && entryPointConfig.getEffectiveExcludeClasspaths().isEmpty()
-                && entryPointConfig.getEffectiveExcludePackages().isEmpty()
-                && entryPointConfig.getEffectiveExcludeAnnotations().isEmpty()) {
-            // 任务级全空 → 尝试从仓库表读默认配置
-            com.company.codeinsight.modules.repository.entity.CodeRepository repo =
-                    repositoryMapper.selectById(task.getRepositoryId());
-            if (repo != null) {
-                entryPointConfig = EntryPointConfigCodec.decode(repo.getEntryScanConfig());
-                log.info("taskId={} 任务级 EntryPointConfig 为空，回退使用仓库 {} (repositoryId={}) 的默认配置",
-                        taskId, repo.getGitUrl(), task.getRepositoryId());
-            }
-        }
-
-        // 2. 识别入口
-        List<EntryPoint> entries = entryPointDiscoveryService.discoverEntries(taskId, projectDir, entryPointConfig);
+        // 2. 读取已落表的入口（用户在 ENTRYPOINT_REVIEW 阶段确认后的快照）；
+        //    这里不再做入口识别与 EntryPointConfig 解析——由 ENTRYPOINT_REVIEW 阶段统一负责并落表。
+        List<EntryPoint> entries = entrypointReviewService.loadEnabledEntries(taskId);
         log.info("ModuleHierarchyService.buildAndPersist taskId={} entries={} ctx={}", taskId, entries.size(), effective);
 
         // 3. 加载 prompt 模板（仅一次）
@@ -180,7 +162,8 @@ public class ModuleHierarchyServiceImpl implements ModuleHierarchyService {
         if (!toProcess.isEmpty()) {
             // 4a. 并行调用 AI（每个入口独立请求，I/O 密集型，线程池控制并发度为 4）
             final String finalPrompt = promptTemplate;
-            final EntryPointConfig finalConfig = entryPointConfig;
+            final com.company.codeinsight.modules.entrypoint.model.EntryPointConfig finalConfig =
+                    entrypointReviewService.resolveConfig(task);
             final DecompileTask finalTask = task;
             final File finalProjectDir = projectDir;
             List<CompletableFuture<JsonNode>> futures = toProcess.stream()
@@ -300,6 +283,7 @@ public class ModuleHierarchyServiceImpl implements ModuleHierarchyService {
                 m.setId(n.getNodeId());
                 m.setModuleName(n.getName());
                 m.setKeywords(parseJsonArray(n.getKeywords()));
+                m.setConfirmed(n.getConfirmed());
                 hierarchy.getModules().put(m.getId(), m);
             } else if (LEVEL_SUB_MODULE.equals(n.getLevel()) && n.getParentId() != null) {
                 ModuleHierarchyNode parent = idToNode.get(n.getParentId());
@@ -313,6 +297,7 @@ public class ModuleHierarchyServiceImpl implements ModuleHierarchyService {
                     sm.setId(n.getNodeId());
                     sm.setSubModuleName(n.getName());
                     sm.setKeywords(parseJsonArray(n.getKeywords()));
+                    sm.setConfirmed(n.getConfirmed());
                     m.getSubModules().put(sm.getId(), sm);
                 }
             } else if (LEVEL_FUNCTION.equals(n.getLevel()) && n.getParentId() != null) {
@@ -332,6 +317,7 @@ public class ModuleHierarchyServiceImpl implements ModuleHierarchyService {
                     fn.setFunctionName(n.getName());
                     fn.setClassPaths(new LinkedHashSet<>(parseJsonArray(n.getClassPaths())));
                     fn.setMethodSignatures(new LinkedHashSet<>(parseJsonArray(n.getMethodSignatures())));
+                    fn.setConfirmed(n.getConfirmed());
                     sm.getFunctions().put(fn.getId(), fn);
                 }
             }
@@ -621,6 +607,7 @@ public class ModuleHierarchyServiceImpl implements ModuleHierarchyService {
             modRow.setName(m.getModuleName());
             modRow.setKeywords(serializeJsonArray(m.getKeywords()));
             modRow.setClassPaths(null);
+            modRow.setConfirmed(Boolean.TRUE.equals(m.getConfirmed()));
             modRow.setCreatedAt(now);
             modRow.setUpdatedAt(now);
             rows.add(modRow);
@@ -657,6 +644,7 @@ public class ModuleHierarchyServiceImpl implements ModuleHierarchyService {
                 subRow.setName(sm.getSubModuleName());
                 subRow.setKeywords(serializeJsonArray(sm.getKeywords()));
                 subRow.setClassPaths(null);
+                subRow.setConfirmed(Boolean.TRUE.equals(sm.getConfirmed()));
                 subRow.setCreatedAt(now);
                 subRow.setUpdatedAt(now);
                 subRows.add(subRow);
@@ -698,6 +686,7 @@ public class ModuleHierarchyServiceImpl implements ModuleHierarchyService {
                     fnRow.setKeywords(null);
                     fnRow.setClassPaths(serializeJsonArray(new ArrayList<>(fn.getClassPaths())));
                     fnRow.setMethodSignatures(serializeJsonArray(new ArrayList<>(fn.getMethodSignatures())));
+                    fnRow.setConfirmed(Boolean.TRUE.equals(fn.getConfirmed()));
                     fnRow.setCreatedAt(now);
                     fnRow.setUpdatedAt(now);
                     fnRows.add(fnRow);

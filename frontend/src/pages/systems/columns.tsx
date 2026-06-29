@@ -1,6 +1,7 @@
-import { Button, Popconfirm, Space, Switch, Tag, Typography } from 'antd';
-import { DeleteOutlined, SettingOutlined } from '@ant-design/icons';
-import type { System } from '../../types';
+import { Button, Popconfirm, Space, Switch, Tag, Tooltip, Typography } from 'antd';
+import { DeleteOutlined, EditOutlined, SettingOutlined } from '@ant-design/icons';
+import type { System, SystemState } from '../../types';
+import SystemStatusTag from '../../components/SystemStatusTag';
 
 const { Text } = Typography;
 
@@ -9,8 +10,26 @@ export interface SystemColumnHandlers {
   onEdit: (system: System) => void;
   onOpenDetail: (system: System) => void;
   onDelete: (system: System) => void;
-  onStatusChange: (checked: boolean, system: System) => void;
+  /** 启用 / 停用：state 在 PROMPT_CONFIGURED / ACTIVE / DISABLED 之间切换 */
+  onStatusToggle: (nextActive: boolean, system: System) => void;
 }
+
+/**
+ * 状态 → 是否能切换启用/停用：仅 PROMPT_CONFIGURED / ACTIVE / DISABLED 可手动切
+ */
+function canToggleState(state?: SystemState): boolean {
+  return (
+    state === 'PROMPT_CONFIGURED' ||
+    state === 'ACTIVE' ||
+    state === 'DISABLED'
+  );
+}
+
+const NEXT_ACTIVE_STATE: Record<string, 'ACTIVE' | 'DISABLED'> = {
+  PROMPT_CONFIGURED: 'ACTIVE',
+  ACTIVE: 'DISABLED',
+  DISABLED: 'ACTIVE',
+};
 
 /**
  * 系统主表列定义工厂
@@ -30,6 +49,13 @@ export const getSystemColumns = (handlers: SystemColumnHandlers) => [
     ),
   },
   {
+    title: '中文名称',
+    dataIndex: 'nameCn',
+    key: 'nameCn',
+    width: 180,
+    render: (nameCn?: string) => nameCn || <Text type="secondary">未填写</Text>,
+  },
+  {
     title: '负责人',
     dataIndex: 'owner',
     key: 'owner',
@@ -37,10 +63,17 @@ export const getSystemColumns = (handlers: SystemColumnHandlers) => [
     render: (owner: string) => <Tag color="blue">{owner || '未分配'}</Tag>,
   },
   {
+    title: '状态',
+    dataIndex: 'state',
+    key: 'state',
+    width: 130,
+    render: (state: SystemState | undefined) => <SystemStatusTag state={state} />,
+  },
+  {
     title: '代码库数',
     dataIndex: 'repositoryCount',
     key: 'repositoryCount',
-    width: 110,
+    width: 100,
     render: (n?: number) =>
       typeof n === 'number' ? <Tag color={n > 0 ? 'geekblue' : 'default'}>{n}</Tag> : '-',
   },
@@ -48,7 +81,7 @@ export const getSystemColumns = (handlers: SystemColumnHandlers) => [
     title: '知识版本',
     dataIndex: 'knowledgeVersionCount',
     key: 'knowledgeVersionCount',
-    width: 110,
+    width: 100,
     render: (n?: number) =>
       typeof n === 'number' ? <Tag color={n > 0 ? 'green' : 'default'}>{n}</Tag> : '-',
   },
@@ -61,18 +94,31 @@ export const getSystemColumns = (handlers: SystemColumnHandlers) => [
       time ? new Date(time).toLocaleString() : <Text type="secondary">未扫描</Text>,
   },
   {
-    title: '状态',
-    dataIndex: 'status',
-    key: 'status',
-    width: 100,
-    render: (status: number, record: System) => (
-      <Switch
-        checkedChildren="启用"
-        unCheckedChildren="停用"
-        checked={status === 1}
-        onChange={(checked) => handlers.onStatusChange(checked, record)}
-      />
-    ),
+    title: '启停',
+    key: 'toggle',
+    width: 110,
+    render: (_: unknown, record: System) => {
+      const state = record.state;
+      const enabled = state === 'ACTIVE';
+      const toggleable = canToggleState(state);
+      const nextActive = !enabled;
+      const tip = !toggleable
+        ? '请先完成基本信息 / 仓库 / 入口扫描 / 提示词 4 步配置'
+        : enabled
+          ? '点击停用'
+          : `点击启用（目标态：${NEXT_ACTIVE_STATE[state as string] || 'ACTIVE'}）`;
+      return (
+        <Tooltip title={tip}>
+          <Switch
+            checkedChildren="启用"
+            unCheckedChildren="停用"
+            checked={enabled}
+            disabled={!toggleable}
+            onChange={() => handlers.onStatusToggle(nextActive, record)}
+          />
+        </Tooltip>
+      );
+    },
   },
   {
     title: '创建时间',
@@ -88,7 +134,7 @@ export const getSystemColumns = (handlers: SystemColumnHandlers) => [
     fixed: 'right' as const,
     render: (_: unknown, record: System) => (
       <Space size={6} wrap>
-        <Button size="small" onClick={() => handlers.onEdit(record)}>
+        <Button size="small" icon={<EditOutlined />} onClick={() => handlers.onEdit(record)}>
           编辑
         </Button>
         <Button

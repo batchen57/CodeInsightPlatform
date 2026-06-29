@@ -26,6 +26,12 @@ public enum TaskStatus {
      */
     SPLITTING_TASK,
     /**
+     * 知识入口人工复核断点（介于 SPLITTING_TASK 与 AI_ANALYZING 之间）。
+     * 流水线在切片完成后、调用 AI 提取模块层级之前，把识别到的入口类与方法落表 ci_entrypoint，
+     * 等待用户在页面上确认（继续）或驳回（终止任务）。
+     */
+    ENTRYPOINT_REVIEW,
+    /**
      * AI 归纳分析中（多线程调度大模型 API 进行切片功能提取）
      */
     AI_ANALYZING,

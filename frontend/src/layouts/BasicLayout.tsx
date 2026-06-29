@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Avatar, Badge, Breadcrumb, Button, Dropdown, Layout, Menu, Space, Tag, Tooltip, Typography } from 'antd';
 import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
+import PageTabs from '../components/PageTabs';
+import TabLink from '../components/TabLink';
 import {
   ApartmentOutlined,
   AuditOutlined,
@@ -15,12 +17,14 @@ import {
   FileSearchOutlined,
   FileTextOutlined,
   HistoryOutlined,
+  KeyOutlined,
   LogoutOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
   PlayCircleOutlined,
   SettingOutlined,
   SwapOutlined,
+  ThunderboltOutlined,
   UnorderedListOutlined,
   UserOutlined,
 } from '@ant-design/icons';
@@ -40,38 +44,77 @@ interface NavItem {
 }
 
 /**
- * 侧边栏导航条数据源配置
- * 定义左侧菜单各个模块的路由路径、图标、标题文本以及详细的功能解释说明说明。
+ * 侧边栏导航数据源配置（按三大类归档）
+ *
+ * - 仪表盘 / 看板大类 {@link dashboardNav}：运营层视图与全局统计
+ *   任务概览 / AI 模型用量 / 流水线分析 / 系统覆盖报表 / Token 审计 / 操作日志
+ *
+ * - 知识生成大类 {@link knowledgeNav}：端到端知识生产流水线
+ *   系统与仓库 → 反编译任务 → 模块层级 / 知识入口复核 → 知识查看 / 复核 → 知识推送
+ *
+ * - 基础配置大类 {@link basicNav}：后台管理类页面（模型、提示词、权限、流量）
+ *
  * 支持父子结构：父菜单本身可点击进入默认页，下方子菜单用于聚合相关子页面。
  */
-const navigation: NavItem[] = [
+
+/**
+ * 仪表盘 / 看板 大类：运营层视图与全局统计
+ */
+const dashboardNav: NavItem[] = [
   {
-    key: '/',
+    key: '/dashboard/tasks',
     icon: <DashboardOutlined />,
-    label: <Link to="/">工作台</Link>,
-    title: '知识运营工作台',
-    description: '跟踪系统接入、代码分析任务、草稿复核、知识推送和 Token 成本。',
+    label: <TabLink to="/dashboard/tasks">任务概览</TabLink>,
+    title: '任务概览',
+    description: '按状态 / 类型 / 系统多维分析反编译任务：分布饼图、时间趋势、成功率与平均耗时。',
   },
+  {
+    key: '/dashboard/ai-usage',
+    icon: <BarChartOutlined />,
+    label: <TabLink to="/dashboard/ai-usage">AI 模型用量</TabLink>,
+    title: 'AI 模型用量',
+    description: '按模型 / 阶段分组的 Token 用量、调用次数、成本排行、成功率。',
+  },
+  {
+    key: '/dashboard/pipeline',
+    icon: <BranchesOutlined />,
+    label: <TabLink to="/dashboard/pipeline">流水线分析</TabLink>,
+    title: '流水线分析',
+    description: '各阶段（PULLING / PARSING / SPLITTING / AI_ANALYZING ...）的平均耗时与失败率，定位瓶颈。',
+  },
+  {
+    key: '/dashboard/coverage',
+    icon: <ApartmentOutlined />,
+    label: <TabLink to="/dashboard/coverage">系统覆盖报表</TabLink>,
+    title: '系统覆盖报表',
+    description: '所有系统的最近反编译时间、任务 / 草稿 / 推送版本数量与覆盖情况。',
+  },
+  {
+    key: '/audit',
+    icon: <ThunderboltOutlined />,
+    label: <TabLink to="/audit">Token 审计</TabLink>,
+    title: 'Token 审计',
+    description: '原始 Token 消耗与计费记录查询（明细级）。',
+  },
+  {
+    key: '/logs',
+    icon: <HistoryOutlined />,
+    label: <TabLink to="/logs">操作日志</TabLink>,
+    title: '操作日志',
+    description: '追踪系统、仓库、任务、草稿和推送操作。',
+  },
+];
+
+/**
+ * 知识生成 大类：端到端知识生产流水线
+ */
+const knowledgeNav: NavItem[] = [
   {
     key: '/systems',
     icon: <ApartmentOutlined />,
-    label: <Link to="/systems">系统与仓库</Link>,
+    label: <TabLink to="/systems">系统与仓库</TabLink>,
     title: '系统与代码库管理',
     description: '维护业务系统、负责人、Git 仓库、扫描范围和排除规则。',
-  },
-  {
-    key: '/models',
-    icon: <SettingOutlined />,
-    label: <Link to="/models">模型配置</Link>,
-    title: '模型配置管理',
-    description: '配置 AI 大模型、调用 ID、API 密钥、接口地址及模型排序与默认项。',
-  },
-  {
-    key: '/prompts',
-    icon: <FileTextOutlined />,
-    label: <Link to="/prompts">提示词</Link>,
-    title: '提示词配置',
-    description: '管理 AI 归纳模板、版本、启停、复制和试跑。',
   },
   {
     key: '/tasks',
@@ -85,14 +128,14 @@ const navigation: NavItem[] = [
       {
         key: '/tasks',
         icon: <UnorderedListOutlined />,
-        label: <Link to="/tasks">手动下发</Link>,
+        label: <TabLink to="/tasks">手动下发</TabLink>,
         title: '手动下发的反编译任务',
         description: '查看由用户手动创建并启动的反编译任务实例，支持启动 / 终止 / 重试 / 进入复核。',
       },
       {
-        key: '/schedules',
+        key: '/tasks/jobs',
         icon: <ClockCircleOutlined />,
-        label: <Link to="/schedules">定时任务</Link>,
+        label: <TabLink to="/tasks/jobs">JOB配置</TabLink>,
         title: '定时任务调度',
         description: '配置 cron 表达式，按指定周期自动创建并执行反编译任务；支持跳过 / 排队 / 并行三种冲突策略。',
       },
@@ -101,37 +144,87 @@ const navigation: NavItem[] = [
   {
     key: '/tasks/hierarchy-review',
     icon: <SwapOutlined />,
-    label: <Link to="/tasks/hierarchy-review">模块层级复核</Link>,
+    label: <TabLink to="/tasks/hierarchy-review">模块层级复核</TabLink>,
     title: '模块层级复核',
     description: '集中处理处于模块层级调试断点的任务，对 AI 提炼的模块 / 子模块 / 功能树进行增删改。',
   },
   {
+    key: '/tasks/entrypoint-review',
+    icon: <ApartmentOutlined />,
+    label: <TabLink to="/tasks/entrypoint-review">知识入口复核</TabLink>,
+    title: '知识入口复核',
+    description: '集中处理处于知识入口调试断点的任务，确认入口类清单后由 AI 继续提炼模块层级。',
+  },
+  {
+    key: '/knowledge/browse',
+    icon: <FileSearchOutlined />,
+    label: <TabLink to="/knowledge/browse">知识查看</TabLink>,
+    title: '知识查看',
+    description: '按系统聚合浏览知识文档、索引文件与清单文件（只读，不修改任何资产）。',
+  },
+  {
     key: '/drafts',
     icon: <EditOutlined />,
-    label: <Link to="/drafts">知识复核</Link>,
+    label: <TabLink to="/drafts">知识复核</TabLink>,
     title: '知识复核工作区',
     description: '结合代码来源、复核意见和修订记录，复核 AI 生成的 Markdown 草稿。',
   },
   {
     key: '/push',
     icon: <CloudUploadOutlined />,
-    label: <Link to="/push">知识推送</Link>,
+    label: <TabLink to="/push">知识推送</TabLink>,
     title: '知识推送中心',
     description: '创建确认版本、执行推送校验、导出 ZIP 包并推送到 Git。',
   },
+];
+
+/**
+ * 基础配置 大类：聚合后台管理类页面（模型、提示词、权限、流量）。
+ */
+const basicNav: NavItem[] = [
   {
-    key: '/audit',
-    icon: <BarChartOutlined />,
-    label: <Link to="/audit">Token 审计</Link>,
-    title: 'Token 审计',
-    description: '分析模型调用、Token 用量、成本趋势和额度风险。',
+    key: '/basic/models',
+    icon: <SettingOutlined />,
+    label: <TabLink to="/basic/models">模型配置</TabLink>,
+    title: '模型配置管理',
+    description: '配置 AI 大模型、调用 ID、API 密钥、接口地址及模型排序与默认项。',
   },
   {
-    key: '/logs',
-    icon: <HistoryOutlined />,
-    label: <Link to="/logs">操作日志</Link>,
-    title: '操作日志',
-    description: '追踪系统、仓库、任务、草稿和推送操作。',
+    key: '/basic/prompts',
+    icon: <FileTextOutlined />,
+    label: '提示词',
+    title: '提示词配置',
+    description: '管理 AI 归纳模板、版本、启停、复制、试跑与默认提示词维护。',
+    children: [
+      {
+        key: '/basic/prompts',
+        icon: <UnorderedListOutlined />,
+        label: <TabLink to="/basic/prompts">提示词库</TabLink>,
+        title: '提示词库',
+        description: '列出所有提示词模板，支持新建、编辑、克隆、试跑。',
+      },
+      {
+        key: '/basic/prompts/defaults',
+        icon: <FileTextOutlined />,
+        label: <TabLink to="/basic/prompts/defaults">默认提示词维护</TabLink>,
+        title: '默认提示词维护',
+        description: '每种 promptType 仅一条默认；支持在线切换默认。',
+      },
+    ],
+  },
+  {
+    key: '/basic/permissions',
+    icon: <KeyOutlined />,
+    label: <TabLink to="/basic/permissions">权限管理</TabLink>,
+    title: '权限管理',
+    description: '当前账号信息与角色（后续接入 UM/SSO 后扩展为完整 RBAC）。',
+  },
+  {
+    key: '/basic/quota',
+    icon: <ThunderboltOutlined />,
+    label: <TabLink to="/basic/quota">流量管控</TabLink>,
+    title: '流量管控',
+    description: '全局限流配置、用户级 Token 额度、AI 调用并发控制。',
   },
 ];
 
@@ -155,7 +248,16 @@ const buildMenuItems = (items: NavItem[]): { menuItems: any[]; flatMap: Map<stri
   return { menuItems, flatMap };
 };
 
-const { menuItems, flatMap: navFlatMap } = buildMenuItems(navigation);
+// 三大类导航 → 拍平为 AntD Menu items + 统一 flatMap（key → NavItem）
+const { menuItems: dashboardMenuItems, flatMap: dashboardFlat } = buildMenuItems(dashboardNav);
+const { menuItems: knowledgeMenuItems, flatMap: knowledgeFlat } = buildMenuItems(knowledgeNav);
+const { menuItems: basicMenuItems, flatMap: basicFlat } = buildMenuItems(basicNav);
+
+// 合并 flatMap：currentPage 查找可命中三大类任意 key
+const navFlatMap = new Map<string, NavItem>([...dashboardFlat, ...knowledgeFlat, ...basicFlat]);
+
+// 兜底 currentPage：取 dashboardNav 的第一个（保证页面顶部 kicker / title 一定有值）
+const fallbackCurrentPage = dashboardNav[0];
 
 /**
  * 计算 selectedKey 与 openKeys：
@@ -164,9 +266,9 @@ const { menuItems, flatMap: navFlatMap } = buildMenuItems(navigation);
  * - openKeys 取所有祖先父菜单 key
  */
 const computeMenuState = (pathname: string) => {
-  let selectedKey = '/';
+  let selectedKey = dashboardNav[0].key;
   let bestDepth = -1;
-  const selectedKeys = new Set<string>(['/']);
+  const selectedKeys = new Set<string>([selectedKey]);
   const openKeys = new Set<string>();
 
   const visit = (item: NavItem, ancestors: string[]) => {
@@ -193,7 +295,13 @@ const computeMenuState = (pathname: string) => {
     }
   };
 
-  for (const item of navigation) {
+  for (const item of dashboardNav) {
+    visit(item, []);
+  }
+  for (const item of knowledgeNav) {
+    visit(item, []);
+  }
+  for (const item of basicNav) {
     visit(item, []);
   }
 
@@ -203,6 +311,18 @@ const computeMenuState = (pathname: string) => {
     openKeys: Array.from(openKeys),
   };
 };
+
+/** 在三大类里找当前选中节点的父菜单（用于面包屑）。 */
+function findParentNavItem(key: string): NavItem | null {
+  for (const group of [dashboardNav, knowledgeNav, basicNav]) {
+    for (const item of group) {
+      if (item.children?.some((c) => c.key === key)) {
+        return item;
+      }
+    }
+  }
+  return null;
+}
 
 /**
  * 平台通用骨架布局组件 (BasicLayout)
@@ -242,21 +362,17 @@ const BasicLayout: React.FC = () => {
   };
 
   // 实时估算当前页面配置数据以更新页头标题解释
-  // 优先取子菜单（如 /schedules 命中"定时任务"），否则回退到父菜单
+  // 优先取子菜单（如 /tasks/jobs 命中"JOB配置"），否则回退到仪表盘第一项
   const currentPage = useMemo(
-    () => navFlatMap.get(selectedKey) ?? navigation[0],
+    () => navFlatMap.get(selectedKey) ?? fallbackCurrentPage,
     [selectedKey],
   );
 
-  // 如果当前选中的是子菜单，取其父菜单用于面包屑
-  const parentNavItem = useMemo(() => {
-    for (const item of navigation) {
-      if (item.children?.some((c) => c.key === selectedKey)) {
-        return item;
-      }
-    }
-    return null;
-  }, [selectedKey]);
+  // 如果当前选中的是子菜单，取其父菜单用于面包屑（跨三大类查找）
+  const parentNavItem = useMemo(
+    () => findParentNavItem(selectedKey),
+    [selectedKey],
+  );
 
   const handleLogout = () => {
     clearSession();
@@ -291,9 +407,25 @@ const BasicLayout: React.FC = () => {
           )}
         </div>
 
-        {/* 侧边栏菜单列表 */}
+        {/* 侧边栏菜单列表：按 仪表盘 / 知识生成 / 基础配置 三大类分段渲染 */}
+        {/* 第 1 段：仪表盘 / 看板 */}
         <div className="ci-sider-section">
-          {!collapsed && <span className="ci-sider-label">核心流程</span>}
+          {!collapsed && <span className="ci-sider-label">仪表盘 / 看板</span>}
+          <Menu
+            mode="inline"
+            selectedKeys={selectedKeys}
+            openKeys={openKeys}
+            onOpenChange={handleOpenChange}
+            onClick={() => {
+              if (isMobile) setCollapsed(true);
+            }}
+            items={dashboardMenuItems}
+            className="ci-menu"
+          />
+        </div>
+        {/* 第 2 段：知识生成 */}
+        <div className="ci-sider-section">
+          {!collapsed && <span className="ci-sider-label">知识生成</span>}
           <Menu
             mode="inline"
             selectedKeys={selectedKeys}
@@ -304,7 +436,22 @@ const BasicLayout: React.FC = () => {
               // 父菜单（带 children 的项）点击不跳转——只通过 onOpenChange 展开/折叠。
               // 必须用户点击某个具体子菜单项才路由跳转。
             }}
-            items={menuItems}
+            items={knowledgeMenuItems}
+            className="ci-menu"
+          />
+        </div>
+        {/* 第 3 段：基础配置 */}
+        <div className="ci-sider-section">
+          {!collapsed && <span className="ci-sider-label">基础配置</span>}
+          <Menu
+            mode="inline"
+            selectedKeys={selectedKeys}
+            openKeys={openKeys}
+            onOpenChange={handleOpenChange}
+            onClick={() => {
+              if (isMobile) setCollapsed(true);
+            }}
+            items={basicMenuItems}
             className="ci-menu"
           />
         </div>
@@ -401,7 +548,10 @@ const BasicLayout: React.FC = () => {
               <span>Live workspace</span>
             </div>
           </section>
-          
+
+          {/* 多页签导航条：每个打开的页面 = 一个 tab，工作台不计入 */}
+          <PageTabs />
+
           {/* 嵌套子组件渲染 Outlet */}
           <Outlet />
         </Content>

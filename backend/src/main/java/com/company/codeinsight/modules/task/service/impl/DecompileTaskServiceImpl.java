@@ -42,6 +42,15 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
     // 运行态任务的共享内存快照映射，避免事务提交延迟导致高频轮询读不到内存状态的竞争情况
     public static final java.util.Map<Long, DecompileTask> taskCache = new java.util.concurrent.ConcurrentHashMap<>();
 
+    /**
+     * 流水线断点恢复所需的轻量上下文（projectDir + IncrementalContext）。
+     * <p>在 {@code runPipeline} 入口识别步骤完成后入缓存；在断点（ENTRYPOINT_REVIEW）resume 时读取使用，
+     * 避免重新调用 {@code pullAndScan}（INCREMENTAL 任务会重复克隆仓库、可能更新 lastCommitId）。</p>
+     * <p>key 与 {@link #taskCache} 同步生命周期：在 pipeline 与 resume 方法的 finally 中一起清理。</p>
+     */
+    public record PipelineContext(java.io.File projectDir, com.company.codeinsight.modules.scanner.model.IncrementalContext ctx) {}
+    public static final java.util.Map<Long, PipelineContext> pipelineContextCache = new java.util.concurrent.ConcurrentHashMap<>();
+
     @Autowired
     private TaskStateMachineService stateMachineService;
 
@@ -73,6 +82,12 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
     private com.company.codeinsight.modules.hierarchy.service.ModuleHierarchyService moduleHierarchyService;
 
     @Autowired
+    private com.company.codeinsight.modules.entrypoint.service.EntrypointReviewService entrypointReviewService;
+
+    @Autowired
+    private com.company.codeinsight.modules.task.service.TaskConcurrencyLimiter taskConcurrencyLimiter;
+
+    @Autowired
     private com.company.codeinsight.modules.task.service.TaskExecutionLogger execLog;
 
     @Autowired
@@ -92,7 +107,10 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
      * 分页获取任务列表
      */
     @Override
-    public Page<DecompileTask> listTasksPage(int current, int size, Long systemId, String status, String type, List<String> statuses, Long scheduleId, String triggerSource) {
+    public Page<DecompileTask> listTasksPage(int current, int size, Long systemId, String status, String type,
+                                             List<String> statuses, Long scheduleId, String triggerSource,
+                                             String keyword, String modelName,
+                                             String createdAtStart, String createdAtEnd) {
         Page<DecompileTask> page = new Page<>(current, size);
         LambdaQueryWrapper<DecompileTask> queryWrapper = new LambdaQueryWrapper<>();
         queryWrapper.eq(systemId != null, DecompileTask::getSystemId, systemId)
@@ -104,7 +122,23 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
                 .eq(scheduleId != null, DecompileTask::getScheduleId, scheduleId)
                 // 按 triggerSource 过滤（手动下发 / 定时触发视图）
                 .eq(StringUtils.hasText(triggerSource), DecompileTask::getTriggerSource, triggerSource)
+                // 精准搜索：模型名精确匹配
+                .eq(StringUtils.hasText(modelName), DecompileTask::getModelName, modelName)
+                // 精准搜索：创建时间区间（可单边）
+                .ge(StringUtils.hasText(createdAtStart), DecompileTask::getCreatedAt, createdAtStart)
+                .le(StringUtils.hasText(createdAtEnd), DecompileTask::getCreatedAt, createdAtEnd)
                 .orderByDesc(DecompileTask::getCreatedAt);
+
+        // 简单搜索 keyword：纯数字按 id 精确匹配，否则按 model_name LIKE '%keyword%'
+        if (StringUtils.hasText(keyword)) {
+            String trimmed = keyword.trim();
+            if (trimmed.matches("\\d+")) {
+                queryWrapper.eq(DecompileTask::getId, Long.parseLong(trimmed));
+            } else {
+                queryWrapper.and(w -> w.like(DecompileTask::getModelName, trimmed));
+            }
+        }
+
         return this.page(page, queryWrapper);
     }
 
@@ -113,7 +147,7 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
      * key 是分组标识（API 返回给前端），value 是该分组下包含的所有状态枚举名。
      */
     private static final Map<String, List<String>> TASK_STATUS_GROUPS = Map.of(
-            "RUNNING",         List.of("PENDING", "PULLING_CODE", "PARSING_CODE", "SPLITTING_TASK", "AI_ANALYZING", "MODULE_HIERARCHY", "MODULE_HIERARCHY_REVIEW", "GENERATING_DOC", "PUSHING"),
+            "RUNNING",         List.of("PENDING", "PULLING_CODE", "PARSING_CODE", "SPLITTING_TASK", "ENTRYPOINT_REVIEW", "AI_ANALYZING", "MODULE_HIERARCHY", "MODULE_HIERARCHY_REVIEW", "GENERATING_DOC", "PUSHING"),
             "PENDING_REVIEW",  List.of("PENDING_REVIEW", "REVIEWING"),
             "CONFIRMED",       List.of("CONFIRMED", "PUSHED"),
             "CLOSED",          List.of("FAILED", "CANCELLED", "ARCHIVED", "DRAFT")
@@ -166,6 +200,21 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
                                            String modelName,
                                            com.company.codeinsight.modules.entrypoint.model.EntryPointConfig entryScanConfig,
                                            Boolean requireHierarchyReview) {
+        return createInitialTask(systemId, repositoryId, modularizePromptId, documentPromptId, modelName,
+                entryScanConfig, requireHierarchyReview, Boolean.TRUE);
+    }
+
+    /**
+     * 创建全量任务（含 ENTRYPOINT_REVIEW 断点开关）
+     */
+    @Override
+    @Transactional
+    public DecompileTask createInitialTask(Long systemId, Long repositoryId,
+                                           Long modularizePromptId, Long documentPromptId,
+                                           String modelName,
+                                           com.company.codeinsight.modules.entrypoint.model.EntryPointConfig entryScanConfig,
+                                           Boolean requireHierarchyReview,
+                                           Boolean requireEntrypointReview) {
         // 验证系统和仓库的从属合法性
         validateTaskSource(systemId, repositoryId);
         validateNoUnconfirmedDrafts(systemId, repositoryId);
@@ -192,6 +241,8 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
         task.setEntryScanConfig(com.company.codeinsight.modules.entrypoint.model.EntryPointConfigCodec.encode(entryScanConfig));
         // 默认开启模块层级调试断点，调用方显式传 false 才跳过
         task.setRequireHierarchyReview(requireHierarchyReview == null ? Boolean.TRUE : requireHierarchyReview);
+        // 默认开启知识入口复核断点，调用方显式传 false 才跳过
+        task.setRequireEntrypointReview(requireEntrypointReview == null ? Boolean.TRUE : requireEntrypointReview);
 
         this.save(task);
         return task;
@@ -207,6 +258,21 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
                                                String modelName,
                                                com.company.codeinsight.modules.entrypoint.model.EntryPointConfig entryScanConfig,
                                                Boolean requireHierarchyReview) {
+        return createIncrementalTask(systemId, repositoryId, modularizePromptId, documentPromptId, modelName,
+                entryScanConfig, requireHierarchyReview, Boolean.TRUE);
+    }
+
+    /**
+     * 创建增量任务（含 ENTRYPOINT_REVIEW 断点开关）
+     */
+    @Override
+    @Transactional
+    public DecompileTask createIncrementalTask(Long systemId, Long repositoryId,
+                                               Long modularizePromptId, Long documentPromptId,
+                                               String modelName,
+                                               com.company.codeinsight.modules.entrypoint.model.EntryPointConfig entryScanConfig,
+                                               Boolean requireHierarchyReview,
+                                               Boolean requireEntrypointReview) {
         validateTaskSource(systemId, repositoryId);
         validateNoUnconfirmedDrafts(systemId, repositoryId);
         DecompileTask task = new DecompileTask();
@@ -230,6 +296,7 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
         task.setModelName(modelName);
         task.setEntryScanConfig(com.company.codeinsight.modules.entrypoint.model.EntryPointConfigCodec.encode(entryScanConfig));
         task.setRequireHierarchyReview(requireHierarchyReview == null ? Boolean.TRUE : requireHierarchyReview);
+        task.setRequireEntrypointReview(requireEntrypointReview == null ? Boolean.TRUE : requireEntrypointReview);
 
         this.save(task);
         return task;
@@ -237,7 +304,7 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
 
     /**
      * 创建全量任务，并打上触发来源标签。
-     * <p>复用 {@link #createInitialTask(Long, Long, Long, Long, String, com.company.codeinsight.modules.entrypoint.model.EntryPointConfig, Boolean)}，
+     * <p>复用 {@link #createInitialTask(Long, Long, Long, Long, String, com.company.codeinsight.modules.entrypoint.model.EntryPointConfig, Boolean, Boolean)}，
      * 保存后回填 triggerSource / scheduleId（避免在原方法签名里追加与现有调用方无关的参数）。</p>
      */
     @Override
@@ -248,8 +315,25 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
                                            com.company.codeinsight.modules.entrypoint.model.EntryPointConfig entryScanConfig,
                                            Boolean requireHierarchyReview,
                                            String triggerSource, Long scheduleId) {
+        return createInitialTask(systemId, repositoryId, modularizePromptId, documentPromptId, modelName,
+                entryScanConfig, requireHierarchyReview, Boolean.TRUE, triggerSource, scheduleId);
+    }
+
+    /**
+     * 创建全量任务（含 ENTRYPOINT_REVIEW 断点开关 + 触发来源标签）
+     */
+    @Override
+    @Transactional
+    public DecompileTask createInitialTask(Long systemId, Long repositoryId,
+                                           Long modularizePromptId, Long documentPromptId,
+                                           String modelName,
+                                           com.company.codeinsight.modules.entrypoint.model.EntryPointConfig entryScanConfig,
+                                           Boolean requireHierarchyReview,
+                                           Boolean requireEntrypointReview,
+                                           String triggerSource, Long scheduleId) {
         DecompileTask task = createInitialTask(systemId, repositoryId,
-                modularizePromptId, documentPromptId, modelName, entryScanConfig, requireHierarchyReview);
+                modularizePromptId, documentPromptId, modelName, entryScanConfig,
+                requireHierarchyReview, requireEntrypointReview);
         applyTriggerSource(task.getId(), triggerSource, scheduleId);
         task.setTriggerSource(normalizeTriggerSource(triggerSource));
         task.setScheduleId(scheduleId);
@@ -267,8 +351,25 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
                                                com.company.codeinsight.modules.entrypoint.model.EntryPointConfig entryScanConfig,
                                                Boolean requireHierarchyReview,
                                                String triggerSource, Long scheduleId) {
+        return createIncrementalTask(systemId, repositoryId, modularizePromptId, documentPromptId, modelName,
+                entryScanConfig, requireHierarchyReview, Boolean.TRUE, triggerSource, scheduleId);
+    }
+
+    /**
+     * 创建增量任务（含 ENTRYPOINT_REVIEW 断点开关 + 触发来源标签）
+     */
+    @Override
+    @Transactional
+    public DecompileTask createIncrementalTask(Long systemId, Long repositoryId,
+                                               Long modularizePromptId, Long documentPromptId,
+                                               String modelName,
+                                               com.company.codeinsight.modules.entrypoint.model.EntryPointConfig entryScanConfig,
+                                               Boolean requireHierarchyReview,
+                                               Boolean requireEntrypointReview,
+                                               String triggerSource, Long scheduleId) {
         DecompileTask task = createIncrementalTask(systemId, repositoryId,
-                modularizePromptId, documentPromptId, modelName, entryScanConfig, requireHierarchyReview);
+                modularizePromptId, documentPromptId, modelName, entryScanConfig,
+                requireHierarchyReview, requireEntrypointReview);
         applyTriggerSource(task.getId(), triggerSource, scheduleId);
         task.setTriggerSource(normalizeTriggerSource(triggerSource));
         task.setScheduleId(scheduleId);
@@ -294,15 +395,25 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
     }
 
     /**
-     * 把传入的两类提示词 id 写入 task（先取调用方指定 id，未指定则取同类型默认提示词的 id）。
+     * 把传入的两类提示词 id 写入 task。
+     * 解析顺序：①调用方显式传入 → ②系统级绑定（ci_system.modularize_prompt_id / document_prompt_id）→ ③默认提示词（is_default=1）。
      */
     private void applyPromptIds(DecompileTask task, Long modularizePromptId, Long documentPromptId) {
+        // ② 系统级绑定（如果调用方未传）
+        Long sysModularize = null, sysDocument = null;
+        if (modularizePromptId == null || documentPromptId == null) {
+            SystemApplication sys = systemApplicationService.getById(task.getSystemId());
+            if (sys != null) {
+                if (modularizePromptId == null) sysModularize = sys.getModularizePromptId();
+                if (documentPromptId == null) sysDocument = sys.getDocumentPromptId();
+            }
+        }
         task.setModularizePromptId(modularizePromptId != null
                 ? modularizePromptId
-                : findDefaultPromptId(com.company.codeinsight.modules.prompt.entity.DecompilePrompt.TYPE_MODULARIZE));
+                : (sysModularize != null ? sysModularize : findDefaultPromptId(com.company.codeinsight.modules.prompt.entity.DecompilePrompt.TYPE_MODULARIZE)));
         task.setDocumentPromptId(documentPromptId != null
                 ? documentPromptId
-                : findDefaultPromptId(com.company.codeinsight.modules.prompt.entity.DecompilePrompt.TYPE_DOCUMENT_GENERATION));
+                : (sysDocument != null ? sysDocument : findDefaultPromptId(com.company.codeinsight.modules.prompt.entity.DecompilePrompt.TYPE_DOCUMENT_GENERATION)));
     }
 
     private Long findDefaultPromptId(String promptType) {
@@ -318,7 +429,7 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
     }
 
     /**
-     * 数据源合规性拦截校验
+     * 数据源合规性拦截校验：要求系统处于 ACTIVE 状态
      */
     private void validateTaskSource(Long systemId, Long repositoryId) {
         if (systemId == null || repositoryId == null) {
@@ -329,8 +440,11 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
         if (system == null) {
             throw new BusinessException("所选系统不存在");
         }
-        if (!Objects.equals(system.getStatus(), 1)) {
-            throw new BusinessException("所选系统已停用");
+        // 状态机校验：仅 ACTIVE 可创建任务
+        com.company.codeinsight.modules.system.enums.SystemState state =
+                com.company.codeinsight.modules.system.enums.SystemState.parse(system.getState());
+        if (!state.isEnabled()) {
+            throw new BusinessException("系统未启用，当前状态：" + state + "，请先完成配置并启用");
         }
 
         CodeRepository repository = codeRepositoryService.getById(repositoryId);
@@ -393,11 +507,21 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
         if (task == null) {
             throw new BusinessException("任务不存在");
         }
+        // 防双发：仅 DRAFT 可入队
+        if (!TaskStatus.DRAFT.name().equals(task.getStatus())) {
+            throw new BusinessException("仅 DRAFT 状态可启动；当前状态: " + task.getStatus());
+        }
+        // 缺省优先级：SCHEDULED=60, MANUAL=50
+        if (task.getPriority() == null) {
+            task.setPriority(defaultPriorityFor(task.getTriggerSource()));
+        }
         taskCache.put(task.getId(), task);
+        // DRAFT → PENDING（TaskQueueDispatcher 在下个 tick 拉起）
         stateMachineService.transitTo(task, TaskStatus.PENDING, null);
+    }
 
-        // 运行异步管道线程
-        runPipeline(task.getId());
+    private int defaultPriorityFor(String triggerSource) {
+        return "SCHEDULED".equalsIgnoreCase(triggerSource) ? 60 : 50;
     }
 
     /**
@@ -422,9 +546,17 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
         if (task == null) {
             throw new BusinessException("任务不存在");
         }
+        // 防双发：仅 FAILED/CANCELLED 可重试
+        String cur = task.getStatus();
+        if (!"FAILED".equals(cur) && !"CANCELLED".equals(cur)) {
+            throw new BusinessException("仅 FAILED/CANCELLED 状态可重试；当前状态: " + cur);
+        }
+        if (task.getPriority() == null) {
+            task.setPriority(defaultPriorityFor(task.getTriggerSource()));
+        }
         taskCache.put(task.getId(), task);
+        // FAILED/CANCELLED → PENDING（dispatcher 在下个 tick 拉起）
         stateMachineService.transitTo(task, TaskStatus.PENDING, null);
-        runPipeline(task.getId());
     }
 
     /**
@@ -470,6 +602,119 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
     }
 
     /**
+     * 在知识入口人工复核断点 (ENTRYPOINT_REVIEW) 处恢复流水线。
+     * <p>仅当任务处于 ENTRYPOINT_REVIEW 时可调用；流转到 AI_ANALYZING → MODULE_HIERARCHY →（按 requireHierarchyReview
+     * 选择 GENERATING_DOC 或 MODULE_HIERARCHY_REVIEW）。</p>
+     * <p>异步执行；projectDir / IncrementalContext 从 {@link #pipelineContextCache} 读取，避免重新调用
+     * {@code pullAndScan}（INCREMENTAL 任务会重复克隆仓库）。</p>
+     */
+    @Override
+    public void resumeAfterEntrypointReview(Long id) {
+        DecompileTask task = this.getById(id);
+        if (task == null) {
+            throw new BusinessException("任务不存在");
+        }
+        TaskStatus current = TaskStatus.valueOf(task.getStatus());
+        if (current != TaskStatus.ENTRYPOINT_REVIEW) {
+            throw new BusinessException("仅在知识入口复核状态下可恢复，当前状态: " + current);
+        }
+
+        taskCache.put(task.getId(), task);
+        CompletableFuture.runAsync(() -> {
+            try {
+                PipelineContext pctx = pipelineContextCache.get(id);
+                if (pctx == null) {
+                    throw new BusinessException("流水线上下文丢失（projectDir / IncrementalContext），请重试任务");
+                }
+                continueAfterEntrypointReview(id, task, pctx.projectDir(), pctx.ctx());
+            } catch (Exception e) {
+                log.error("Resume after entrypoint review failed for task " + id, e);
+                try {
+                    stateMachineService.transitTo(id, TaskStatus.FAILED, e.getMessage());
+                } catch (Exception ex) {
+                    log.error("Failed to transit failed status", ex);
+                }
+            } finally {
+                taskCache.remove(id);
+                pipelineContextCache.remove(id);
+            }
+        });
+    }
+
+    /**
+     * 在知识入口人工复核断点驳回任务。
+     * <p>仅当任务处于 ENTRYPOINT_REVIEW 时可调用；流转到 CANCELLED（不入任何知识资产）。</p>
+     *
+     * @param id     任务 ID
+     * @param reason 驳回理由（写进 task.error_reason 并落审计日志；可空）
+     */
+    @Override
+    @Transactional
+    public void rejectEntrypointReview(Long id, String reason) {
+        DecompileTask task = this.getById(id);
+        if (task == null) {
+            throw new BusinessException("任务不存在");
+        }
+        TaskStatus current = TaskStatus.valueOf(task.getStatus());
+        if (current != TaskStatus.ENTRYPOINT_REVIEW) {
+            throw new BusinessException("仅在知识入口复核状态下可驳回，当前状态: " + current);
+        }
+        String err = (reason == null || reason.isBlank()) ? "用户在知识入口复核驳回" : reason;
+        stateMachineService.transitTo(task, TaskStatus.CANCELLED, err);
+        pipelineContextCache.remove(id);
+        taskCache.remove(id);
+    }
+
+    /**
+     * ENTRYPOINT_REVIEW 之后的共享流水线尾段：AI_ANALYZING → MODULE_HIERARCHY →（按 requireHierarchyReview 决定）
+     * <p>从 {@code runPipeline}（断点跳过时）与 {@code resumeAfterEntrypointReview}（用户确认后）复用同一份代码。</p>
+     */
+    private void continueAfterEntrypointReview(Long taskId, DecompileTask task,
+                                               File projectDir,
+                                               com.company.codeinsight.modules.scanner.model.IncrementalContext incrementalCtx) {
+        // 4. AI_ANALYZING → MODULE_HIERARCHY
+        stateMachineService.transitTo(taskId, TaskStatus.AI_ANALYZING, null);
+        execLog.log(taskId, ">>> AI_ANALYZING — AI 归纳");
+        execLog.log(taskId, "  aiMock=" + aiSummaryService.isAiMock() + " | model="
+                + (task.getModelName() != null ? task.getModelName() : "(default)"));
+        long aiT0 = System.currentTimeMillis();
+        stateMachineService.transitTo(taskId, TaskStatus.MODULE_HIERARCHY, null);
+        execLog.log(taskId, ">>> MODULE_HIERARCHY — AI 提炼模块层级");
+        long t1 = System.currentTimeMillis();
+        com.company.codeinsight.modules.hierarchy.model.ModuleHierarchy hierarchy =
+                moduleHierarchyService.buildAndPersist(taskId, projectDir, incrementalCtx);
+        int modCount = hierarchy.getModules() != null ? hierarchy.getModules().size() : 0;
+        execLog.log(taskId, "  模块数         = " + modCount);
+        execLog.log(taskId, "  耗时 " + (System.currentTimeMillis() - t1) + "ms");
+
+        List<CodeChunk> chunks = codeChunkService.getChunksByTaskId(taskId);
+
+        // 5. 调试断点 / GENERATING_DOC
+        if (!Boolean.TRUE.equals(task.getRequireHierarchyReview())) {
+            execLog.log(taskId, ">>> GENERATING_DOC — 生成文档");
+            t1 = System.currentTimeMillis();
+            stateMachineService.transitTo(taskId, TaskStatus.GENERATING_DOC, null);
+            aiSummaryService.generateDraftDocument(taskId, chunks, resolvePromptContent(task), incrementalCtx);
+            stateMachineService.transitTo(taskId, TaskStatus.PENDING_REVIEW, null);
+            execLog.log(taskId, "  耗时 " + (System.currentTimeMillis() - t1) + "ms");
+            // AI 阶段终态汇总：从 ci_ai_call_record 统计本次任务的成功/失败次数
+            long aiOk = aiCallRecordMapper.selectCount(
+                    new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<com.company.codeinsight.modules.ai.entity.AiCallRecord>()
+                            .eq(com.company.codeinsight.modules.ai.entity.AiCallRecord::getTaskId, taskId)
+                            .eq(com.company.codeinsight.modules.ai.entity.AiCallRecord::getIsSuccess, 1));
+            long aiFail = aiCallRecordMapper.selectCount(
+                    new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<com.company.codeinsight.modules.ai.entity.AiCallRecord>()
+                            .eq(com.company.codeinsight.modules.ai.entity.AiCallRecord::getTaskId, taskId)
+                            .eq(com.company.codeinsight.modules.ai.entity.AiCallRecord::getIsSuccess, 0));
+            execLog.log(taskId, "<<< AI_ANALYZING 完成 (成功 " + aiOk + " 失败 " + aiFail + ", 耗时 " + (System.currentTimeMillis() - aiT0) + "ms)");
+            execLog.log(taskId, "<<< 流水线完成 → PENDING_REVIEW");
+        } else {
+            stateMachineService.transitTo(taskId, TaskStatus.MODULE_HIERARCHY_REVIEW, null);
+            execLog.log(taskId, "<<< 暂停 — 等待人工复核模块层级");
+        }
+    }
+
+    /**
      * 按 task 记录的 documentPromptId（或 DOCUMENT_GENERATION 类型的默认提示词）解析草稿生成时所用的提示词正文。
      */
     private String resolvePromptContent(DecompileTask task) {
@@ -498,7 +743,12 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
      * 异步流水线核心控制器
      * 将代码扫描、切片、AI分析和归纳归整串联在一起的无阻塞后台流水线。
      */
-    private void runPipeline(Long taskId) {
+    @Override
+    public void runPipeline(Long taskId) {
+        // 缓存 systemId 用于 finally 释放并发许可
+        DecompileTask task4SysId = taskCache.get(taskId);
+        Long systemId = (task4SysId != null) ? task4SysId.getSystemId()
+                : (this.getById(taskId) != null ? this.getById(taskId).getSystemId() : null);
         CompletableFuture.runAsync(() -> {
             long t0 = System.currentTimeMillis();
             try {
@@ -554,45 +804,29 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
                 execLog.log(taskId, "  切片总数       = " + allChunks.size() + " (FILE=" + fileCount + " CLASS=" + clsCount + " METHOD=" + mtdCount + ")");
                 execLog.log(taskId, "  耗时 " + (System.currentTimeMillis() - t1) + "ms");
 
-                // 4. AI_ANALYZING → MODULE_HIERARCHY
-                stateMachineService.transitTo(taskId, TaskStatus.AI_ANALYZING, null);
-                execLog.log(taskId, ">>> AI_ANALYZING — AI 归纳");
-                execLog.log(taskId, "  aiMock=" + aiSummaryService.isAiMock() + " | model=" + (task.getModelName() != null ? task.getModelName() : "(default)"));
-                long aiT0 = System.currentTimeMillis();
-                stateMachineService.transitTo(taskId, TaskStatus.MODULE_HIERARCHY, null);
-                execLog.log(taskId, ">>> MODULE_HIERARCHY — AI 提炼模块层级");
+                // 3.5 ENTRYPOINT_REVIEW — 入口识别 + 落表（无论是否启用断点都先落表，保证 AI 阶段数据一致）
+                execLog.log(taskId, ">>> ENTRYPOINT_DISCOVERY — 知识入口识别与落表");
                 t1 = System.currentTimeMillis();
-                com.company.codeinsight.modules.hierarchy.model.ModuleHierarchy hierarchy =
-                        moduleHierarchyService.buildAndPersist(taskId, projectDir, incrementalCtx);
-                int modCount = hierarchy.getModules() != null ? hierarchy.getModules().size() : 0;
-                execLog.log(taskId, "  模块数         = " + modCount);
+                com.company.codeinsight.modules.entrypoint.model.EntryPointConfig entryPointConfig =
+                        entrypointReviewService.resolveConfig(task);
+                java.util.List<com.company.codeinsight.modules.entrypoint.model.DiscoveredEntrypoint> discovered =
+                        entrypointReviewService.discoverAndPersist(taskId, projectDir, entryPointConfig);
+                int epCount = discovered == null ? 0 : discovered.size();
+                int mtdTotal = discovered == null ? 0
+                        : discovered.stream().mapToInt(d -> d.getMethods() == null ? 0 : d.getMethods().size()).sum();
+                execLog.log(taskId, "  入口数         = " + epCount + " (含方法总数 = " + mtdTotal + ")");
                 execLog.log(taskId, "  耗时 " + (System.currentTimeMillis() - t1) + "ms");
 
-                List<CodeChunk> chunks = codeChunkService.getChunksByTaskId(taskId);
+                // 流水线上下文入缓存，供 resumeAfterEntrypointReview 使用
+                pipelineContextCache.put(taskId, new PipelineContext(projectDir, incrementalCtx));
 
-                // 5. 调试断点 / GENERATING_DOC
-                if (!Boolean.TRUE.equals(task.getRequireHierarchyReview())) {
-                    execLog.log(taskId, ">>> GENERATING_DOC — 生成文档");
-                    t1 = System.currentTimeMillis();
-                    stateMachineService.transitTo(taskId, TaskStatus.GENERATING_DOC, null);
-                    aiSummaryService.generateDraftDocument(taskId, chunks, resolvePromptContent(task), incrementalCtx);
-                    stateMachineService.transitTo(taskId, TaskStatus.PENDING_REVIEW, null);
-                    execLog.log(taskId, "  耗时 " + (System.currentTimeMillis() - t1) + "ms");
-                    // AI 阶段终态汇总：从 ci_ai_call_record 统计本次任务的成功/失败次数
-                    long aiOk = aiCallRecordMapper.selectCount(
-                            new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<com.company.codeinsight.modules.ai.entity.AiCallRecord>()
-                                    .eq(com.company.codeinsight.modules.ai.entity.AiCallRecord::getTaskId, taskId)
-                                    .eq(com.company.codeinsight.modules.ai.entity.AiCallRecord::getIsSuccess, 1));
-                    long aiFail = aiCallRecordMapper.selectCount(
-                            new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<com.company.codeinsight.modules.ai.entity.AiCallRecord>()
-                                    .eq(com.company.codeinsight.modules.ai.entity.AiCallRecord::getTaskId, taskId)
-                                    .eq(com.company.codeinsight.modules.ai.entity.AiCallRecord::getIsSuccess, 0));
-                    execLog.log(taskId, "<<< AI_ANALYZING 完成 (成功 " + aiOk + " 失败 " + aiFail + ", 耗时 " + (System.currentTimeMillis() - aiT0) + "ms)");
-                    execLog.log(taskId, "<<< 流水线完成 → PENDING_REVIEW (总耗时 " + (System.currentTimeMillis() - t0) + "ms)");
-                } else {
-                    stateMachineService.transitTo(taskId, TaskStatus.MODULE_HIERARCHY_REVIEW, null);
-                    execLog.log(taskId, "<<< 暂停 — 等待人工复核模块层级 (已耗时 " + (System.currentTimeMillis() - t0) + "ms)");
+                if (Boolean.TRUE.equals(task.getRequireEntrypointReview())) {
+                    stateMachineService.transitTo(taskId, TaskStatus.ENTRYPOINT_REVIEW, null);
+                    execLog.log(taskId, "<<< 暂停 — 等待人工复核知识入口 (已耗时 " + (System.currentTimeMillis() - t0) + "ms)");
+                    return;
                 }
+                // 跳过断点：直接进入 AI 阶段（continueAfterEntrypointReview 复用）
+                continueAfterEntrypointReview(taskId, task, projectDir, incrementalCtx);
                 return;
             } catch (Exception e) {
                 execLog.log(taskId, "!!! 流水线异常: " + e.getClass().getSimpleName() + " — " + e.getMessage());
@@ -608,8 +842,74 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
                 }
             } finally {
                 taskCache.remove(taskId);
+                pipelineContextCache.remove(taskId);
+                // 释放任务并发许可（TaskQueueDispatcher / startTask 获取的全局 + 系统 Semaphore）
+                if (systemId != null) {
+                    taskConcurrencyLimiter.release(systemId);
+                }
             }
         });
+    }
+
+    // ========== 队列管控方法 ==========
+
+    @Override
+    public void cancelQueuedTask(Long id) {
+        DecompileTask task = this.getById(id);
+        if (task == null) throw new BusinessException("任务不存在");
+        if (!TaskStatus.PENDING.name().equals(task.getStatus())) {
+            throw new BusinessException("仅 PENDING 状态可取消（in-flight 请用终止）");
+        }
+        stateMachineService.transitTo(task, TaskStatus.CANCELLED, "用户在队列中取消");
+    }
+
+    @Override
+    public void adjustPriority(Long id, Integer newPriority) {
+        if (newPriority == null || newPriority < 0 || newPriority > 100) {
+            throw new BusinessException("priority 必须在 [0, 100] 范围");
+        }
+        DecompileTask task = this.getById(id);
+        if (task == null) throw new BusinessException("任务不存在");
+        if (!TaskStatus.PENDING.name().equals(task.getStatus())) {
+            throw new BusinessException("仅 PENDING 状态可调整优先级");
+        }
+        task.setPriority(newPriority);
+        this.updateById(task);
+    }
+
+    @Override
+    public Page<DecompileTask> listQueuedTasks(int current, int size, Long systemId) {
+        Page<DecompileTask> page = new Page<>(current, size);
+        LambdaQueryWrapper<DecompileTask> qw = new LambdaQueryWrapper<>();
+        qw.eq(DecompileTask::getStatus, TaskStatus.PENDING.name())
+          .eq(systemId != null, DecompileTask::getSystemId, systemId)
+          .orderByDesc(DecompileTask::getPriority)
+          .orderByAsc(DecompileTask::getCreatedAt);
+        return this.page(page, qw);
+    }
+
+    @Override
+    public Map<String, Object> getQueueSummary() {
+        List<DecompileTask> pending = this.list(new LambdaQueryWrapper<DecompileTask>()
+                .eq(DecompileTask::getStatus, TaskStatus.PENDING.name()));
+        long total = pending.size();
+        long avgWaitSeconds = 0;
+        if (!pending.isEmpty()) {
+            long now = System.currentTimeMillis();
+            long sum = 0;
+            for (DecompileTask t : pending) {
+                if (t.getCreatedAt() != null) {
+                    long wait = (now - t.getCreatedAt()
+                            .atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()) / 1000;
+                    if (wait > 0) sum += wait;
+                }
+            }
+            avgWaitSeconds = sum / total;
+        }
+        Map<String, Object> result = new java.util.HashMap<>();
+        result.put("total", total);
+        result.put("avgWaitSeconds", avgWaitSeconds);
+        return result;
     }
 }
 

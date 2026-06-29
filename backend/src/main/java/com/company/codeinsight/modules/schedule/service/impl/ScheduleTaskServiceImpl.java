@@ -233,6 +233,7 @@ public class ScheduleTaskServiceImpl extends ServiceImpl<ScheduleTaskMapper, Sch
                         s.getModelName(),
                         EntryPointConfigCodec.decode(s.getEntryScanConfig()),
                         s.getRequireHierarchyReview() != null && s.getRequireHierarchyReview() == 1,
+                        s.getRequireEntrypointReview() == null || s.getRequireEntrypointReview() == 1,
                         triggerSource, s.getId());
             } else {
                 task = decompileTaskService.createIncrementalTask(s.getSystemId(), s.getRepositoryId(),
@@ -240,6 +241,7 @@ public class ScheduleTaskServiceImpl extends ServiceImpl<ScheduleTaskMapper, Sch
                         s.getModelName(),
                         EntryPointConfigCodec.decode(s.getEntryScanConfig()),
                         s.getRequireHierarchyReview() != null && s.getRequireHierarchyReview() == 1,
+                        s.getRequireEntrypointReview() == null || s.getRequireEntrypointReview() == 1,
                         triggerSource, s.getId());
             }
             // 立刻启动流水线
@@ -353,10 +355,10 @@ public class ScheduleTaskServiceImpl extends ServiceImpl<ScheduleTaskMapper, Sch
         if (last == null) return false;
         String st = last.getStatus();
         if (st == null) return false;
-        // RUNNING 状态分组：PENDING / PULLING_CODE / PARSING_CODE / SPLITTING_TASK /
+        // RUNNING 状态分组：PENDING / PULLING_CODE / PARSING_CODE / SPLITTING_TASK / ENTRYPOINT_REVIEW /
         // AI_ANALYZING / MODULE_HIERARCHY / MODULE_HIERARCHY_REVIEW / GENERATING_DOC / PUSHING
         return switch (st) {
-            case "PENDING", "PULLING_CODE", "PARSING_CODE", "SPLITTING_TASK",
+            case "PENDING", "PULLING_CODE", "PARSING_CODE", "SPLITTING_TASK", "ENTRYPOINT_REVIEW",
                  "AI_ANALYZING", "MODULE_HIERARCHY", "MODULE_HIERARCHY_REVIEW",
                  "GENERATING_DOC", "PUSHING" -> true;
             default -> false;
@@ -439,6 +441,8 @@ public class ScheduleTaskServiceImpl extends ServiceImpl<ScheduleTaskMapper, Sch
         s.setEntryScanConfig(EntryPointConfigCodec.encode(dto.getEntryScanConfig()));
         s.setRequireHierarchyReview(dto.getRequireHierarchyReview() == null
                 || dto.getRequireHierarchyReview() ? 1 : 0);
+        s.setRequireEntrypointReview(dto.getRequireEntrypointReview() == null
+                || dto.getRequireEntrypointReview() ? 1 : 0);
     }
 
     private void applyUpdateDto(ScheduleTask s, ScheduleTaskUpdateDto dto) {
@@ -454,6 +458,7 @@ public class ScheduleTaskServiceImpl extends ServiceImpl<ScheduleTaskMapper, Sch
         if (dto.getModelName() != null) s.setModelName(dto.getModelName());
         if (dto.getEntryScanConfig() != null) s.setEntryScanConfig(EntryPointConfigCodec.encode(dto.getEntryScanConfig()));
         if (dto.getRequireHierarchyReview() != null) s.setRequireHierarchyReview(dto.getRequireHierarchyReview() ? 1 : 0);
+        if (dto.getRequireEntrypointReview() != null) s.setRequireEntrypointReview(dto.getRequireEntrypointReview() ? 1 : 0);
     }
 
     private static FireStrategy parseFireStrategy(String s) {

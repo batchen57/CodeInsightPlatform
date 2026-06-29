@@ -31,35 +31,28 @@ public class CodeRepositoryController {
     private OperationLogService operationLogService;
 
     /**
-     * 新增代码库配置，默认进行密码凭证脱敏
+     * 新增代码库配置：自动推进系统状态至 REPO_CONFIGURED / SCAN_CONFIGURED
      */
     @Operation(summary = "新增代码库")
     @PostMapping
     public ApiResponse<CodeRepository> createRepository(@Valid @RequestBody CodeRepository repository) {
-        repository.setId(null);
-        codeRepositoryService.save(repository);
-        operationLogService.logOperation(repository.getSystemId(), null, "CREATE_REPO", "创建代码库: " + repository.getGitUrl(), null, true);
-        maskPassword(repository);
-        return ApiResponse.success(repository);
+        CodeRepository created = codeRepositoryService.createRepository(repository);
+        operationLogService.logOperation(created.getSystemId(), null, "CREATE_REPO", "创建代码库: " + created.getGitUrl(), null, true);
+        maskPassword(created);
+        return ApiResponse.success(created);
     }
 
     /**
-     * 编辑代码库配置。如果密码输入为星号“******”且未更改，则默认还原为旧凭证进行保存。
+     * 编辑代码库配置。密码占位 "******" 自动还原为旧凭证；
+     * 若 entryScanConfig 由 null 变为非空，自动推进系统到 SCAN_CONFIGURED。
      */
     @Operation(summary = "编辑代码库")
     @PutMapping("/{id}")
     public ApiResponse<CodeRepository> updateRepository(@PathVariable Long id, @Valid @RequestBody CodeRepository repository) {
-        repository.setId(id);
-        if ("******".equals(repository.getPassword())) {
-            CodeRepository existing = codeRepositoryService.getById(id);
-            if (existing != null) {
-                repository.setPassword(existing.getPassword());
-            }
-        }
-        codeRepositoryService.updateById(repository);
-        operationLogService.logOperation(repository.getSystemId(), null, "UPDATE_REPO", "更新代码库: " + repository.getGitUrl(), null, true);
-        maskPassword(repository);
-        return ApiResponse.success(repository);
+        CodeRepository updated = codeRepositoryService.updateRepository(id, repository);
+        operationLogService.logOperation(updated.getSystemId(), null, "UPDATE_REPO", "更新代码库: " + updated.getGitUrl(), null, true);
+        maskPassword(updated);
+        return ApiResponse.success(updated);
     }
 
     /**

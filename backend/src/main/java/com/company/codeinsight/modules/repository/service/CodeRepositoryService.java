@@ -6,7 +6,7 @@ import com.company.codeinsight.modules.repository.entity.CodeRepository;
 
 /**
  * 代码仓库管理服务接口
- * 负责定义代码仓库列表分页查询、Git 网络测试连通性、软删除强校验等业务规则。
+ * 负责定义代码仓库列表分页查询、Git 网络测试连通性、创建/更新时触发系统状态机、软删除强校验等业务规则。
  */
 public interface CodeRepositoryService extends IService<CodeRepository> {
 
@@ -24,6 +24,18 @@ public interface CodeRepositoryService extends IService<CodeRepository> {
      * 针对新输入的仓库参数进行实时连接有效性测试
      */
     boolean testConnection(String gitUrl, String branch, String username, String password);
+
+    /**
+     * 新建仓库：保存后自动推进系统状态
+     *  - 若系统当前 DRAFT → REPO_CONFIGURED
+     *  - 若新建时已带 entryScanConfig → 同时推进到 SCAN_CONFIGURED
+     */
+    CodeRepository createRepository(CodeRepository repository);
+
+    /**
+     * 更新仓库：若 entryScanConfig 由 null 变为非空，推进系统到 SCAN_CONFIGURED
+     */
+    CodeRepository updateRepository(Long id, CodeRepository repository);
 
     /**
      * 软删除代码库。强校验：存在活跃任务时拒绝。

@@ -51,12 +51,15 @@ public interface DecompilePromptService extends IService<DecompilePrompt> {
     /**
      * 用测试代码和指定的模型测试试跑该提示词模板并输出大模型分析结果与 Token 耗时开销统计
      *
-     * @param id         提示词模板 ID
-     * @param sampleCode 用于分析测试的 Java 类/方法代码片段
-     * @param modelId    指定的模型 ID
+     * @param id              提示词模板 ID
+     * @param sampleCode      用于分析测试的 Java 类/方法代码片段
+     * @param modelId         指定的模型 ID
+     * @param resolvedContent 前端已替换占位符的最终 prompt 正文。
+     *                        若非空,直接作为最终 prompt 调用 AI,不再做占位符替换/class/method 解析。
+     *                        若为空/null,则按老流程从 prompt.content + sampleCode 拼装。
      * @return 试跑报告数据传输对象
      */
-    PromptTestResultDto testRun(Long id, String sampleCode, Long modelId);
+    PromptTestResultDto testRun(Long id, String sampleCode, Long modelId, String resolvedContent);
 
     /**
      * 解析任务运行时指定类型的提示词正文（用于流水线各阶段）
@@ -76,7 +79,10 @@ public interface DecompilePromptService extends IService<DecompilePrompt> {
 
     /**
      * 流式试跑提示词模板，按内容增量和结束事件输出。
+     *
+     * @param resolvedContent 前端已替换占位符的最终 prompt 正文;为空时走老流程
      */
-    void testRunStream(Long id, String sampleCode, Long modelId, Consumer<PromptTestStreamEventDto> eventConsumer);
+    void testRunStream(Long id, String sampleCode, Long modelId, String resolvedContent,
+                       Consumer<PromptTestStreamEventDto> eventConsumer);
 }
 

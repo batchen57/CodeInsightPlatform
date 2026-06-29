@@ -61,6 +61,14 @@ public class AiSummaryServiceImpl implements AiSummaryService {
     @Autowired
     private TokenAuditService tokenAuditService;
 
+    // 基础配置 - 流量管控：用户额度前置检查
+    @Autowired
+    private com.company.codeinsight.modules.quotacontrol.service.QuotaCheckService quotaCheckService;
+
+    // 基础配置 - 流量管控：AI 调用并发信号量
+    @Autowired
+    private com.company.codeinsight.modules.quotacontrol.service.AiConcurrencyService aiConcurrencyService;
+
     // 草稿工作区映射
     @Autowired
     private DraftWorkspaceMapper draftWorkspaceMapper;
@@ -228,6 +236,12 @@ public class AiSummaryServiceImpl implements AiSummaryService {
                     + "，当前已消耗 " + systemUsed + "，预估当前消耗 " + currentEstimate);
         }
 
+        // 5.1 用户级额度前置检查（基础配置模块-流量管控）
+        quotaCheckService.checkUserQuota(currentEstimate);
+        // 5.2 AI 调用并发控制：拿不到信号量许可直接抛错（业务调用方应捕获并降级）
+        aiConcurrencyService.tryAcquire();
+        try {
+
         // 6. 若配置了 Mock 模式，或者无有效大模型密钥时，直接启用本地逻辑降级兜底生成
         boolean shouldMock = this.aiMock;
         if (!shouldMock) {
@@ -239,7 +253,7 @@ public class AiSummaryServiceImpl implements AiSummaryService {
         if (shouldMock) {
             log.info("未配置大模型密钥或已开启 Mock，对切片 {} 启用本地 Mock 生成", chunkId);
             String mockResult = generateMockSummary(chunk);
-            
+
             // 记录审计与调用报表
             saveCallRecordAndAudit(systemId, taskId, resolvePromptId(task, "CHUNK"), null, chunkId, modelToUse,
                     promptInput.length() / 3, mockResult.length() / 3, mockResult, true, null, 100, "CHUNK_SUMMARY");
@@ -252,7 +266,7 @@ public class AiSummaryServiceImpl implements AiSummaryService {
             Map<String, Object> reqBody = new HashMap<>();
             reqBody.put("model", modelToUse);
             reqBody.put("stream", false);
-            
+
             List<Map<String, String>> messages = new ArrayList<>();
             Map<String, String> userMsg = new HashMap<>();
             userMsg.put("role", "user");
@@ -309,6 +323,10 @@ public class AiSummaryServiceImpl implements AiSummaryService {
             saveCallRecordAndAudit(systemId, taskId, resolvePromptId(task, "CHUNK"), null, chunkId, modelToUse,
                     promptInput.length() / 3, 0, "[AI_ERROR: " + e.getMessage() + "]", false, e.getMessage(), duration, "CHUNK_SUMMARY");
             return "[AI_ERROR: " + e.getMessage() + "]";
+        }
+        } finally {
+            // 释放并发信号量（无论成功/失败/异常）
+            aiConcurrencyService.release();
         }
     }
 
@@ -1458,8 +1476,8 @@ public class AiSummaryServiceImpl implements AiSummaryService {
 
         aiCallRecordMapper.insert(record);
 
-        // 写入 Token 审计（callStage 作为 type 维度）
-        tokenAuditService.logTokenUsage(systemId, taskId, model, inTokens, outTokens, callStage == null ? "INITIAL" : callStage, isSuccess);
+        // 写入 Token 审计（callStage 作为 type 维度；userId 来自当前操作人）
+        tokenAuditService.logTokenUsage(systemId, taskId, com.company.codeinsight.common.auth.OperatorContext.getUserId(), model, inTokens, outTokens, callStage == null ? "INITIAL" : callStage, isSuccess);
     }
 
     @Override
@@ -1502,6 +1520,16 @@ public class AiSummaryServiceImpl implements AiSummaryService {
             log.warn("Token 额度阻断：systemUsed={}, currentEstimate={}, systemLimit={}", systemUsed, currentEstimate, systemMonthlyTokenLimit);
             return "{}";
         }
+
+        // 基础配置 - 流量管控：用户额度 + AI 调用并发
+        try {
+            quotaCheckService.checkUserQuota(currentEstimate);
+        } catch (BusinessException e) {
+            log.warn("用户额度阻断（summarizeWithPrompt）: {}", e.getMessage());
+            return "{}";
+        }
+        aiConcurrencyService.tryAcquire();
+        try {
 
         // Mock 降级
         boolean shouldMock = this.aiMock
@@ -1573,6 +1601,10 @@ public class AiSummaryServiceImpl implements AiSummaryService {
             saveCallRecordAndAudit(systemId, taskId, resolvePromptId(task, callStage), null,
                     null, modelToUse, currentEstimate, 0, "{}", false, e.getMessage(), duration, callStage);
             return "{}";
+        }
+        } finally {
+            // 释放并发信号量
+            aiConcurrencyService.release();
         }
     }
 

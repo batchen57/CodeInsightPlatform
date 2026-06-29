@@ -1,5 +1,9 @@
 package com.company.codeinsight.modules.hierarchy.model;
 
+import com.company.codeinsight.common.util.jackson.YnBooleanDeserializer;
+import com.company.codeinsight.common.util.jackson.YnBooleanSerializer;
+import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
+import com.fasterxml.jackson.databind.annotation.JsonSerialize;
 import lombok.Data;
 
 import java.util.LinkedHashSet;
@@ -32,4 +36,11 @@ public class FunctionDto {
      * 用于阶段 2 按方法签名粒度反查调用链，喂 AI 文档生成
      */
     private Set<String> methodSignatures = new LinkedHashSet<>();
+
+    /**
+     * 人工逐项复核确认标记：JSON 中以 "Y" / "N" 字符串形式呈现
+     */
+    @JsonSerialize(using = YnBooleanSerializer.class)
+    @JsonDeserialize(using = YnBooleanDeserializer.class)
+    private Boolean confirmed;
 }
