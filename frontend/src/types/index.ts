@@ -54,6 +54,8 @@ export interface Prompt {
   isDefault: number; // 0-否, 1-是
   /** 提示词用途：MODULARIZE-模块提取 / DOCUMENT_GENERATION-文档生成 */
   promptType?: 'MODULARIZE' | 'DOCUMENT_GENERATION' | string;
+  /** 生命周期：DRAFT-草稿(可编辑) / RELEASED-已发布(锁定) / ARCHIVED-已归档 */
+  lifecycle?: 'DRAFT' | 'RELEASED' | 'ARCHIVED' | string;
   createdAt: string;
   updatedAt: string;
 }
@@ -107,7 +109,7 @@ export interface PipelineStageStat {
 
 /**
  * 任务执行日志的结构化摘要（来自 GET /tasks/{id}/log/summary）。
- * 同时驱动反编译任务页的"执行日志"卡片与"查看完整日志"模态框顶栏。
+ * 同时驱动知识构建任务页的"执行日志"卡片与"查看完整日志"模态框顶栏。
  */
 export interface TaskLogSummary {
   taskId: number;
@@ -444,7 +446,7 @@ export interface ScheduleTask {
   /** 是否启用知识入口复核断点：0-否 1-是；触发任务时复制到 ci_task */
   requireEntrypointReview?: number;
   lastFiredAt?: string;
-  /** 最近一次触发产生的反编译任务 ID */
+  /** 最近一次触发产生的知识构建任务 ID */
   lastTaskId?: number;
   /** 最近一次触发状态 */
   lastStatus?: FireStatus;
@@ -463,7 +465,7 @@ export interface ScheduleTask {
 export interface ScheduleFireRecord {
   id: number;
   scheduleId: number;
-  /** 本次触发创建的反编译任务 ID（SKIPPED 时为空） */
+  /** 本次触发创建的知识构建任务 ID（SKIPPED 时为空） */
   taskId?: number;
   fireTime: string;
   plannedTime: string;

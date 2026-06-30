@@ -131,7 +131,7 @@ const JobsList: React.FC = () => {
       const res = await triggerScheduleNow(s.id);
       message.success(res.taskId ? `已触发，创建任务 #${res.taskId}` : '已触发');
       if (res.taskId) {
-        if (window.confirm('已创建反编译任务，是否前往任务详情？')) {
+        if (window.confirm('已创建知识构建任务，是否前往任务详情？')) {
           navigate(`/tasks/${res.taskId}`);
         }
       }

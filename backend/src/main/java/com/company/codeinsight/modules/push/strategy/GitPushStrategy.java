@@ -48,7 +48,7 @@ public class GitPushStrategy implements PushStrategy {
     public String execute(KnowledgeVersion version, PushTask task) {
         DecompileTask decompileTask = taskMapper.selectById(version.getTaskId());
         if (decompileTask == null) {
-            throw new BusinessException("未找到关联的反编译任务");
+            throw new BusinessException("未找到关联的知识构建任务");
         }
 
         CodeRepository repo = repositoryMapper.selectById(version.getRepositoryId());

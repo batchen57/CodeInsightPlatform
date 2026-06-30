@@ -174,7 +174,7 @@ CodeInsightPlatform/
 |   |   |   +-- system/         系统接入
 |   |   |   +-- repository/     代码库配置
 |   |   |   +-- prompt/         提示词模板
-|   |   |   +-- task/           反编译任务 + 状态机
+|   |   |   +-- task/           知识构建任务 + 状态机
 |   |   |   +-- scanner/        拉取 + 扫描 + 增量 diff（pullAndScan / ScanResult / IncrementalContext）
 |   |   |   +-- parser/         Java AST 解析
 |   |   |   +-- callchain/      方法调用链落表

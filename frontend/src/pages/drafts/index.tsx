@@ -444,7 +444,7 @@ const Drafts: React.FC = () => {
         }
       })
       .catch(() => {
-        message.error('加载反编译任务失败');
+        message.error('加载知识构建任务失败');
       })
       .finally(() => setTasksLoading(false));
   }, [selectedSystemId, demoMode, setSearchParams]);

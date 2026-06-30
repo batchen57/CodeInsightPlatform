@@ -118,7 +118,7 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
                 .eq(StringUtils.hasText(status), DecompileTask::getStatus, status)
                 .in(statuses != null && !statuses.isEmpty(), DecompileTask::getStatus, statuses)
                 .eq(StringUtils.hasText(type), DecompileTask::getType, type)
-                // 按 scheduleId 过滤（用于定时任务详情页查看该 schedule 触发的所有反编译任务）
+                // 按 scheduleId 过滤（用于定时任务详情页查看该 schedule 触发的所有知识构建任务）
                 .eq(scheduleId != null, DecompileTask::getScheduleId, scheduleId)
                 // 按 triggerSource 过滤（手动下发 / 定时触发视图）
                 .eq(StringUtils.hasText(triggerSource), DecompileTask::getTriggerSource, triggerSource)

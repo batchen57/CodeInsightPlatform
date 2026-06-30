@@ -19,10 +19,10 @@ export const PATH_META: Record<string, PathMeta> = {
   '/basic/permissions': { title: '权限管理', parent: '基础配置' },
   '/basic/quota': { title: '流量管控', parent: '基础配置' },
 
-  '/tasks/query': { title: '任务查询', parent: '反编译任务' },
-  '/tasks/dispatch': { title: '手动下发', parent: '反编译任务' },
-  '/tasks/jobs': { title: 'JOB配置', parent: '反编译任务' },
-  '/tasks/jobs/new': { title: '新建定时任务', parent: '反编译任务' },
+  '/tasks/query': { title: '任务查询', parent: '知识构建任务' },
+  '/tasks/dispatch': { title: '手动下发', parent: '知识构建任务' },
+  '/tasks/jobs': { title: 'JOB配置', parent: '知识构建任务' },
+  '/tasks/jobs/new': { title: '新建定时任务', parent: '知识构建任务' },
   '/tasks/hierarchy-review': { title: '模块层级复核' },
   '/tasks/entrypoint-review': { title: '知识入口复核' },
 

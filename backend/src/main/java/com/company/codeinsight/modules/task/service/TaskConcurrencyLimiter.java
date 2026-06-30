@@ -13,7 +13,7 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.Semaphore;
 
 /**
- * 反编译任务并发闸门：
+ * 知识构建任务并发闸门：
  *  - 全局 Semaphore：从 ci_system_config 'task.concurrency' 读取（默认 2）
  *  - 每系统 Semaphore：从 ci_system.max_concurrent_tasks 读取（默认 1），懒加载
  *

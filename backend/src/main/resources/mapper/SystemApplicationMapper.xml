@@ -34,9 +34,6 @@
             <if test="state != null and state != ''">
                 AND s.state = #{state}
             </if>
-            <if test="status != null">
-                AND s.status = #{status}
-            </if>
         </where>
         ORDER BY s.created_at DESC
     </select>

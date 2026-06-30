@@ -172,7 +172,7 @@ public class AiSummaryServiceImpl implements AiSummaryService {
      * 对特定代码切片发起大模型归纳分析
      * 支持双层 Token 额度上限拦截、自动敏感词 Regex 过滤脱敏、大模型 API 调用及网络波动/出错时的 Mock 本地降级兜底。
      *
-     * @param taskId            反编译任务 ID
+     * @param taskId            知识构建任务 ID
      * @param chunkId           代码切片 ID
      * @param promptContent     提示词模板正文
      * @param modelNameSelected 手动指定的模型名称（若为空则使用系统默认）

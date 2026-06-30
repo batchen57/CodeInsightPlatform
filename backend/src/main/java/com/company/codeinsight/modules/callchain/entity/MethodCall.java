@@ -11,7 +11,7 @@ import java.time.LocalDateTime;
 /**
  * 方法调用链路实体类
  * 对应数据库中的 ci_method_call 表，记录 AST 静态解析得到的类内方法与方法之间的调用关系明细。
- * 由反编译任务在 PARSING_CODE 阶段批量写入，作为后续入口识别和模块整体归纳的数据基础。
+ * 由知识构建任务在 PARSING_CODE 阶段批量写入，作为后续入口识别和模块整体归纳的数据基础。
  */
 @Data
 @TableName("ci_method_call")

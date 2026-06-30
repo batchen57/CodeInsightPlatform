@@ -119,7 +119,7 @@ public class PushServiceImpl implements PushService {
 
         DecompileTask task = taskMapper.selectById(version.getTaskId());
         if (task == null) {
-            throw new BusinessException("未找到关联的反编译任务");
+            throw new BusinessException("未找到关联的知识构建任务");
         }
 
         // 强校验：所有 Draft 必须为 CONFIRMED 状态

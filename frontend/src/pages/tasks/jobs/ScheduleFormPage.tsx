@@ -172,7 +172,7 @@ const ScheduleFormPage: React.FC = () => {
             type="info"
             showIcon
             style={{ marginBottom: 16 }}
-            message="每次触发会自动创建一条反编译任务记录，可在「任务查询」页签中通过 SCHEDULED 标签筛选查看。"
+            message="每次触发会自动创建一条知识构建任务记录，可在「任务查询」页签中通过 SCHEDULED 标签筛选查看。"
           />
 
           <Row gutter={16}>

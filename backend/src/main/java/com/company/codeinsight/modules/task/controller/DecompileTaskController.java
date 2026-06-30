@@ -26,7 +26,7 @@ import org.springframework.web.bind.annotation.*;
  * 反编译及扫描任务控制器
  * 提供全量初始化分析任务创建、增量分析任务创建、任务列表获取、任务启动/中止/重试及异步进度轮询等 REST 接口。
  */
-@Tag(name = "反编译任务管理", description = "代码拉取、静态解析与AI分析任务的启停及监控接口")
+@Tag(name = "知识构建任务管理", description = "代码拉取、静态解析与AI分析任务的启停及监控接口")
 @RestController
 @RequestMapping("/tasks")
 @Validated
@@ -64,7 +64,7 @@ public class DecompileTaskController {
                 request.getModelName(), request.getEntryScanConfig(),
                 request.getRequireHierarchyReview(), request.getRequireEntrypointReview());
         operationLogService.logOperation(request.getSystemId(), task.getId(), "CREATE_TASK",
-                "创建全量初始化反编译任务" +
+                "创建全量初始化知识构建任务" +
                         (Boolean.TRUE.equals(request.getRequireHierarchyReview()) ? "（启用模块层级调试）" : "（跳过模块层级调试）") +
                         (Boolean.TRUE.equals(request.getRequireEntrypointReview()) ? "（启用知识入口复核）" : "（跳过知识入口复核）"),
                 null, true);
@@ -82,7 +82,7 @@ public class DecompileTaskController {
                 request.getModelName(), request.getEntryScanConfig(),
                 request.getRequireHierarchyReview(), request.getRequireEntrypointReview());
         operationLogService.logOperation(request.getSystemId(), task.getId(), "CREATE_TASK",
-                "创建增量分析反编译任务" +
+                "创建增量分析知识构建任务" +
                         (Boolean.TRUE.equals(request.getRequireHierarchyReview()) ? "（启用模块层级调试）" : "（跳过模块层级调试）") +
                         (Boolean.TRUE.equals(request.getRequireEntrypointReview()) ? "（启用知识入口复核）" : "（跳过知识入口复核）"),
                 null, true);

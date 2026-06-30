@@ -84,7 +84,7 @@ const Dashboard: React.FC = () => {
     cost: 0,
   });
   
-  // 最近反编译任务列表
+  // 最近知识构建任务列表
   const [recentTasks, setRecentTasks] = useState<Task[]>([]);
   // 最近推送记录列表
   const [recentPushes, setRecentPushes] = useState<KnowledgeVersion[]>([]);
@@ -280,7 +280,7 @@ const Dashboard: React.FC = () => {
           </Card>
 
           <Card
-            title={<Space><ThunderboltOutlined className="ci-icon-primary" />最近反编译任务</Space>}
+            title={<Space><ThunderboltOutlined className="ci-icon-primary" />最近知识构建任务</Space>}
             extra={<Link to="/tasks" className="ci-card-extra-link">查看全部 <RightOutlined style={{ fontSize: 10 }} /></Link>}
             className="ci-dashboard-card"
           >

@@ -33,7 +33,10 @@ export const usePromptModels = () => {
   };
 };
 
-export const usePromptList = (activePromptType: PromptType) => {
+export const usePromptList = (
+  activePromptType: PromptType,
+  lifecycle?: 'DRAFT' | 'RELEASED' | 'ARCHIVED' | 'all',
+) => {
   const [prompts, setPrompts] = useState<Prompt[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
@@ -50,6 +53,7 @@ export const usePromptList = (activePromptType: PromptType) => {
           size: pageSize,
           name: searchName || undefined,
           promptType: activePromptType,
+          lifecycle: lifecycle && lifecycle !== 'all' ? lifecycle : undefined,
         });
         setPrompts(data.records);
         setTotal(data.total);
@@ -57,7 +61,7 @@ export const usePromptList = (activePromptType: PromptType) => {
         setLoading(false);
       }
     },
-    [activePromptType, current, searchName, size],
+    [activePromptType, lifecycle, current, searchName, size],
   );
 
   useEffect(() => {

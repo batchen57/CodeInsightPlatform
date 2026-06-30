@@ -21,7 +21,7 @@ import java.nio.file.Files;
 import java.time.LocalDateTime;
 
 /**
- * 反编译任务「新建前置条件」就绪度拦截的集成测试。
+ * 知识构建任务「新建前置条件」就绪度拦截的集成测试。
  *
  * <p>验证 {@link com.company.codeinsight.modules.task.service.impl.DecompileTaskServiceImpl#validateNoUnconfirmedDrafts(Long, Long)}
  * 在 createInitialTask / createIncrementalTask 入口处生效：</p>

@@ -13,7 +13,7 @@ export interface ModuleHierarchyEditorDrawerProps {
 
 /**
  * 模块层级调试抽屉（薄壳）：在 ModuleHierarchyEditor 外层套一个 Ant Design Drawer，
- * 顶部提供「保存并继续」+「取消」动作条，便于在「模块层级复核」列表页与「反编译任务」列表中复用。
+ * 顶部提供「保存并继续」+「取消」动作条，便于在「模块层级复核」列表页与「知识构建任务」列表中复用。
  */
 const ModuleHierarchyEditorDrawer: React.FC<ModuleHierarchyEditorDrawerProps> = ({
   open,

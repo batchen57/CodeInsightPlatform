@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef } from 'react';
-import { Tabs, Dropdown, Empty } from 'antd';
+import { Tabs, Dropdown } from 'antd';
 import type { MenuProps } from 'antd';
 import { CloseOutlined } from '@ant-design/icons';
 import { useLocation, useNavigate } from 'react-router-dom';
@@ -124,19 +124,8 @@ const PageTabs: React.FC = () => {
   };
 
   if (tabs.length === 0) {
-    // 没有 tab 时不渲染条（用户大概率在 /）
-    return (
-      <div className="ci-page-tabs ci-page-tabs--empty">
-        <Empty
-          image={Empty.PRESENTED_IMAGE_SIMPLE}
-          description={
-            <span style={{ color: '#999' }}>
-              点击左侧菜单打开页面（工作台不计入页签）
-            </span>
-          }
-        />
-      </div>
-    );
+    // 没有 tab 时什么都不渲染（用户大概率在 / 工作台），不占用顶部空白空间。
+    return null;
   }
 
   return (

@@ -24,7 +24,7 @@ public class ScheduleFireRecord {
     @TableField("schedule_id")
     private Long scheduleId;
 
-    /** 本次触发创建的反编译任务 ID（SKIPPED 时为空） */
+    /** 本次触发创建的知识构建任务 ID（SKIPPED 时为空） */
     @TableField("task_id")
     private Long taskId;
 

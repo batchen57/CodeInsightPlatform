@@ -43,7 +43,7 @@ const META: Record<SystemState, { color: string; label: string; icon: React.Reac
     color: 'success',
     label: '已启用',
     icon: <ThunderboltOutlined />,
-    tip: '系统已启用，可创建反编译任务',
+    tip: '系统已启用，可创建知识构建任务',
   },
   DISABLED: {
     color: 'error',

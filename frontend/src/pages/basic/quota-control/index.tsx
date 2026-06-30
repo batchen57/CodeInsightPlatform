@@ -183,7 +183,7 @@ const QuotaControlPage: React.FC = () => {
     {
       key: 'token.task-limit',
       label: '单任务 Token 上限',
-      help: '单个反编译任务累计 Token 上限',
+      help: '单个知识构建任务累计 Token 上限',
       type: 'int',
     },
     {

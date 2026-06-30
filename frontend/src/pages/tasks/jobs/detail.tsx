@@ -203,7 +203,7 @@ const JobDetail: React.FC = () => {
       loadTriggeredTasks();
       if (res.taskId) {
         setTimeout(() => {
-          if (window.confirm('已创建反编译任务，是否前往任务详情？')) {
+          if (window.confirm('已创建知识构建任务，是否前往任务详情？')) {
             navigate(`/tasks/${res.taskId}`);
           }
         }, 100);
@@ -514,7 +514,7 @@ const JobDetail: React.FC = () => {
         title={
           <Space>
             <PlayCircleOutlined />
-            已触发的反编译任务
+            已触发的知识构建任务
             <Tag color="blue">SCHEDULED</Tag>
           </Space>
         }
@@ -622,7 +622,7 @@ const JobDetail: React.FC = () => {
               ),
             },
           ]}
-          locale={{ emptyText: <Empty description="该定时任务尚未触发过反编译任务" /> }}
+          locale={{ emptyText: <Empty description="该定时任务尚未触发过知识构建任务" /> }}
         />
       </Card>
     </div>

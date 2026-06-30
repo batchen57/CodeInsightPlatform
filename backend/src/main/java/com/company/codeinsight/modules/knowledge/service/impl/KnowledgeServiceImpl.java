@@ -96,7 +96,7 @@ public class KnowledgeServiceImpl implements KnowledgeService {
     public KnowledgeVersion createVersion(Long taskId, String versionNum, String confirmedBy) {
         DecompileTask task = taskMapper.selectById(taskId);
         if (task == null) {
-            throw new BusinessException("未找到反编译任务");
+            throw new BusinessException("未找到知识构建任务");
         }
 
         CodeRepository repo = repositoryMapper.selectById(task.getRepositoryId());

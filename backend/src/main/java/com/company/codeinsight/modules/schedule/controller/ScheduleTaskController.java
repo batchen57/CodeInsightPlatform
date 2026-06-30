@@ -134,11 +134,11 @@ public class ScheduleTaskController {
     }
 
     /**
-     * 该定时任务已触发的所有反编译任务（分页，按 created_at DESC）。
+     * 该定时任务已触发的所有知识构建任务（分页，按 created_at DESC）。
      * <p>复用 DecompileTaskService 的 listTasksPage 并强制 scheduleId 过滤；状态/类型 chip 仍可用。
      * 复用 /tasks 的同一套分组与字段，避免在 schedule 模块重复一套任务 DTO。</p>
      */
-    @Operation(summary = "定时任务已触发的反编译任务")
+    @Operation(summary = "定时任务已触发的知识构建任务")
     @GetMapping("/{id}/tasks")
     public ApiResponse<PageResult<DecompileTask>> triggeredTasks(
             @PathVariable Long id,

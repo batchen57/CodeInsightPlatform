@@ -18,7 +18,7 @@ public interface MethodCallService {
      *      3) 复用 JavaParserService.parseFile 提取 methodCalls；4) 批量入库 ci_method_call 表。
      * 单个文件解析失败时降级（log + skip），不中断整批任务。
      *
-     * @param taskId     关联反编译任务 ID
+     * @param taskId     关联知识构建任务 ID
      * @param projectDir 拉取后的本地项目根目录
      * @return 实际写入 ci_method_call 的调用链条目数
      */
@@ -39,7 +39,7 @@ public interface MethodCallService {
     /**
      * 查询指定任务的所有调用链条目
      *
-     * @param taskId 反编译任务 ID
+     * @param taskId 知识构建任务 ID
      * @return 该任务下的全部方法调用链列表（按 ID 升序）
      */
     List<MethodCall> listByTaskId(Long taskId);
@@ -47,7 +47,7 @@ public interface MethodCallService {
     /**
      * 查询指定任务下某 Java 类的所有调用链条目
      *
-     * @param taskId    反编译任务 ID
+     * @param taskId    知识构建任务 ID
      * @param className Java 类名（可为 null，null 时返回空列表）
      * @return 该类下的全部调用链列表（按类名、方法名、行号排序）
      */
@@ -56,7 +56,7 @@ public interface MethodCallService {
     /**
      * 删除指定任务的所有调用链记录（重跑/重试前的清理）
      *
-     * @param taskId 反编译任务 ID
+     * @param taskId 知识构建任务 ID
      */
     void deleteByTaskId(Long taskId);
 }

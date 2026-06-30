@@ -23,8 +23,9 @@ public interface DecompilePromptService extends IService<DecompilePrompt> {
      * @param name       模板名称模糊关键字（可为 null）
      * @param status     状态过滤：0-禁用 / 1-启用（可为 null）
      * @param promptType 提示词用途过滤：{@code MODULARIZE} / {@code DOCUMENT_GENERATION}（可为 null 表示全部）
+     * @param lifecycle  生命周期过滤：{@code DRAFT} / {@code RELEASED} / {@code ARCHIVED}（可为 null 表示全部）
      */
-    Page<DecompilePrompt> listPromptsPage(int current, int size, String name, Integer status, String promptType);
+    Page<DecompilePrompt> listPromptsPage(int current, int size, String name, Integer status, String promptType, String lifecycle);
 
     /**
      * 克隆复制指定 ID 提示词模板以创建一条全新副本
@@ -33,6 +34,16 @@ public interface DecompilePromptService extends IService<DecompilePrompt> {
      * @return 克隆创建出的新模板对象
      */
     DecompilePrompt clonePrompt(Long id);
+
+    /**
+     * 发布草稿：DRAFT → RELEASED,锁定。
+     */
+    DecompilePrompt publishPrompt(Long id);
+
+    /**
+     * 归档已发布：RELEASED → ARCHIVED,历史保留。
+     */
+    DecompilePrompt archivePrompt(Long id);
 
     /**
      * 变更指定提示词的使用状态（1-启用, 0-禁用）

@@ -321,7 +321,7 @@ const TaskDispatchPage: React.FC = () => {
             >
               返回任务查询
             </Button>
-            <span style={{ fontWeight: 600 }}>手动下发：创建反编译任务</span>
+            <span style={{ fontWeight: 600 }}>手动下发：创建知识构建任务</span>
           </Space>
         }
       >

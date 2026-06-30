@@ -22,7 +22,7 @@ public class DraftWorkspace {
     private Long id;
 
     /**
-     * 所产生关联的反编译任务 ID
+     * 所产生关联的知识构建任务 ID
      */
     private Long taskId;
 

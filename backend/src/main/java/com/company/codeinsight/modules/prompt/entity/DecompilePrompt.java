@@ -34,6 +34,21 @@ public class DecompilePrompt extends BaseEntity {
     public static final String TYPE_DOCUMENT_GENERATION = "DOCUMENT_GENERATION";
 
     /**
+     * 生命周期：草稿(DRAFT) — 可编辑/试跑/发布
+     */
+    public static final String LIFECYCLE_DRAFT = "DRAFT";
+
+    /**
+     * 生命周期：已发布(RELEASED) — 不可直改，需复制(→ 新 DRAFT) → 发布
+     */
+    public static final String LIFECYCLE_RELEASED = "RELEASED";
+
+    /**
+     * 生命周期：已归档(ARCHIVED) — 历史保留，不再被流水线使用
+     */
+    public static final String LIFECYCLE_ARCHIVED = "ARCHIVED";
+
+    /**
      * 自增主键 ID
      */
     @TableId(type = IdType.AUTO)
@@ -75,5 +90,11 @@ public class DecompilePrompt extends BaseEntity {
      */
     @TableField("prompt_type")
     private String promptType;
+
+    /**
+     * 生命周期：DRAFT(草稿,可编辑/试跑/发布) / RELEASED(已发布,锁定) / ARCHIVED(已归档)
+     * <p>默认 RELEASED 以保持向后兼容；新建提示词可显式指定 DRAFT。</p>
+     */
+    private String lifecycle;
 }
 

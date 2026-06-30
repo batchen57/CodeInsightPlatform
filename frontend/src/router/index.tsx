@@ -28,7 +28,6 @@ import Logs from '../pages/logs';
 import BasicSubLayout from '../pages/basic/layout';
 import ModelConfig from '../pages/basic/models';
 import Prompts from '../pages/basic/prompts';
-import DefaultPrompts from '../pages/basic/prompts-defaults';
 import Permissions from '../pages/basic/permissions';
 import QuotaControl from '../pages/basic/quota-control';
 import Login from '../pages/login';
@@ -87,12 +86,11 @@ export const router = createHashRouter([
           { index: true, element: <ModelConfig /> },
           { path: 'models', element: <ModelConfig /> },
           { path: 'prompts', element: <Prompts /> },
-          { path: 'prompts/defaults', element: <DefaultPrompts /> },
           { path: 'permissions', element: <Permissions /> },
           { path: 'quota', element: <QuotaControl /> },
         ],
       },
-      // 反编译任务主入口：tabbed 容器
+      // 知识构建任务主入口：tabbed 容器
       {
         path: 'tasks',
         element: <Tasks />,

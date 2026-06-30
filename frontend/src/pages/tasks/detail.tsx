@@ -265,7 +265,7 @@ const timelineItem = (s: PipelineStageStat) => {
               返回
             </Button>
             <div>
-              <Title level={4}>反编译任务 #{task.id}</Title>
+              <Title level={4}>知识构建任务 #{task.id}</Title>
               <Text type="secondary">{system?.name ?? `系统 #${task.systemId}`}</Text>
             </div>
             <Tag color={meta.color}>{meta.label}</Tag>

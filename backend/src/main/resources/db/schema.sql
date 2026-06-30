@@ -127,7 +127,12 @@ COMMENT ON COLUMN ci_prompt.prompt_type IS '提示词用途：MODULARIZE-模块�
 CREATE UNIQUE INDEX IF NOT EXISTS uk_ci_prompt_type_default
     ON ci_prompt (prompt_type) WHERE is_default = 1;
 
--- 4. 反编译任务表
+-- 3.3 提示词生命周期：DRAFT-草稿（可编辑） / RELEASED-已发布（不可直改，需复制） / ARCHIVED-已归档（不可用）
+ALTER TABLE ci_prompt ADD COLUMN IF NOT EXISTS lifecycle VARCHAR(16) DEFAULT 'RELEASED' NOT NULL;
+COMMENT ON COLUMN ci_prompt.lifecycle IS '生命周期：DRAFT-草稿(可编辑) / RELEASED-已发布(锁定,需复制改) / ARCHIVED-已归档';
+CREATE INDEX IF NOT EXISTS idx_prompt_lifecycle ON ci_prompt (lifecycle, prompt_type);
+
+-- 4. 知识构建任务表
 CREATE TABLE IF NOT EXISTS ci_task (
     id BIGSERIAL PRIMARY KEY,
     system_id BIGINT NOT NULL,
@@ -171,7 +176,7 @@ ALTER TABLE ci_task ADD COLUMN IF NOT EXISTS priority INT DEFAULT 50 NOT NULL;
 COMMENT ON COLUMN ci_task.priority IS '队列优先级：0-100，越大越优先；SCHEDULED 默认 60，MANUAL 默认 50';
 CREATE INDEX IF NOT EXISTS idx_task_queue ON ci_task (priority DESC, created_at ASC) WHERE status = 'PENDING';
 
-COMMENT ON TABLE ci_task IS '反编译任务表';
+COMMENT ON TABLE ci_task IS '知识构建任务表';
 COMMENT ON COLUMN ci_task.system_id IS '关联系统ID';
 COMMENT ON COLUMN ci_task.repository_id IS '关联仓库ID';
 COMMENT ON COLUMN ci_task.prompt_version IS '使用的提示词版本（已废弃，请使用 modularize_prompt_version / document_prompt_version）';
@@ -797,7 +802,7 @@ CREATE INDEX IF NOT EXISTS idx_fire_schedule_time
 
 COMMENT ON TABLE ci_schedule_fire_record IS '定时任务触发记录表';
 COMMENT ON COLUMN ci_schedule_fire_record.schedule_id IS '调度配置 ID（FK → ci_schedule_task.id）';
-COMMENT ON COLUMN ci_schedule_fire_record.task_id IS '本次触发创建的反编译任务 ID（FK → ci_task.id，可空，SKIPPED 时为空）';
+COMMENT ON COLUMN ci_schedule_fire_record.task_id IS '本次触发创建的知识构建任务 ID（FK → ci_task.id，可空，SKIPPED 时为空）';
 COMMENT ON COLUMN ci_schedule_fire_record.fire_time IS '实际触发时间';
 COMMENT ON COLUMN ci_schedule_fire_record.planned_time IS '计划触发时间（与 cron 计算结果对齐）';
 COMMENT ON COLUMN ci_schedule_fire_record.status IS '本次触发状态：CREATED/RUNNING/SUCCESS/FAILED/SKIPPED/QUEUED';

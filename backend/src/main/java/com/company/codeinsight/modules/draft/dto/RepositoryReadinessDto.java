@@ -60,7 +60,7 @@ public class RepositoryReadinessDto {
         private Long workspaceId;
 
         /**
-         * 所属反编译任务 ID
+         * 所属知识构建任务 ID
          */
         private Long taskId;
 

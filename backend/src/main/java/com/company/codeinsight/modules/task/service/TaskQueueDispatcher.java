@@ -13,7 +13,7 @@ import org.springframework.stereotype.Service;
 import java.util.List;
 
 /**
- * 反编译任务队列调度器：
+ * 知识构建任务队列调度器：
  *  - 定期（默认 5s）拉 PENDING 任务
  *  - 按 priority DESC, created_at ASC 排序
  *  - 尝试获取 TaskConcurrencyLimiter 的全局 + 系统许可

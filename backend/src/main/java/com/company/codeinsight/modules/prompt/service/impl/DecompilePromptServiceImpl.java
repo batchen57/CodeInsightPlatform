@@ -1,6 +1,7 @@
 package com.company.codeinsight.modules.prompt.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.company.codeinsight.common.exception.BusinessException;
@@ -75,19 +76,21 @@ public class DecompilePromptServiceImpl extends ServiceImpl<DecompilePromptMappe
      * 分页查询提示词模板，支持按名称/状态/用途（MODULARIZE / DOCUMENT_GENERATION）过滤，按创建时间倒序排列
      */
     @Override
-    public Page<DecompilePrompt> listPromptsPage(int current, int size, String name, Integer status, String promptType) {
+    public Page<DecompilePrompt> listPromptsPage(int current, int size, String name, Integer status, String promptType, String lifecycle) {
         Page<DecompilePrompt> page = new Page<>(current, size);
         LambdaQueryWrapper<DecompilePrompt> queryWrapper = new LambdaQueryWrapper<>();
         queryWrapper.like(StringUtils.hasText(name), DecompilePrompt::getName, name)
                 .eq(status != null, DecompilePrompt::getStatus, status)
                 .eq(StringUtils.hasText(promptType), DecompilePrompt::getPromptType, promptType)
+                .eq(StringUtils.hasText(lifecycle), DecompilePrompt::getLifecycle, lifecycle)
                 .orderByDesc(DecompilePrompt::getCreatedAt);
         return this.page(page, queryWrapper);
     }
 
     /**
      * 复制/克隆提示词模板
-     * 重新生成一份初始版本为 1、默认禁用的模板副本。
+     * 无论源是 DRAFT/RELEASED/ARCHIVED, 复制都生成 version=1、status=0、is_default=0、lifecycle=DRAFT 的草稿;
+     * 用户可继续编辑/试跑/发布。
      */
     @Override
     public DecompilePrompt clonePrompt(Long id) {
@@ -102,8 +105,67 @@ public class DecompilePromptServiceImpl extends ServiceImpl<DecompilePromptMappe
         cloned.setStatus(0); // 默认禁用
         cloned.setIsDefault(0); // 默认非默认
         cloned.setPromptType(normalizePromptType(original.getPromptType()));
+        cloned.setLifecycle(DecompilePrompt.LIFECYCLE_DRAFT); // 副本为草稿
         this.save(cloned);
         return cloned;
+    }
+
+    /**
+     * 发布：将 DRAFT 改为 RELEASED(锁定,不可再直接编辑)
+     */
+    @Override
+    public DecompilePrompt publishPrompt(Long id) {
+        DecompilePrompt prompt = this.getById(id);
+        if (prompt == null) {
+            throw new BusinessException("提示词不存在");
+        }
+        if (!DecompilePrompt.LIFECYCLE_DRAFT.equals(prompt.getLifecycle())) {
+            throw new BusinessException("仅 DRAFT 状态可发布,当前状态: " + prompt.getLifecycle());
+        }
+        prompt.setLifecycle(DecompilePrompt.LIFECYCLE_RELEASED);
+        // 发布时版本号 +1
+        prompt.setVersion(prompt.getVersion() == null ? 1 : prompt.getVersion() + 1);
+        this.updateById(prompt);
+        return prompt;
+    }
+
+    /**
+     * 归档：将 RELEASED 改为 ARCHIVED(历史保留,不再出现于默认池)
+     */
+    @Override
+    public DecompilePrompt archivePrompt(Long id) {
+        DecompilePrompt prompt = this.getById(id);
+        if (prompt == null) {
+            throw new BusinessException("提示词不存在");
+        }
+        if (!DecompilePrompt.LIFECYCLE_RELEASED.equals(prompt.getLifecycle())) {
+            throw new BusinessException("仅 RELEASED 状态可归档,当前状态: " + prompt.getLifecycle());
+        }
+        // 若当前是默认,先取消默认(让位后再归档)
+        if (prompt.getIsDefault() != null && prompt.getIsDefault() == 1) {
+            prompt.setIsDefault(0);
+            this.clearDefaultPrompts(prompt.getPromptType(), id, 0);
+        }
+        prompt.setLifecycle(DecompilePrompt.LIFECYCLE_ARCHIVED);
+        this.updateById(prompt);
+        return prompt;
+    }
+
+    /**
+     * 同 promptType 下其他提示词的 is_default 批量清零(为新默认让位)。
+     * <p>仅当传入 isDefault=1 时生效(避免误清零其他默认)。</p>
+     */
+    private void clearDefaultPrompts(String promptType, Long excludeId, Integer isDefault) {
+        if (isDefault == null || isDefault != 1) {
+            return;
+        }
+        LambdaUpdateWrapper<DecompilePrompt> updateWrapper = new LambdaUpdateWrapper<DecompilePrompt>()
+                .eq(DecompilePrompt::getPromptType, normalizePromptType(promptType))
+                .set(DecompilePrompt::getIsDefault, 0);
+        if (excludeId != null) {
+            updateWrapper.ne(DecompilePrompt::getId, excludeId);
+        }
+        this.update(updateWrapper);
     }
 
     /**

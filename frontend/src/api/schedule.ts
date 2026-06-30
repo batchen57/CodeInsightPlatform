@@ -101,7 +101,7 @@ export const listFireRecords = (
   return request.get(`/schedules/${scheduleId}/fire-records`, { params });
 };
 
-/** 该定时任务已触发的反编译任务分页（force scheduleId） */
+/** 该定时任务已触发的知识构建任务分页（force scheduleId） */
 export const listScheduleTasks = (
   scheduleId: number,
   params: {

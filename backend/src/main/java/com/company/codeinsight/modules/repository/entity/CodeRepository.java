@@ -103,7 +103,7 @@ public class CodeRepository extends BaseEntity {
 
     /**
      * 仓库级入口扫描配置 JSON 字符串（整体序列化 EntryPointConfig）
-     * 新建反编译任务时默认带出此配置；任务可单独配置覆盖该默认值。
+     * 新建知识构建任务时默认带出此配置；任务可单独配置覆盖该默认值。
      * null 表示该仓库未配置入口扫描规则，新建任务时直接走默认 Controller/JOB/MQ 兜底。
      */
     @TableField("entry_scan_config")

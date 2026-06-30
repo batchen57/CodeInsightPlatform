@@ -61,6 +61,10 @@ public class DecompilePromptController {
         if (prompt.getIsDefault() == null) {
             prompt.setIsDefault(0);
         }
+        // lifecycle 缺省为 RELEASED(兼容历史);前端可显式传 DRAFT 表示先创建草稿
+        if (!StringUtils.hasText(prompt.getLifecycle())) {
+            prompt.setLifecycle(DecompilePrompt.LIFECYCLE_RELEASED);
+        }
         clearDefaultPrompts(prompt.getPromptType(), null, prompt.getIsDefault());
         decompilePromptService.save(prompt);
         operationLogService.logOperation(null, null, "CREATE_PROMPT", "创建提示词模板: " + prompt.getName(), null, true);
@@ -68,28 +72,57 @@ public class DecompilePromptController {
     }
 
     /**
-     * 更新已存在的提示词模板内容，自动递增版本号做审计回溯
+     * 更新已存在的提示词模板内容,自动递增版本号做审计回溯
+     * <p><b>仅 DRAFT 状态可直接编辑,RELEASED/ARCHIVED 不可编辑</b>(如需改动请先调用 POST /clone 创建新草稿)。</p>
      */
     @Operation(summary = "编辑提示词模板")
     @PutMapping("/{id}")
     public ApiResponse<DecompilePrompt> updatePrompt(@PathVariable Long id, @Valid @RequestBody DecompilePrompt prompt) {
-        prompt.setId(id);
-        // 如果编辑，将版本号递增
         DecompilePrompt existing = decompilePromptService.getById(id);
-        if (existing != null) {
-            prompt.setVersion(existing.getVersion() + 1);
-            if (!StringUtils.hasText(prompt.getPromptType())) {
-                prompt.setPromptType(normalizePromptType(existing.getPromptType()));
-            }
-            if (prompt.getIsDefault() == null) {
-                prompt.setIsDefault(existing.getIsDefault());
-            }
+        if (existing == null) {
+            throw new BusinessException("提示词模板不存在");
+        }
+        // RELEASED/ARCHIVED 锁定:只能通过 clone 创建新 DRAFT 来修改
+        if (!DecompilePrompt.LIFECYCLE_DRAFT.equals(existing.getLifecycle())) {
+            throw new BusinessException("已发布/已归档的提示词不可直接编辑;请使用复制(POST /prompts/{id}/clone)创建新草稿");
+        }
+        prompt.setId(id);
+        prompt.setVersion(existing.getVersion() + 1);
+        if (!StringUtils.hasText(prompt.getPromptType())) {
+            prompt.setPromptType(normalizePromptType(existing.getPromptType()));
+        }
+        if (prompt.getIsDefault() == null) {
+            prompt.setIsDefault(existing.getIsDefault());
         }
         prompt.setPromptType(normalizePromptType(prompt.getPromptType()));
+        // 不允许在 update 中改 lifecycle(必须先 publish)
+        prompt.setLifecycle(DecompilePrompt.LIFECYCLE_DRAFT);
         clearDefaultPrompts(prompt.getPromptType(), id, prompt.getIsDefault());
         decompilePromptService.updateById(prompt);
         operationLogService.logOperation(null, null, "UPDATE_PROMPT", "更新提示词模板: " + prompt.getName() + ", 新版本号: " + prompt.getVersion(), null, true);
         return ApiResponse.success(prompt);
+    }
+
+    /**
+     * 发布草稿:DRAFT → RELEASED,锁定
+     */
+    @Operation(summary = "发布提示词(草稿 → 已发布)")
+    @PostMapping("/{id}/publish")
+    public ApiResponse<DecompilePrompt> publishPrompt(@PathVariable Long id) {
+        DecompilePrompt updated = decompilePromptService.publishPrompt(id);
+        operationLogService.logOperation(null, null, "PUBLISH_PROMPT", "发布提示词: " + updated.getName(), null, true);
+        return ApiResponse.success(updated);
+    }
+
+    /**
+     * 归档已发布的提示词(RELEASED → ARCHIVED)
+     */
+    @Operation(summary = "归档已发布的提示词")
+    @PostMapping("/{id}/archive")
+    public ApiResponse<DecompilePrompt> archivePrompt(@PathVariable Long id) {
+        DecompilePrompt updated = decompilePromptService.archivePrompt(id);
+        operationLogService.logOperation(null, null, "ARCHIVE_PROMPT", "归档提示词: " + updated.getName(), null, true);
+        return ApiResponse.success(updated);
     }
 
     /**
@@ -136,13 +169,15 @@ public class DecompilePromptController {
             @RequestParam(defaultValue = "10") int size,
             @RequestParam(required = false) String name,
             @RequestParam(required = false) Integer status,
-            @RequestParam(required = false) String promptType) {
+            @RequestParam(required = false) String promptType,
+            @RequestParam(required = false) String lifecycle) {
         Page<DecompilePrompt> page = decompilePromptService.listPromptsPage(
                 current,
                 size,
                 name,
                 status,
-                normalizeOptionalPromptType(promptType));
+                normalizeOptionalPromptType(promptType),
+                lifecycle);
         PageResult<DecompilePrompt> result = new PageResult<>(page.getTotal(), page.getSize(), page.getCurrent(), page.getRecords());
         return ApiResponse.success(result);
     }

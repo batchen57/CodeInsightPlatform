@@ -28,7 +28,7 @@ const TAB_ITEMS = [
 ];
 
 /**
- * 反编译任务主入口（页签壳）
+ * 知识构建任务主入口（页签壳）
  *
  *  - 任务查询（默认） — /tasks/query
  *  - JOB配置         — /tasks/jobs (含 /new、/:id/edit、/:id)

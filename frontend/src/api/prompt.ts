@@ -26,6 +26,8 @@ export const listPrompts = (params: {
   status?: number;
   /** MODULARIZE-模块提取 / DOCUMENT_GENERATION-文档生成 */
   promptType?: 'MODULARIZE' | 'DOCUMENT_GENERATION' | string;
+  /** 生命周期过滤：DRAFT / RELEASED / ARCHIVED */
+  lifecycle?: 'DRAFT' | 'RELEASED' | 'ARCHIVED' | string;
 }): Promise<PageResult<Prompt>> => {
   return request.get('/prompts', { params });
 };
@@ -121,4 +123,18 @@ export const testRunPromptStream = async (
 
 export const deletePrompt = (id: number): Promise<void> => {
   return request.delete(`/prompts/${id}`);
+};
+
+/**
+ * 发布草稿(DRAFT → RELEASED,锁定)
+ */
+export const publishPrompt = (id: number): Promise<Prompt> => {
+  return request.post(`/prompts/${id}/publish`);
+};
+
+/**
+ * 归档已发布(RELEASED → ARCHIVED)
+ */
+export const archivePrompt = (id: number): Promise<Prompt> => {
+  return request.post(`/prompts/${id}/archive`);
 };
