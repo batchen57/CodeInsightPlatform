@@ -131,6 +131,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS uk_ci_prompt_type_default
 ALTER TABLE ci_prompt ADD COLUMN IF NOT EXISTS lifecycle VARCHAR(16) DEFAULT 'RELEASED' NOT NULL;
 COMMENT ON COLUMN ci_prompt.lifecycle IS '生命周期：DRAFT-草稿(可编辑) / RELEASED-已发布(锁定,需复制改) / ARCHIVED-已归档';
 CREATE INDEX IF NOT EXISTS idx_prompt_lifecycle ON ci_prompt (lifecycle, prompt_type);
+-- 补齐存量(ALTER ADD COLUMN 在 PG 11+ 已自动赋默认值;本条为安全兜底,防止重复 ALTER 被 IF NOT EXISTS 跳过时字段留 NULL)
+UPDATE ci_prompt SET lifecycle = 'RELEASED' WHERE lifecycle IS NULL;
 
 -- 3.4 提示词分类(category)+ scope 隔离(避免不同仓库/系统互相看到对方的自定义提示词)
 ALTER TABLE ci_prompt ADD COLUMN IF NOT EXISTS category VARCHAR(16) DEFAULT 'DEFAULT' NOT NULL;
@@ -143,19 +145,18 @@ DROP INDEX IF EXISTS uk_ci_prompt_type_default;
 CREATE UNIQUE INDEX IF NOT EXISTS uk_ci_prompt_type_default_active
     ON ci_prompt (prompt_type) WHERE is_default = 1 AND category = 'DEFAULT';
 
+-- 3.4.1 数据迁移:把已有提示词的 category 设为 DEFAULT(兼容旧数据)
+UPDATE ci_prompt SET category = 'DEFAULT' WHERE category IS NULL;
+
 -- 4. 知识构建任务表
 CREATE TABLE IF NOT EXISTS ci_task (
     id BIGSERIAL PRIMARY KEY,
     system_id BIGINT NOT NULL,
     repository_id BIGINT NOT NULL,
-    prompt_version INT,
-    modularize_prompt_version INT,
-    document_prompt_version INT,
     model_name VARCHAR(100),
     status VARCHAR(50) NOT NULL,
     type VARCHAR(50) DEFAULT 'INITIAL' NOT NULL,
     progress INT DEFAULT 0 NOT NULL,
-    log_uri VARCHAR(255),
     error_reason TEXT,
     duration_ms BIGINT DEFAULT 0 NOT NULL,
     started_at TIMESTAMP,
@@ -166,12 +167,10 @@ CREATE TABLE IF NOT EXISTS ci_task (
 );
 CREATE INDEX IF NOT EXISTS idx_task_system_id ON ci_task (system_id);
 CREATE INDEX IF NOT EXISTS idx_task_status ON ci_task (status);
-ALTER TABLE ci_task ADD COLUMN IF NOT EXISTS modularize_prompt_version INT;
-ALTER TABLE ci_task ADD COLUMN IF NOT EXISTS document_prompt_version INT;
 ALTER TABLE ci_task ADD COLUMN IF NOT EXISTS modularize_prompt_id BIGINT;
 ALTER TABLE ci_task ADD COLUMN IF NOT EXISTS document_prompt_id BIGINT;
-COMMENT ON COLUMN ci_task.modularize_prompt_id IS '模块提取提示词 ID（按主键查 ci_prompt，替代已废弃的 modularize_prompt_version）';
-COMMENT ON COLUMN ci_task.document_prompt_id IS '文档生成提示词 ID（按主键查 ci_prompt，替代已废弃的 document_prompt_version）';
+COMMENT ON COLUMN ci_task.modularize_prompt_id IS '模块提取提示词 ID（按主键查 ci_prompt）';
+COMMENT ON COLUMN ci_task.document_prompt_id IS '文档生成提示词 ID（按主键查 ci_prompt）';
 ALTER TABLE ci_task ADD COLUMN IF NOT EXISTS model_name VARCHAR(100);
 ALTER TABLE ci_task ADD COLUMN IF NOT EXISTS entry_scan_config TEXT;
 ALTER TABLE ci_task ADD COLUMN IF NOT EXISTS require_hierarchy_review BOOLEAN DEFAULT TRUE NOT NULL;
@@ -187,20 +186,31 @@ ALTER TABLE ci_task ADD COLUMN IF NOT EXISTS priority INT DEFAULT 50 NOT NULL;
 COMMENT ON COLUMN ci_task.priority IS '队列优先级：0-100，越大越优先；SCHEDULED 默认 60，MANUAL 默认 50';
 CREATE INDEX IF NOT EXISTS idx_task_queue ON ci_task (priority DESC, created_at ASC) WHERE status = 'PENDING';
 
+-- 4.3 集群任务认领（PENDING 预留 + 断点恢复亲和）
+ALTER TABLE ci_task ADD COLUMN IF NOT EXISTS claimed_by VARCHAR(128);
+ALTER TABLE ci_task ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMP;
+ALTER TABLE ci_task ADD COLUMN IF NOT EXISTS lease_until TIMESTAMP;
+COMMENT ON COLUMN ci_task.claimed_by IS '集群模式下认领/执行该任务的节点实例 ID';
+COMMENT ON COLUMN ci_task.claimed_at IS '任务认领时间';
+COMMENT ON COLUMN ci_task.lease_until IS '认领租约到期时间；过期后其他节点可重新认领 PENDING 预留';
+CREATE INDEX IF NOT EXISTS idx_task_claimed ON ci_task (claimed_by) WHERE claimed_by IS NOT NULL;
+
 COMMENT ON TABLE ci_task IS '知识构建任务表';
 COMMENT ON COLUMN ci_task.system_id IS '关联系统ID';
 COMMENT ON COLUMN ci_task.repository_id IS '关联仓库ID';
-COMMENT ON COLUMN ci_task.prompt_version IS '使用的提示词版本（已废弃，请使用 modularize_prompt_version / document_prompt_version）';
-COMMENT ON COLUMN ci_task.modularize_prompt_version IS '模块提取提示词版本（AI_ANALYZING / MODULE_HIERARCHY 阶段使用，对应 ci_prompt.prompt_type=MODULARIZE）';
-COMMENT ON COLUMN ci_task.document_prompt_version IS '文档生成提示词版本（GENERATING_DOC 阶段使用，对应 ci_prompt.prompt_type=DOCUMENT_GENERATION）';
 COMMENT ON COLUMN ci_task.status IS '任务状态';
 COMMENT ON COLUMN ci_task.type IS '任务类型：INITIAL-全量/初始化，INCREMENTAL-增量';
 COMMENT ON COLUMN ci_task.progress IS '进度百分比：0-100';
-COMMENT ON COLUMN ci_task.log_uri IS '任务日志在对象存储中的地址';
 COMMENT ON COLUMN ci_task.error_reason IS '失败原因';
 COMMENT ON COLUMN ci_task.duration_ms IS '耗时（毫秒）';
 COMMENT ON COLUMN ci_task.started_at IS '启动时间';
 COMMENT ON COLUMN ci_task.ended_at IS '结束时间';
+
+-- 4.1 清理 ci_task 已废弃/未使用列（幂等）
+ALTER TABLE ci_task DROP COLUMN IF EXISTS prompt_version;
+ALTER TABLE ci_task DROP COLUMN IF EXISTS modularize_prompt_version;
+ALTER TABLE ci_task DROP COLUMN IF EXISTS document_prompt_version;
+ALTER TABLE ci_task DROP COLUMN IF EXISTS log_uri;
 
 -- 5. 代码文件快照表
 CREATE TABLE IF NOT EXISTS ci_file_snapshot (
@@ -667,12 +677,6 @@ COMMENT ON COLUMN ci_task.entry_scan_config IS '入口扫描配置 JSON：含 in
 -- 21. 是否启用模块层级调试（人工复核断点）
 ALTER TABLE ci_task ADD COLUMN IF NOT EXISTS require_hierarchy_review BOOLEAN DEFAULT TRUE NOT NULL;
 COMMENT ON COLUMN ci_task.require_hierarchy_review IS '是否启用模块层级调试断点：TRUE-模块层级提炼完成后停在 MODULE_HIERARCHY_REVIEW 等待人工调试；FALSE-跳过断点直接进入 GENERATING_DOC。默认 TRUE';
-
--- 22. 任务分别记录"模块提取提示词版本"与"文档生成提示词版本"
-ALTER TABLE ci_task ADD COLUMN IF NOT EXISTS modularize_prompt_version INT;
-COMMENT ON COLUMN ci_task.modularize_prompt_version IS '模块提取提示词版本（AI_ANALYZING / MODULE_HIERARCHY 阶段使用）';
-ALTER TABLE ci_task ADD COLUMN IF NOT EXISTS document_prompt_version INT;
-COMMENT ON COLUMN ci_task.document_prompt_version IS '文档生成提示词版本（GENERATING_DOC 阶段使用）';
 
 -- 23. 是否启用知识入口复核断点（介于 SPLITTING_TASK 与 AI_ANALYZING 之间的人工断点）
 ALTER TABLE ci_task ADD COLUMN IF NOT EXISTS require_entrypoint_review BOOLEAN DEFAULT TRUE NOT NULL;

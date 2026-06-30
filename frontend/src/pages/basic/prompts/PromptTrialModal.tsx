@@ -1,12 +1,15 @@
 import { Alert, Button, Card, Col, Collapse, Divider, Empty, Input, Modal, Row, Select, Space, Spin, Statistic, Tag, Tooltip, Typography, message } from 'antd';
-import { CheckCircleOutlined, CopyOutlined, ExclamationCircleOutlined, PlayCircleOutlined, SwapOutlined } from '@ant-design/icons';
+import { CheckCircleOutlined, CopyOutlined, PlayCircleOutlined, SwapOutlined } from '@ant-design/icons';
 import React, { useEffect, useMemo, useState } from 'react';
 import type { PromptTestResult } from '../../../api/prompt';
 import type { AiModel, Prompt } from '../../../types';
 import {
   extractPlaceholders,
+  formatPlaceholderToken,
   formatVariableLabel,
   getModelOptionDisabled,
+  isFilledBySampleCode,
+  JAVA_CODE_VAR_NAMES,
   substitutePlaceholders,
 } from './utils';
 
@@ -25,7 +28,7 @@ interface PromptTrialModalProps {
   /**
    * 触发试跑。
    * - sampleCode: 用户在 UI 填的 Java 代码
-   * - variables: 用户为占位符填的值（key 不含 `${}`）
+   * - variables: 用户为占位符填的值（key 为占位符名，不含花括号）
    * - resolvedContent: 已把 variables 替换进 prompt.content 的最终字符串
    */
   onRun: (params: { sampleCode: string; variables: Record<string, string>; resolvedContent: string }) => void;
@@ -65,14 +68,13 @@ const PromptTrialModal: React.FC<PromptTrialModalProps> = ({
   const resolvedContent = useMemo(() => {
     if (!selectedPrompt) return '';
     const merged: Record<string, string> = { ...variables };
-    // 默认把 sampleCode 当作 source_code(与后端 auto-fill 一致)
-    if (sampleCode) merged.source_code = sampleCode;
+    if (sampleCode) {
+      for (const name of JAVA_CODE_VAR_NAMES) {
+        if (!merged[name]?.trim()) merged[name] = sampleCode;
+      }
+    }
     return substitutePlaceholders(selectedPrompt.content, merged);
   }, [selectedPrompt, variables, sampleCode]);
-
-  const hasEmptyRequired = placeholders.some(
-    (name) => !(variables[name] && variables[name].trim()) && !(name === 'source_code' && sampleCode),
-  );
 
   const updateVariable = (name: string, value: string) => {
     setVariables((prev) => ({ ...prev, [name]: value }));
@@ -80,10 +82,6 @@ const PromptTrialModal: React.FC<PromptTrialModalProps> = ({
 
   const handleRun = () => {
     if (!selectedPrompt) return;
-    if (hasEmptyRequired) {
-      message.warning('请先填写所有占位符变量（带 * 为必填）');
-      return;
-    }
     onRun({
       sampleCode,
       variables,
@@ -154,7 +152,7 @@ const PromptTrialModal: React.FC<PromptTrialModalProps> = ({
             }
             extra={
               placeholders.length > 0 && (
-                <Tooltip title="用正则从模板中识别 ${var_name} 形式的占位符。点击「试跑」前请填写所有变量；source_code 默认取下方示例代码。">
+                <Tooltip title="识别模板中的 {var} 或 ${var} 占位符，均可选填；未填写的保留原文。java_code / java.code 若有下方示例代码会自动替换。">
                   <Text type="secondary" style={{ fontSize: 12 }}>使用说明</Text>
                 </Tooltip>
               )
@@ -167,29 +165,30 @@ const PromptTrialModal: React.FC<PromptTrialModalProps> = ({
             ) : (
               <Row gutter={[12, 8]}>
                 {placeholders.map((name) => {
-                  const isSourceCode = name === 'source_code';
-                  const value = variables[name] ?? (isSourceCode ? sampleCode : '');
+                  const canUseSampleCode = isFilledBySampleCode(name, sampleCode);
+                  const value = variables[name] ?? '';
                   return (
                     <Col xs={24} md={12} key={name}>
                       <div className="ci-prompt-var-row">
                         <Text strong className="ci-prompt-var-label">
-                          <code>{`\${${name}}`}</code>
+                          <code>{formatPlaceholderToken(name, selectedPrompt?.content)}</code>
                           <Text type="secondary" style={{ fontSize: 12, marginLeft: 4 }}>
                             {formatVariableLabel(name)}
                           </Text>
                         </Text>
                         <Input
                           placeholder={
-                            isSourceCode ? '默认取下方「示例代码」,可在此覆盖' : '请输入变量值'
+                            canUseSampleCode
+                              ? '可选；留空时若有下方示例代码会自动替换'
+                              : '可选；留空时保留占位符原文'
                           }
                           value={value}
                           onChange={(e) => updateVariable(name, e.target.value)}
-                          status={!value && !isSourceCode ? 'warning' : undefined}
                           allowClear
                         />
-                        {isSourceCode && (
+                        {canUseSampleCode && (
                           <Text type="secondary" style={{ fontSize: 12 }}>
-                            未填时,使用下方「Java 示例代码」内容。
+                            未填时,若有下方「Java 示例代码」会自动用于替换。
                           </Text>
                         )}
                       </div>
@@ -229,7 +228,7 @@ const PromptTrialModal: React.FC<PromptTrialModalProps> = ({
               className="ci-code-input"
               value={sampleCode}
               onChange={(event) => onSampleCodeChange(event.target.value)}
-              placeholder="在此输入 Java 示例代码,作为 source_code 占位符的默认值"
+              placeholder="在此输入 Java 示例代码,作为 java_code / java.code 等占位符的默认值"
             />
           </div>
 
@@ -259,23 +258,12 @@ const PromptTrialModal: React.FC<PromptTrialModalProps> = ({
             />
           )}
 
-          {hasEmptyRequired && (
-            <Alert
-              type="warning"
-              showIcon
-              icon={<ExclamationCircleOutlined />}
-              message="存在未填写的占位符"
-              description="请填写上方所有带 * 的变量后再次点击「试跑」。"
-            />
-          )}
-
           <Button
             type="primary"
             block
             icon={<PlayCircleOutlined />}
             loading={running}
             onClick={handleRun}
-            disabled={hasEmptyRequired}
           >
             {running ? '正在流式输出...' : '开始试跑'}
           </Button>

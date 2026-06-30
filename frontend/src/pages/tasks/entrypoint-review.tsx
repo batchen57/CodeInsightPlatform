@@ -9,7 +9,6 @@ import {
   Tag,
   Tooltip,
   Typography,
-  message,
 } from 'antd';
 import {
   EditOutlined,
@@ -21,7 +20,6 @@ import { useNavigate } from 'react-router-dom';
 import { listTasks } from '../../api/task';
 import { listSystems } from '../../api/system';
 import type { System, Task } from '../../types';
-import EntrypointReviewDrawer from '../../components/EntrypointReviewDrawer';
 
 const { Text } = Typography;
 
@@ -37,8 +35,7 @@ const statusMeta: Record<string, { color: string; label: string }> = {
 };
 
 /**
- * 知识入口调试专用页：列出所有处于或曾经处于 ENTRYPOINT_REVIEW 的任务，
- * 用户可点击行进入 EntrypointReviewDrawer 确认入口清单或驳回任务。
+ * 入口复核任务列表：展示处于 ENTRYPOINT_REVIEW 的任务，点击进入复核详情页。
  */
 const EntrypointReview: React.FC = () => {
   const navigate = useNavigate();
@@ -46,8 +43,6 @@ const EntrypointReview: React.FC = () => {
   const [systems, setSystems] = useState<System[]>([]);
   const [loading, setLoading] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  const [currentTaskId, setCurrentTaskId] = useState<number | null>(null);
 
   const fetchReviewTasks = useCallback(async () => {
     setLoading(true);
@@ -79,15 +74,6 @@ const EntrypointReview: React.FC = () => {
   useEffect(() => {
     listSystems({ current: 1, size: 200, status: 1 }).then((data) => setSystems(data.records));
   }, []);
-
-  const openDrawer = (taskId: number) => {
-    setCurrentTaskId(taskId);
-    setDrawerOpen(true);
-  };
-  const closeDrawer = () => {
-    setDrawerOpen(false);
-    setCurrentTaskId(null);
-  };
 
   const reviewCount = useMemo(
     () => tasks.filter((t) => t.status === 'ENTRYPOINT_REVIEW').length,
@@ -169,12 +155,12 @@ const EntrypointReview: React.FC = () => {
             详情
           </Button>
           {record.status === 'ENTRYPOINT_REVIEW' && (
-            <Tooltip title="进入知识入口复核抽屉">
+            <Tooltip title="进入入口复核详情">
               <Button
                 size="small"
                 type="primary"
                 icon={<EditOutlined />}
-                onClick={() => openDrawer(record.id)}
+                onClick={() => navigate(`/tasks/entrypoint-review/${record.id}`)}
               >
                 开始复核
               </Button>
@@ -213,9 +199,10 @@ const EntrypointReview: React.FC = () => {
           description={
             <ul style={{ margin: 0, paddingLeft: 18 }}>
               <li>仅启用「知识入口复核」的任务会停在此状态等待人工确认。</li>
+              <li>点击「开始复核」进入详情页，可查看入口类清单并确认或驳回。</li>
               <li>
-                复核抽屉是<strong>只读视图</strong>：展示识别到的入口类与每个类下的关键方法；
-                用户只能<strong>确认并继续</strong>或<strong>驳回任务</strong>，不能直接增删改入口。
+                复核页是<strong>只读视图</strong>：展示识别到的入口类与关键方法；
+                只能<strong>确认并继续</strong>或<strong>驳回任务</strong>，不能直接增删改入口。
               </li>
               <li>
                 如发现入口清单与预期不一致（例如少了 Controller / 混入测试类），请回到
@@ -242,16 +229,6 @@ const EntrypointReview: React.FC = () => {
           />
         )}
       </Card>
-
-      <EntrypointReviewDrawer
-        open={drawerOpen}
-        taskId={currentTaskId}
-        onClose={closeDrawer}
-        onSubmitted={() => {
-          message.success('已提交');
-          fetchReviewTasks();
-        }}
-      />
     </div>
   );
 };

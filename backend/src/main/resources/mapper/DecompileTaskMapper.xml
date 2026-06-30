@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.company.codeinsight.modules.task.mapper.DecompileTaskMapper">
+
+    <!--
+      认领队列中下一条 PENDING 任务（PostgreSQL SKIP LOCKED，集群下避免多节点重复调度）。
+      跳过已被其他节点预留（claimed_by 非空且 lease 未过期）的行。
+    -->
+    <select id="selectNextPendingIdForUpdate" resultType="long">
+        SELECT id
+        FROM ci_task
+        WHERE status = 'PENDING'
+          AND (claimed_by IS NULL OR lease_until IS NULL OR lease_until &lt; NOW())
+        ORDER BY priority DESC, created_at ASC
+        LIMIT 1
+        FOR UPDATE SKIP LOCKED
+    </select>
+
+</mapper>

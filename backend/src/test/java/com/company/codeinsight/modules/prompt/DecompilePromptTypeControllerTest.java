@@ -34,14 +34,14 @@ public class DecompilePromptTypeControllerTest {
         Long documentId = decompilePromptController.createPrompt(documentPrompt).getData().getId();
 
         ApiResponse<PageResult<DecompilePrompt>> modularPage =
-            decompilePromptController.listPrompts(1, 20, null, "MODULARIZE", null);
+            decompilePromptController.listPrompts(1, 20, null, "MODULARIZE", null, null, null);
         Assertions.assertTrue(modularPage.getData().getRecords().stream()
             .anyMatch(item -> modularId.equals(item.getId())));
         Assertions.assertTrue(modularPage.getData().getRecords().stream()
             .noneMatch(item -> "DOCUMENT_GENERATION".equals(item.getPromptType())));
 
         ApiResponse<PageResult<DecompilePrompt>> documentPage =
-            decompilePromptController.listPrompts(1, 20, null, "DOCUMENT_GENERATION", null);
+            decompilePromptController.listPrompts(1, 20, null, "DOCUMENT_GENERATION", null, null, null);
         Assertions.assertTrue(documentPage.getData().getRecords().stream()
             .anyMatch(item -> documentId.equals(item.getId())));
         Assertions.assertTrue(documentPage.getData().getRecords().stream()

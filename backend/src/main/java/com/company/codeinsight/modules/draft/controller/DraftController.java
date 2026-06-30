@@ -5,6 +5,7 @@ import com.company.codeinsight.modules.draft.dto.DraftTreeNode;
 import com.company.codeinsight.modules.draft.dto.PreviewSystemDto;
 import com.company.codeinsight.modules.draft.dto.SaveDraftRequest;
 import com.company.codeinsight.modules.draft.entity.*;
+import com.company.codeinsight.modules.draft.service.DraftEditLockService;
 import com.company.codeinsight.modules.draft.service.DraftService;
 import com.company.codeinsight.modules.task.entity.DecompileTask;
 import io.swagger.v3.oas.annotations.Operation;
@@ -29,6 +30,9 @@ public class DraftController {
 
     @Autowired
     private DraftService draftService;
+
+    @Autowired
+    private DraftEditLockService draftEditLockService;
 
     /**
      * 根据分析任务 ID 获取生成关联的工作区元数据及包含的草稿列表
@@ -110,6 +114,36 @@ public class DraftController {
         String content = body.getContent();
         String author = body.getAuthor() != null ? body.getAuthor() : "Admin";
         draftService.autoSaveDraft(id, content, author);
+        return ApiResponse.success();
+    }
+
+    @Operation(summary = "获取草稿编辑锁（集群模式）")
+    @PostMapping("/{id}/edit-lock/acquire")
+    public ApiResponse<Void> acquireEditLock(
+            @PathVariable Long id,
+            @RequestBody SaveDraftRequest body) {
+        String author = body.getAuthor() != null ? body.getAuthor() : "Admin";
+        draftEditLockService.acquire(id, author);
+        return ApiResponse.success();
+    }
+
+    @Operation(summary = "续租草稿编辑锁")
+    @PostMapping("/{id}/edit-lock/renew")
+    public ApiResponse<Void> renewEditLock(
+            @PathVariable Long id,
+            @RequestBody SaveDraftRequest body) {
+        String author = body.getAuthor() != null ? body.getAuthor() : "Admin";
+        draftEditLockService.renew(id, author);
+        return ApiResponse.success();
+    }
+
+    @Operation(summary = "释放草稿编辑锁")
+    @PostMapping("/{id}/edit-lock/release")
+    public ApiResponse<Void> releaseEditLock(
+            @PathVariable Long id,
+            @RequestBody SaveDraftRequest body) {
+        String author = body.getAuthor() != null ? body.getAuthor() : "Admin";
+        draftEditLockService.release(id, author);
         return ApiResponse.success();
     }
 

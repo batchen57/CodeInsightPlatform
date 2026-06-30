@@ -4,8 +4,20 @@ spring:
   main:
     banner-mode: "off"
 
+mybatis-plus:
+  mapper-locations: classpath:mapper/*.xml
+
 # 全局默认值（各 profile 可通过 application-{profile}.yml 覆盖）
 code-insight:
+  cluster:
+    enabled: false
+    leader-lock-ttl-seconds: 15
+    task-lease-hours: 2
+    draft-edit-lock-ttl-seconds: 120
+    draft-edit-lock-renew-seconds: 60
+  storage:
+    local-path: ./storage
+    workspace-root: ./temp_repos
   ai:
     hierarchy-parallelism: 4   # 模块层级 AI 调用并发数，按模型 API 限流调整
   schedule:

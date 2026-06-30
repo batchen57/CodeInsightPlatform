@@ -20,9 +20,19 @@ import java.util.List;
 public class RepositoryReadinessDto {
 
     /**
-     * 是否满足「所有草稿已确认」条件
+     * 是否满足新建任务前置条件（草稿已确认 + 系统提示词已绑定）
      */
     private boolean ready;
+
+    /**
+     * 系统是否已完整绑定模块提取 + 文档生成提示词。
+     */
+    private boolean promptsConfigured = true;
+
+    /**
+     * 提示词未配置时的说明文案（{@code promptsConfigured=false} 时有值）。
+     */
+    private String promptsMessage;
 
     /**
      * 全局未确认草稿总数（DRAFT / EDITING / REJECTED 任意一项即计入）

@@ -84,7 +84,7 @@ public class DecompilePromptServiceImpl extends ServiceImpl<DecompilePromptMappe
     @Override
     public Page<DecompilePrompt> listPromptsPage(int current, int size, String name,
                                                  String promptType, String lifecycle, String category,
-                                                 Long scopeId) {
+                                                 Long scopeId, Integer isDefault) {
         Page<DecompilePrompt> page = new Page<>(current, size);
         LambdaQueryWrapper<DecompilePrompt> queryWrapper = new LambdaQueryWrapper<>();
         queryWrapper.like(StringUtils.hasText(name), DecompilePrompt::getName, name)
@@ -97,6 +97,9 @@ public class DecompilePromptServiceImpl extends ServiceImpl<DecompilePromptMappe
             if ("USER".equalsIgnoreCase(category) && scopeId != null) {
                 queryWrapper.eq(DecompilePrompt::getScopeId, scopeId);
             }
+        }
+        if (isDefault != null) {
+            queryWrapper.eq(DecompilePrompt::getIsDefault, isDefault);
         }
         queryWrapper.orderByDesc(DecompilePrompt::getCreatedAt);
         return this.page(page, queryWrapper);
@@ -203,61 +206,90 @@ public class DecompilePromptServiceImpl extends ServiceImpl<DecompilePromptMappe
         return result;
     }
 
-    /**
-     * 按任务运行时指定的提示词类型解析提示词正文。
-     * <p>查找顺序：①任务记录中显式保存的版本号 → ②同 prompt_type 下默认版本 → ③null。</p>
-     *
-     * @param task       任务实体（用于读取显式版本号）
-     * @param promptType 提示词用途：{@link DecompilePrompt#TYPE_MODULARIZE} 或 {@link DecompilePrompt#TYPE_DOCUMENT_GENERATION}
-     * @return 提示词正文；找不到返回 null
-     */
     @Override
     public String resolveTaskPromptContent(com.company.codeinsight.modules.task.entity.DecompileTask task, String promptType) {
-        if (task == null || !StringUtils.hasText(promptType)) {
+        try {
+            return requireTaskPromptContent(task, promptType);
+        } catch (BusinessException ex) {
+            log.warn("任务 {} 解析 {} 提示词失败: {}", task != null ? task.getId() : null, promptType, ex.getMessage());
             return null;
         }
+    }
 
-        // ① 任务级显式绑定（任务创建时已快照）
+    @Override
+    public String requireTaskPromptContent(com.company.codeinsight.modules.task.entity.DecompileTask task, String promptType) {
+        if (task == null || !StringUtils.hasText(promptType)) {
+            throw new BusinessException("任务提示词配置缺失");
+        }
         Long explicitId = DecompilePrompt.TYPE_MODULARIZE.equals(promptType)
                 ? task.getModularizePromptId()
                 : task.getDocumentPromptId();
-        if (explicitId != null) {
-            DecompilePrompt hit = this.baseMapper.selectById(explicitId);
-            if (hit != null && hit.isReleased()
-                    && promptType.equals(hit.getPromptType())) {
-                return hit.getContent();
-            }
-            log.warn("任务 {} 指定 {} id={} 未命中（已禁用或类型不匹配或不存在），回退到系统/默认", task.getId(), promptType, explicitId);
+        String label = DecompilePrompt.TYPE_MODULARIZE.equals(promptType) ? "模块提取" : "文档生成";
+        if (explicitId == null) {
+            throw new BusinessException("任务未绑定" + label + "提示词，无法执行流水线。请前往「系统与仓库」完成提示词绑定后重新创建任务。");
         }
-
-        // ② 系统级绑定：ci_system.modularize_prompt_id / document_prompt_id
-        if (task.getSystemId() != null) {
-            com.company.codeinsight.modules.system.entity.SystemApplication system =
-                    systemMapper.selectById(task.getSystemId());
-            if (system != null) {
-                Long systemPromptId = DecompilePrompt.TYPE_MODULARIZE.equals(promptType)
-                        ? system.getModularizePromptId()
-                        : system.getDocumentPromptId();
-                if (systemPromptId != null) {
-                    DecompilePrompt hit = this.baseMapper.selectById(systemPromptId);
-                    if (hit != null && hit.isReleased()
-                            && promptType.equals(hit.getPromptType())) {
-                        return hit.getContent();
-                    }
-                    log.warn("系统 {} 绑定 {} id={} 未命中，回退到默认", system.getId(), promptType, systemPromptId);
-                }
-            }
+        DecompilePrompt hit = this.baseMapper.selectById(explicitId);
+        if (hit == null || !hit.isReleased() || !promptType.equals(hit.getPromptType())) {
+            throw new BusinessException("任务绑定的" + label + "提示词无效或未发布，无法执行流水线");
         }
+        if (!StringUtils.hasText(hit.getContent())) {
+            throw new BusinessException("任务绑定的" + label + "提示词内容为空，无法执行流水线");
+        }
+        return hit.getContent();
+    }
 
-        // ③ 默认提示词：ci_prompt.is_default=1
-        DecompilePrompt fallback = this.baseMapper.selectOne(
-                new LambdaQueryWrapper<DecompilePrompt>()
-                        .eq(DecompilePrompt::getPromptType, promptType)
-                        .eq(DecompilePrompt::getIsDefault, 1)
-                        .eq(DecompilePrompt::getLifecycle, DecompilePrompt.LIFECYCLE_RELEASED)
-                        .last("LIMIT 1")
-        );
-        return fallback != null ? fallback.getContent() : null;
+    @Override
+    public void validateSystemPromptBinding(Long systemId) {
+        if (systemId == null) {
+            throw new BusinessException("系统不存在");
+        }
+        com.company.codeinsight.modules.system.entity.SystemApplication system = systemMapper.selectById(systemId);
+        if (system == null) {
+            throw new BusinessException("系统不存在");
+        }
+        validatePromptPair(system.getModularizePromptId(), system.getDocumentPromptId(), "系统");
+    }
+
+    @Override
+    public void validateTaskPromptBinding(Long modularizePromptId, Long documentPromptId) {
+        validatePromptPair(modularizePromptId, documentPromptId, "任务");
+    }
+
+    @Override
+    public boolean isSystemPromptsConfigured(Long systemId) {
+        return getSystemPromptsConfigurationMessage(systemId) == null;
+    }
+
+    @Override
+    public String getSystemPromptsConfigurationMessage(Long systemId) {
+        try {
+            validateSystemPromptBinding(systemId);
+            return null;
+        } catch (BusinessException ex) {
+            return ex.getMessage();
+        }
+    }
+
+    private void validatePromptPair(Long modularizeId, Long documentId, String scope) {
+        if (modularizeId == null) {
+            throw new BusinessException(scope + "未绑定模块提取提示词，请前往「系统与仓库」完成提示词绑定");
+        }
+        if (documentId == null) {
+            throw new BusinessException(scope + "未绑定文档生成提示词，请前往「系统与仓库」完成提示词绑定");
+        }
+        DecompilePrompt modularize = this.baseMapper.selectById(modularizeId);
+        if (modularize == null || !modularize.isReleased()
+                || !DecompilePrompt.TYPE_MODULARIZE.equals(modularize.getPromptType())) {
+            throw new BusinessException(scope + "绑定的模块提取提示词无效或未发布，请前往「系统与仓库」重新绑定");
+        }
+        DecompilePrompt document = this.baseMapper.selectById(documentId);
+        if (document == null || !document.isReleased()
+                || !DecompilePrompt.TYPE_DOCUMENT_GENERATION.equals(document.getPromptType())) {
+            throw new BusinessException(scope + "绑定的文档生成提示词无效或未发布，请前往「系统与仓库」重新绑定");
+        }
+        if (!StringUtils.hasText(modularize.getContent()) || !StringUtils.hasText(document.getContent())) {
+            throw new BusinessException(scope + "绑定的提示词内容为空，请前往「系统与仓库」重新绑定");
+        }
     }
 
     /**

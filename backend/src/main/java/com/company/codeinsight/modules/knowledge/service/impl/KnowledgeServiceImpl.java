@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.company.codeinsight.common.exception.BusinessException;
+import com.company.codeinsight.common.storage.TaskWorkspacePaths;
 import com.company.codeinsight.common.util.DraftFileUtil;
 import com.company.codeinsight.modules.draft.entity.DraftWorkspace;
 import com.company.codeinsight.modules.draft.entity.KnowledgeDraft;
@@ -76,6 +77,9 @@ public class KnowledgeServiceImpl implements KnowledgeService {
     @Autowired
     private com.company.codeinsight.modules.hierarchy.service.ModuleHierarchyService moduleHierarchyService;
 
+    @Autowired
+    private TaskWorkspacePaths taskWorkspacePaths;
+
     /**
      * 草稿正文存储根目录，与 ci_knowledge_draft.content_uri 的相对路径拼接。
      * 配置项：{@code code-insight.storage.local-path}，默认 {@code ./storage}。
@@ -124,7 +128,7 @@ public class KnowledgeServiceImpl implements KnowledgeService {
         }
 
         // 定位并创建临时 Git 克隆工程目录中的 docs 文件夹
-        File taskRepoDir = new File("temp_repos/task_" + taskId);
+        File taskRepoDir = taskWorkspacePaths.taskProjectDir(taskId);
         if (!taskRepoDir.exists()) {
             taskRepoDir.mkdirs(); 
         }
@@ -209,7 +213,7 @@ public class KnowledgeServiceImpl implements KnowledgeService {
                 );
                 for (DraftSourceReference ref : refs) {
                     if (ref.getFilePath().endsWith(".java")) {
-                        Path classFile = Paths.get("temp_repos", "task_" + taskId, ref.getFilePath());
+                        Path classFile = taskWorkspacePaths.taskProjectPath(taskId).resolve(ref.getFilePath());
                         if (Files.exists(classFile)) {
                             try {
                                 ParsedClassInfo info = javaParserService.parseFile(classFile.toFile());
@@ -245,7 +249,7 @@ public class KnowledgeServiceImpl implements KnowledgeService {
                 );
                 for (DraftSourceReference ref : refs) {
                     if (ref.getFilePath().endsWith(".java")) {
-                        Path classFile = Paths.get("temp_repos", "task_" + taskId, ref.getFilePath());
+                        Path classFile = taskWorkspacePaths.taskProjectPath(taskId).resolve(ref.getFilePath());
                         if (Files.exists(classFile)) {
                             try {
                                 ParsedClassInfo info = javaParserService.parseFile(classFile.toFile());
@@ -278,7 +282,7 @@ public class KnowledgeServiceImpl implements KnowledgeService {
                 );
                 for (DraftSourceReference ref : refs) {
                     if (ref.getFilePath().endsWith(".java")) {
-                        Path classFile = Paths.get("temp_repos", "task_" + taskId, ref.getFilePath());
+                        Path classFile = taskWorkspacePaths.taskProjectPath(taskId).resolve(ref.getFilePath());
                         if (Files.exists(classFile)) {
                             try {
                                 ParsedClassInfo info = javaParserService.parseFile(classFile.toFile());
@@ -387,7 +391,7 @@ public class KnowledgeServiceImpl implements KnowledgeService {
             throw new BusinessException("知识版本不存在");
         }
 
-        File taskRepoDir = new File("temp_repos/task_" + version.getTaskId());
+        File taskRepoDir = taskWorkspacePaths.taskProjectDir(version.getTaskId());
         File docsDir = new File(taskRepoDir, "docs/code-insight");
         if (!docsDir.exists()) {
             throw new BusinessException("知识库本地目录不存在，请先创建版本");

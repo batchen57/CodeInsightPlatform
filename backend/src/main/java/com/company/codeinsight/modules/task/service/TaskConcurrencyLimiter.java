@@ -1,5 +1,7 @@
 package com.company.codeinsight.modules.task.service;
 
+import com.company.codeinsight.common.cluster.ClusterProperties;
+import com.company.codeinsight.common.cluster.RedisDistributedPermits;
 import com.company.codeinsight.modules.quotacontrol.service.SystemConfigService;
 import com.company.codeinsight.modules.system.entity.SystemApplication;
 import com.company.codeinsight.modules.system.mapper.SystemApplicationMapper;
@@ -13,16 +15,17 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.Semaphore;
 
 /**
- * 知识构建任务并发闸门：
- *  - 全局 Semaphore：从 ci_system_config 'task.concurrency' 读取（默认 2）
- *  - 每系统 Semaphore：从 ci_system.max_concurrent_tasks 读取（默认 1），懒加载
- *
- * 任务开始时 acquire(task.systemId)，pipeline 终态 finally release(task.systemId)。
- * 任何一边拿不到 → 当前 tick 跳过；下个 tick 重新尝试。
+ * 知识构建任务并发闸门。
+ * <ul>
+ *   <li>集群模式（{@code code-insight.cluster.enabled=true}）：Redis Set 分布式计数</li>
+ *   <li>单机模式：JVM {@link Semaphore}（兼容本地开发）</li>
+ * </ul>
  */
 @Slf4j
 @Service
 public class TaskConcurrencyLimiter {
+
+    private static final String POOL_GLOBAL = "task:global";
 
     @Autowired
     private SystemConfigService systemConfigService;
@@ -30,79 +33,149 @@ public class TaskConcurrencyLimiter {
     @Autowired
     private SystemApplicationMapper systemMapper;
 
-    /** 全局 Semaphore，fair=true 避免饥饿 */
-    private volatile Semaphore global;
+    @Autowired
+    private ClusterProperties clusterProperties;
 
-    /** 按 systemId 缓存的 Semaphore，懒加载（容量来自 ci_system.max_concurrent_tasks） */
-    private final ConcurrentMap<Long, Semaphore> perSystem = new ConcurrentHashMap<>();
+    @Autowired(required = false)
+    private RedisDistributedPermits redisPermits;
+
+    private volatile Semaphore globalLocal;
+    private final ConcurrentMap<Long, Semaphore> perSystemLocal = new ConcurrentHashMap<>();
 
     @PostConstruct
     public void init() {
         rebuildGlobal(systemConfigService.getInt("task.concurrency", 2));
     }
 
-    /** 重建全局 Semaphore（监听 task.concurrency 变更后调用） */
     public synchronized void rebuildGlobal(int permits) {
         int n = Math.max(1, permits);
-        this.global = new Semaphore(n, true);
-        log.info("TaskConcurrencyLimiter 全局并发已重建: permits={}", n);
+        this.globalLocal = new Semaphore(n, true);
+        log.info("TaskConcurrencyLimiter 全局并发已重建: permits={}, cluster={}", n, clusterProperties.isEnabled());
     }
 
     /**
-     * 尝试获取指定系统的并发许可（同时拿全局 + 系统）。
-     * 任一失败立即归还已拿到的，避免泄漏。
+     * @param taskId 非空时作为 Redis holder（task:{id}）
      */
-    public boolean tryAcquire(Long systemId) {
-        if (global == null) {
-            rebuildGlobal(systemConfigService.getInt("task.concurrency", 2));
+    public boolean tryAcquire(Long systemId, Long taskId) {
+        if (clusterProperties.isEnabled()) {
+            return tryAcquireCluster(systemId, taskId);
         }
-        Semaphore sys = getOrCreateSystemSemaphore(systemId);
-        boolean gotGlobal = global.tryAcquire();
-        if (!gotGlobal) return false;
-        boolean gotSys = sys.tryAcquire();
-        if (!gotSys) {
-            global.release();
+        return tryAcquireLocal(systemId);
+    }
+
+    /** 兼容旧调用（单机路径无 taskId） */
+    public boolean tryAcquire(Long systemId) {
+        return tryAcquire(systemId, null);
+    }
+
+    public void release(Long systemId, Long taskId) {
+        if (clusterProperties.isEnabled() && taskId != null && redisPermits != null) {
+            redisPermits.release(POOL_GLOBAL, holderToken(taskId));
+            if (systemId != null) {
+                redisPermits.release(systemPool(systemId), holderToken(taskId));
+            }
+            return;
+        }
+        releaseLocal(systemId);
+    }
+
+    public void release(Long systemId) {
+        release(systemId, null);
+    }
+
+    public int globalAvailablePermits() {
+        if (clusterProperties.isEnabled() && redisPermits != null) {
+            int max = systemConfigService.getInt("task.concurrency", 2);
+            long used = redisPermits.count(POOL_GLOBAL);
+            return Math.max(0, max - (int) used);
+        }
+        return globalLocal == null ? 0 : globalLocal.availablePermits();
+    }
+
+    private boolean tryAcquireCluster(Long systemId, Long taskId) {
+        if (redisPermits == null || taskId == null) {
+            log.warn("集群模式需要 RedisDistributedPermits 与 taskId");
+            return false;
+        }
+        int globalMax = systemConfigService.getInt("task.concurrency", 2);
+        String holder = holderToken(taskId);
+        if (!redisPermits.tryAcquire(POOL_GLOBAL, holder, globalMax)) {
+            return false;
+        }
+        int sysMax = resolveSystemMax(systemId);
+        if (!redisPermits.tryAcquire(systemPool(systemId), holder, sysMax)) {
+            redisPermits.release(POOL_GLOBAL, holder);
             return false;
         }
         return true;
     }
 
-    /** 释放指定系统的许可（必须与 tryAcquire 配对调用） */
-    public void release(Long systemId) {
+    private boolean tryAcquireLocal(Long systemId) {
+        if (globalLocal == null) {
+            rebuildGlobal(systemConfigService.getInt("task.concurrency", 2));
+        }
+        Semaphore sys = getOrCreateSystemSemaphoreLocal(systemId);
+        boolean gotGlobal = globalLocal.tryAcquire();
+        if (!gotGlobal) {
+            return false;
+        }
+        boolean gotSys = sys.tryAcquire();
+        if (!gotSys) {
+            globalLocal.release();
+            return false;
+        }
+        return true;
+    }
+
+    private void releaseLocal(Long systemId) {
         if (systemId != null) {
-            Semaphore sys = perSystem.get(systemId);
+            Semaphore sys = perSystemLocal.get(systemId);
             if (sys != null) {
-                try { sys.release(); } catch (Exception ignored) { /* 超过 permits 时不抛 */ }
+                try {
+                    sys.release();
+                } catch (Exception ignored) {
+                }
             }
         }
-        if (global != null) {
-            try { global.release(); } catch (Exception ignored) { /* 同上 */ }
+        if (globalLocal != null) {
+            try {
+                globalLocal.release();
+            } catch (Exception ignored) {
+            }
         }
     }
 
-    /** 全局当前可用许可数（用于 dispatcher 拉多少 PENDING 任务） */
-    public int globalAvailablePermits() {
-        return global == null ? 0 : global.availablePermits();
-    }
-
-    /** 获取或创建系统级 Semaphore（容量来自 ci_system.max_concurrent_tasks） */
-    private Semaphore getOrCreateSystemSemaphore(Long systemId) {
+    private Semaphore getOrCreateSystemSemaphoreLocal(Long systemId) {
         if (systemId == null) {
-            // 兜底：系统 id 缺失时给一个默认大小的 Semaphore
-            return perSystem.computeIfAbsent(-1L, k -> new Semaphore(1, true));
+            return perSystemLocal.computeIfAbsent(-1L, k -> new Semaphore(1, true));
         }
-        return perSystem.computeIfAbsent(systemId, k -> {
-            int permits = 1;
+        return perSystemLocal.computeIfAbsent(systemId, k -> {
+            int permits = resolveSystemMax(systemId);
+            log.info("TaskConcurrencyLimiter 系统 {} 初始化并发(local): permits={}", systemId, permits);
+            return new Semaphore(permits, true);
+        });
+    }
+
+    private int resolveSystemMax(Long systemId) {
+        int permits = 1;
+        if (systemId != null) {
             try {
                 SystemApplication sys = systemMapper.selectById(systemId);
                 if (sys != null && sys.getMaxConcurrentTasks() != null && sys.getMaxConcurrentTasks() > 0) {
                     permits = sys.getMaxConcurrentTasks();
                 }
             } catch (Exception e) {
-                log.warn("读取系统 {} 的 max_concurrent_tasks 失败,回退 1", systemId, e);
+                log.warn("读取系统 {} max_concurrent_tasks 失败", systemId, e);
             }
-            log.info("TaskConcurrencyLimiter 系统 {} 初始化并发: permits={}", systemId, permits);
-            return new Semaphore(permits, true);
-        });
+        }
+        return permits;
+    }
+
+    private static String systemPool(Long systemId) {
+        return "task:sys:" + (systemId == null ? "unknown" : systemId);
+    }
+
+    private static String holderToken(Long taskId) {
+        return "task:" + taskId;
     }
 }

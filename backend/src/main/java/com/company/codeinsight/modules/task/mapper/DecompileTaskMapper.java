@@ -3,6 +3,7 @@ package com.company.codeinsight.modules.task.mapper;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import com.company.codeinsight.modules.task.entity.DecompileTask;
 import org.apache.ibatis.annotations.Mapper;
+import org.apache.ibatis.annotations.Param;
 
 /**
  * 反编译及分析任务数据持久层 Mapper 接口
@@ -10,5 +11,11 @@ import org.apache.ibatis.annotations.Mapper;
  */
 @Mapper
 public interface DecompileTaskMapper extends BaseMapper<DecompileTask> {
+
+    /**
+     * 在事务内调用：锁定下一条可调度 PENDING 任务主键（SKIP LOCKED）。
+     * 无可用任务时返回 null。
+     */
+    Long selectNextPendingIdForUpdate();
 }
 

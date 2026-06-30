@@ -638,6 +638,39 @@ export async function mockGetWorkspaceTree(workspaceId: number): Promise<DraftTr
   return roots;
 }
 
+/** 演示模式下的编辑锁（单用户始终可持有） */
+const mockEditLocks = new Map<number, string>();
+
+function mockLockHolder(author?: string): string {
+  return (author && author.trim()) || 'Admin';
+}
+
+export async function mockAcquireDraftEditLock(draftId: number, author?: string): Promise<void> {
+  await wait(40);
+  const holder = mockLockHolder(author);
+  const current = mockEditLocks.get(draftId);
+  if (current && current !== holder) {
+    throw new Error('该草稿正由其他用户编辑中，请稍后再试');
+  }
+  mockEditLocks.set(draftId, holder);
+}
+
+export async function mockRenewDraftEditLock(draftId: number, author?: string): Promise<void> {
+  await wait(20);
+  const holder = mockLockHolder(author);
+  if (mockEditLocks.get(draftId) !== holder) {
+    throw new Error('编辑锁已失效或被他人占用');
+  }
+}
+
+export async function mockReleaseDraftEditLock(draftId: number, author?: string): Promise<void> {
+  await wait(20);
+  const holder = mockLockHolder(author);
+  if (mockEditLocks.get(draftId) === holder) {
+    mockEditLocks.delete(draftId);
+  }
+}
+
 export async function mockGetDraftContent(draftId: number): Promise<string> {
   await wait(60);
   return contentStore.get(draftId) ?? `# (草稿 #${draftId})\n\n*演示模式下暂无内容，可直接编辑。*`;

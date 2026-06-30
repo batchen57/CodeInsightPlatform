@@ -17,10 +17,12 @@ import ScheduleFormPage from '../pages/tasks/jobs/ScheduleFormPage';
 import TaskDetail from '../pages/tasks/detail';
 import HierarchyReview from '../pages/tasks/hierarchy-review';
 import EntrypointReview from '../pages/tasks/entrypoint-review';
+import EntrypointReviewDetail from '../pages/tasks/entrypoint-review-detail';
 import SchedulesRedirect from '../pages/schedules';
 import ScheduleDetailRedirect from '../pages/schedules/detail';
 import KnowledgeBrowse from '../pages/knowledge';
 import Drafts from '../pages/drafts';
+import DraftReviewDetail from '../pages/drafts/detail';
 import Push from '../pages/push';
 import TokenAudit from '../pages/token-audit';
 import Logs from '../pages/logs';
@@ -111,8 +113,12 @@ export const router = createHashRouter([
         element: <HierarchyReview />,
       },
       {
-        path: 'tasks/entrypoint-review', // 知识入口调试专用页
+        path: 'tasks/entrypoint-review',
         element: <EntrypointReview />,
+      },
+      {
+        path: 'tasks/entrypoint-review/:taskId',
+        element: <EntrypointReviewDetail />,
       },
       {
         path: 'tasks/:id', // 任务执行详情与流程监控
@@ -129,8 +135,12 @@ export const router = createHashRouter([
       { path: 'models', element: <Navigate to="/basic/models" replace /> },
       { path: 'prompts', element: <Navigate to="/basic/prompts" replace /> },
       {
-        path: 'drafts', // 知识草稿复核与编辑器协同工作区
+        path: 'drafts',
         element: <Drafts />,
+      },
+      {
+        path: 'drafts/:taskId',
+        element: <DraftReviewDetail />,
       },
       {
         path: 'push', // 知识推送确认与推送 Git 库版本管理

@@ -1,9 +1,11 @@
 package com.company.codeinsight.modules.schedule.scheduler;
 
+import com.company.codeinsight.common.cluster.ClusterLeaderLock;
+import com.company.codeinsight.common.cluster.ClusterProperties;
 import com.company.codeinsight.modules.schedule.entity.ScheduleTask;
 import com.company.codeinsight.modules.schedule.service.ScheduleTaskService;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -25,17 +27,24 @@ import java.util.List;
  */
 @Slf4j
 @Component
+@RequiredArgsConstructor
 @ConditionalOnProperty(name = "code-insight.schedule.enabled", havingValue = "true", matchIfMissing = true)
 public class ScheduleExecutor {
 
-    @Autowired
-    private ScheduleTaskService scheduleTaskService;
+    private static final String LEADER_KEY = "ci:leader:schedule-executor";
+
+    private final ScheduleTaskService scheduleTaskService;
+    private final ClusterProperties clusterProperties;
+    private final ClusterLeaderLock leaderLock;
 
     /**
      * 主循环：扫描到期的调度并触发。
      */
     @Scheduled(fixedDelayString = "${code-insight.schedule.poll-interval-ms:60000}")
     public void poll() {
+        if (clusterProperties.isEnabled() && !leaderLock.tryAcquireLeader(LEADER_KEY)) {
+            return;
+        }
         try {
             List<ScheduleTask> due = scheduleTaskService.findDueSchedules();
             if (due == null || due.isEmpty()) {
@@ -61,6 +70,9 @@ public class ScheduleExecutor {
      */
     @Scheduled(fixedDelayString = "${code-insight.schedule.queue-poll-interval-ms:30000}")
     public void drainQueue() {
+        if (clusterProperties.isEnabled() && !leaderLock.tryAcquireLeader(LEADER_KEY)) {
+            return;
+        }
         try {
             Long scheduleId;
             while ((scheduleId = scheduleTaskService.popQueuedScheduleId()) != null) {

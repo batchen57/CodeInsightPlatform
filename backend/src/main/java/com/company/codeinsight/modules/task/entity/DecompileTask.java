@@ -69,11 +69,6 @@ public class DecompileTask extends BaseEntity {
     private Integer progress;
 
     /**
-     * 本次分析生成的本地调试/运行详细控制台输出日志的存储 URI 路径
-     */
-    private String logUri;
-
-    /**
      * 任务执行异常失败的具体错误日志原因
      */
     private String errorReason;
@@ -141,5 +136,17 @@ public class DecompileTask extends BaseEntity {
      */
     @TableField("priority")
     private Integer priority;
+
+    /** 集群：认领该任务的实例 ID（{@link com.company.codeinsight.common.cluster.ClusterInstanceId}） */
+    @TableField("claimed_by")
+    private String claimedBy;
+
+    /** 认领时间 */
+    @TableField("claimed_at")
+    private LocalDateTime claimedAt;
+
+    /** 认领租约到期时间；过期后其他节点可重新认领 PENDING 预留 */
+    @TableField("lease_until")
+    private LocalDateTime leaseUntil;
 }
 

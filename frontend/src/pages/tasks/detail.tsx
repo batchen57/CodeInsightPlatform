@@ -16,7 +16,7 @@ import { getSystem } from '../../api/system';
 import type { PipelineStageStat, System, Task, TaskLogSummary } from '../../types';
 
 /** 构造携带当前任务上下文（systemId + taskId）的复核页跳转链接 */
-const buildDraftsHref = (task: Task) => `/drafts?systemId=${task.systemId}&taskId=${task.id}`;
+const buildDraftsHref = (task: Task) => `/drafts/${task.id}`;
 
 
 const { Text, Title } = Typography;
@@ -397,7 +397,7 @@ const timelineItem = (s: PipelineStageStat) => {
               <Descriptions.Item label="开始时间">{task.startedAt ? new Date(task.startedAt).toLocaleString() : '-'}</Descriptions.Item>
               <Descriptions.Item label="结束时间">{task.endedAt ? new Date(task.endedAt).toLocaleString() : '-'}</Descriptions.Item>
               <Descriptions.Item label="日志 URI">
-                <Text code>{task.logUri || `local://storage/tasks/${task.id}.log`}</Text>
+                <Text code>{`local://storage/task_${task.id}/pipeline.log`}</Text>
               </Descriptions.Item>
             </Descriptions>
           </Card>
@@ -566,8 +566,8 @@ const timelineItem = (s: PipelineStageStat) => {
               总耗时 {(((summary?.durationMs ?? task.durationMs) || 0) / 1000).toFixed(1)} 秒
             </Tag>
             <Tag color={meta.color}>{meta.label}</Tag>
-            <Text type="secondary" copyable={{ text: task.logUri || `local://storage/tasks/${task.id}.log` }}>
-              日志 URI：{task.logUri || `local://storage/tasks/${task.id}.log`}
+            <Text type="secondary" copyable={{ text: `local://storage/task_${task.id}/pipeline.log` }}>
+              日志 URI：`local://storage/task_${task.id}/pipeline.log`
             </Text>
             <Button
               size="small"

@@ -53,7 +53,7 @@ public class DecompilePromptServiceTests {
         Assertions.assertEquals("Decompile Class summary template", fetched.getName());
 
         // List
-        Page<DecompilePrompt> page = decompilePromptService.listPromptsPage(1, 10, "Decompile", null, null);
+        Page<DecompilePrompt> page = decompilePromptService.listPromptsPage(1, 10, "Decompile", null, null, null, null);
         Assertions.assertTrue(page.getTotal() > 0);
 
         // Clone

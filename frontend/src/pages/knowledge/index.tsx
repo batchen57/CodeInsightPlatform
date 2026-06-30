@@ -109,7 +109,7 @@ const KnowledgeBrowse: React.FC = () => {
 
   // ────────── 副作用：拉系统列表 ──────────
   useEffect(() => {
-    listSystems({ current: 1, size: 200, status: 1 })
+    listSystems({ current: 1, size: 200 })
       .then((data) => setSystems(data.records ?? []))
       .catch(() => {/* request.ts 已统一弹错 */});
   }, []);

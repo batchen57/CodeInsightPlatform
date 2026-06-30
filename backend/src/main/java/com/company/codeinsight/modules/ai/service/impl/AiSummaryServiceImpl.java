@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.company.codeinsight.common.exception.BusinessException;
 import com.company.codeinsight.modules.ai.entity.AiCallRecord;
+import com.company.codeinsight.common.storage.TaskWorkspacePaths;
 import com.company.codeinsight.modules.ai.mapper.AiCallRecordMapper;
 import com.company.codeinsight.modules.callchain.entity.MethodCall;
 import com.company.codeinsight.modules.callchain.mapper.MethodCallMapper;
@@ -128,6 +129,9 @@ public class AiSummaryServiceImpl implements AiSummaryService {
 
     @Autowired
     private com.company.codeinsight.modules.callchain.service.MethodCallGraphService methodCallGraphService;
+
+    @Autowired
+    private TaskWorkspacePaths taskWorkspacePaths;
 
     // 是否启用 AI 本地 Mock 仿真
     @Value("${code-insight.ai.mock:false}")
@@ -373,8 +377,8 @@ public class AiSummaryServiceImpl implements AiSummaryService {
      * 匹配项目代码中的 module-map.yaml 配置文件规则
      */
     private String matchModuleMap(Long taskId, String filePath) {
-        Path path1 = Paths.get("temp_repos", "task_" + taskId, "module-map.yaml");
-        Path path2 = Paths.get("temp_repos", "task_" + taskId, "docs", "code-insight", "meta", "module-map.yaml");
+        Path path1 = taskWorkspacePaths.taskProjectPath(taskId).resolve("module-map.yaml");
+        Path path2 = taskWorkspacePaths.taskDocsCodeInsight(taskId).resolve("meta/module-map.yaml");
         Path finalPath = Files.exists(path1) ? path1 : (Files.exists(path2) ? path2 : null);
         if (finalPath == null) return null;
 
@@ -428,8 +432,8 @@ public class AiSummaryServiceImpl implements AiSummaryService {
      * 匹配 module_hierarchy.json 树级结构映射文件配置
      */
     private String matchModuleHierarchy(Long taskId, String filePath) {
-        Path path1 = Paths.get("temp_repos", "task_" + taskId, "module_hierarchy.json");
-        Path path2 = Paths.get("temp_repos", "task_" + taskId, "docs", "code-insight", "meta", "module_hierarchy.json");
+        Path path1 = taskWorkspacePaths.taskProjectPath(taskId).resolve("module_hierarchy.json");
+        Path path2 = taskWorkspacePaths.taskDocsCodeInsight(taskId).resolve("meta/module_hierarchy.json");
         Path finalPath = Files.exists(path1) ? path1 : (Files.exists(path2) ? path2 : null);
         if (finalPath == null) return null;
 
@@ -566,7 +570,7 @@ public class AiSummaryServiceImpl implements AiSummaryService {
      */
     private String matchControllerMapping(Long taskId, String filePath, CodeChunk chunk) {
         if (chunk == null || !"CLASS".equals(chunk.getChunkType())) return null;
-        Path path = Paths.get("temp_repos", "task_" + taskId, filePath);
+        Path path = taskWorkspacePaths.taskProjectPath(taskId).resolve(filePath);
         if (!Files.exists(path)) return null;
 
         try {
@@ -678,7 +682,7 @@ public class AiSummaryServiceImpl implements AiSummaryService {
         }
 
         // 4. projectDir 通过 taskId 反查（pipeline 启动时 pullAndScan 已写入该目录）
-        File projectDir = new File("temp_repos/task_" + taskId);
+        File projectDir = taskWorkspacePaths.taskProjectDir(taskId);
 
         // 5. 增量模式：算出「本次变更文件对应的 FQ 类名集合」，用于判定哪些模块需要重跑 AI
         java.util.Set<String> changedFqSet = null;
@@ -760,19 +764,9 @@ public class AiSummaryServiceImpl implements AiSummaryService {
             return;
         }
 
-        // 2. 渲染 prompt
-        //    优先 DB（按 task.documentPromptVersion 或 DOCUMENT_GENERATION 默认），找不到再回退到 classpath 资源
-        String promptTemplate = decompilePromptService.resolveTaskPromptContent(task,
+        // 2. 渲染 prompt（必须来自任务快照的提示词绑定）
+        String promptTemplate = decompilePromptService.requireTaskPromptContent(task,
                 com.company.codeinsight.modules.prompt.entity.DecompilePrompt.TYPE_DOCUMENT_GENERATION);
-        if (!StringUtils.hasText(promptTemplate)) {
-            try {
-                promptTemplate = promptTemplateLoader.load("module_doc_prompt.md");
-            } catch (Exception e) {
-                log.error("加载 module_doc_prompt.md 失败，回退到占位文档", e);
-                upsertModuleDraft(task, ws, moduleDto, buildPlaceholderDoc(moduleDto), "PENDING_REVIEW");
-                return;
-            }
-        }
 
         // 把整个 ModuleHierarchy DTO 序列化成 JSON 给 AI 作为 {module_hierarchy.json} 输入
         String moduleHierarchyJson = serializeHierarchyToJson(hierarchy);
@@ -1258,7 +1252,7 @@ public class AiSummaryServiceImpl implements AiSummaryService {
             boolean hasUrls = false;
             for (CodeChunk c : cList) {
                 if ("java".equalsIgnoreCase(getFileExtension(c.getFilePath()))) {
-                    Path classFile = Paths.get("temp_repos", "task_" + taskId, c.getFilePath());
+                    Path classFile = taskWorkspacePaths.taskProjectPath(taskId).resolve(c.getFilePath());
                     if (Files.exists(classFile)) {
                         try {
                             ParsedClassInfo info = javaParserService.parseFile(classFile.toFile());
@@ -1326,7 +1320,7 @@ public class AiSummaryServiceImpl implements AiSummaryService {
             boolean hasTables = false;
             for (CodeChunk c : cList) {
                 if ("java".equalsIgnoreCase(getFileExtension(c.getFilePath()))) {
-                    Path classFile = Paths.get("temp_repos", "task_" + taskId, c.getFilePath());
+                    Path classFile = taskWorkspacePaths.taskProjectPath(taskId).resolve(c.getFilePath());
                     if (Files.exists(classFile)) {
                         try {
                             ParsedClassInfo info = javaParserService.parseFile(classFile.toFile());
@@ -1614,7 +1608,7 @@ public class AiSummaryServiceImpl implements AiSummaryService {
     private String getChunkContent(CodeChunk chunk) {
         try {
             // 从快照读取文件内容
-            File taskDir = new File("temp_repos/task_" + chunk.getTaskId());
+            File taskDir = taskWorkspacePaths.taskProjectDir(chunk.getTaskId());
             File codeFile = new File(taskDir, chunk.getFilePath());
             if (codeFile.exists()) {
                 List<String> lines = Files.readAllLines(codeFile.toPath());

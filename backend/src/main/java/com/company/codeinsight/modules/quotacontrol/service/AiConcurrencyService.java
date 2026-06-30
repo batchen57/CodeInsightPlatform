@@ -1,64 +1,89 @@
 package com.company.codeinsight.modules.quotacontrol.service;
 
+import com.company.codeinsight.common.cluster.ClusterProperties;
+import com.company.codeinsight.common.cluster.RedisDistributedPermits;
 import com.company.codeinsight.common.exception.BusinessException;
+import com.company.codeinsight.modules.quotacontrol.service.SystemConfigService;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
+import java.util.UUID;
 import java.util.concurrent.Semaphore;
 
 /**
  * AI 调用并发控制器。
- * <p>
- * 容量由 {@code ai.concurrency} 配置（ci_system_config）控制，启动时初始化。
- * 任何一次 AI 同步调用前 {@link #tryAcquire()} 拿许可，结束后 {@link #release()} 释放。
- * 拿不到许可时抛 {@link BusinessException}。
- * </p>
+ * <p>集群模式使用 Redis 分布式计数；单机模式使用 JVM Semaphore。</p>
  */
 @Slf4j
 @Service
 public class AiConcurrencyService {
 
+    private static final String POOL_AI = "ai:global";
+
     @Autowired
     private SystemConfigService systemConfigService;
 
-    private volatile Semaphore semaphore;
+    @Autowired
+    private ClusterProperties clusterProperties;
+
+    @Autowired(required = false)
+    private RedisDistributedPermits redisPermits;
+
+    private volatile Semaphore localSemaphore;
+
+    /** 当前线程持有的 Redis holder，用于 release */
+    private final ThreadLocal<String> redisHolder = new ThreadLocal<>();
 
     @PostConstruct
     public void init() {
-        int n = systemConfigService.getInt("ai.concurrency", 4);
-        rebuild(n);
+        rebuild(systemConfigService.getInt("ai.concurrency", 4));
     }
 
-    /**
-     * 重建信号量（配置变更后调用）。
-     */
     public synchronized void rebuild(int permits) {
         int n = Math.max(1, permits);
-        this.semaphore = new Semaphore(n, true);
-        log.info("AI 并发信号量已重建: permits={}", n);
+        this.localSemaphore = new Semaphore(n, true);
+        log.info("AI 并发已重建: permits={}, cluster={}", n, clusterProperties.isEnabled());
     }
 
-    /**
-     * 非阻塞获取许可；拿不到立即抛错。
-     */
     public void tryAcquire() {
-        if (semaphore == null) {
+        if (clusterProperties.isEnabled() && redisPermits != null) {
+            int max = systemConfigService.getInt("ai.concurrency", 4);
+            String holder = "ai:" + UUID.randomUUID();
+            if (!redisPermits.tryAcquire(POOL_AI, holder, max)) {
+                throw new BusinessException("AI 调用并发已达上限，请稍后重试");
+            }
+            redisHolder.set(holder);
+            return;
+        }
+        if (localSemaphore == null) {
             rebuild(systemConfigService.getInt("ai.concurrency", 4));
         }
-        if (!semaphore.tryAcquire()) {
+        if (!localSemaphore.tryAcquire()) {
             throw new BusinessException("AI 调用并发已达上限，请稍后重试");
         }
     }
 
     public void release() {
-        if (semaphore != null) {
-            semaphore.release();
+        if (clusterProperties.isEnabled() && redisPermits != null) {
+            String holder = redisHolder.get();
+            if (holder != null) {
+                redisPermits.release(POOL_AI, holder);
+                redisHolder.remove();
+            }
+            return;
+        }
+        if (localSemaphore != null) {
+            localSemaphore.release();
         }
     }
 
     public int availablePermits() {
-        return semaphore == null ? 0 : semaphore.availablePermits();
+        if (clusterProperties.isEnabled() && redisPermits != null) {
+            int max = systemConfigService.getInt("ai.concurrency", 4);
+            return Math.max(0, max - (int) redisPermits.count(POOL_AI));
+        }
+        return localSemaphore == null ? 0 : localSemaphore.availablePermits();
     }
 }

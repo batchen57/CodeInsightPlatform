@@ -11,6 +11,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
 import com.company.codeinsight.common.exception.BusinessException;
+import com.company.codeinsight.common.storage.TaskWorkspacePaths;
 import com.company.codeinsight.modules.knowledge.entity.KnowledgeVersion;
 import com.company.codeinsight.modules.knowledge.mapper.KnowledgeVersionMapper;
 import com.company.codeinsight.modules.push.entity.PushTask;
@@ -41,6 +42,9 @@ public class GitPushStrategy implements PushStrategy {
     @Autowired
     private KnowledgeVersionMapper versionMapper;
 
+    @Autowired
+    private TaskWorkspacePaths taskWorkspacePaths;
+
     @Value("${code-insight.push.git.commit-prefix:docs: add code-insight knowledge}")
     private String commitPrefix;
 
@@ -66,7 +70,7 @@ public class GitPushStrategy implements PushStrategy {
         log.info("开始 Git 推送: version={}, pushUrl={}, pushBranch={}, targetFolder={}",
                 version.getVersionNum(), pushUrl, pushBranch, targetFolder);
 
-        File taskRepoDir = new File("temp_repos/task_" + decompileTask.getId());
+        File taskRepoDir = taskWorkspacePaths.taskProjectDir(decompileTask.getId());
         if (!taskRepoDir.exists() || !new File(taskRepoDir, ".git").exists()) {
             throw new BusinessException(
                     "本地 Git 仓库不存在: " + taskRepoDir.getAbsolutePath() + "，请确保代码已拉取");

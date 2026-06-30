@@ -75,6 +75,7 @@ public class TaskLogSummaryServiceImpl implements TaskLogSummaryService {
         STAGE_LABEL.put("PULLING_CODE", "拉取代码");
         STAGE_LABEL.put("PARSING_CODE", "静态解析");
         STAGE_LABEL.put("SPLITTING_TASK", "代码切片");
+        STAGE_LABEL.put("ENTRYPOINT_REVIEW", "入口复核");
         STAGE_LABEL.put("AI_ANALYZING", "AI 分析");
         STAGE_LABEL.put("MODULE_HIERARCHY", "模块层级提炼");
         STAGE_LABEL.put("MODULE_HIERARCHY_REVIEW", "模块层级复核");

@@ -28,10 +28,5 @@ export const getKnowledgeBrowseContent = (params: {
   taskId?: number;
   filePath?: string;
 }): Promise<string> => {
-  return request.get('/knowledge/browse/content', {
-    params,
-    responseType: 'text',
-    // 不让 axios 把字符串当作 JSON 解析
-    transformResponse: [(data) => data],
-  });
+  return request.get('/knowledge/browse/content', { params });
 };

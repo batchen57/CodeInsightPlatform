@@ -121,7 +121,7 @@ const PromptsPage: React.FC = () => {
     errorReason?: string;
   } | null>(null);
 
-  /** 拉取指定 promptType + lifecycle 的提示词 */
+  /** 拉取指定 promptType + lifecycle 的提示词（仅 DEFAULT 类别） */
   const fetchPrompts = useCallback(async () => {
     setLoading(true);
     try {
@@ -131,6 +131,7 @@ const PromptsPage: React.FC = () => {
         name: searchName || undefined,
         promptType,
         lifecycle,
+        category: 'DEFAULT',
       });
       setPrompts(data.records);
       setTotal(data.total);

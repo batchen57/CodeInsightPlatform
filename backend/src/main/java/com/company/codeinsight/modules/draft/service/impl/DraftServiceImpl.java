@@ -2,12 +2,14 @@ package com.company.codeinsight.modules.draft.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.company.codeinsight.common.exception.BusinessException;
+import com.company.codeinsight.common.cluster.ClusterProperties;
 import com.company.codeinsight.common.util.DraftFileUtil;
 import com.company.codeinsight.modules.draft.dto.PreviewSystemDto;
 import com.company.codeinsight.modules.draft.dto.RepositoryReadinessDto;
 import com.company.codeinsight.modules.draft.entity.*;
 import com.company.codeinsight.modules.draft.enums.DraftStatus;
 import com.company.codeinsight.modules.draft.mapper.*;
+import com.company.codeinsight.modules.draft.service.DraftEditLockService;
 import com.company.codeinsight.modules.draft.service.DraftService;
 import com.company.codeinsight.modules.system.entity.SystemApplication;
 import com.company.codeinsight.modules.system.mapper.SystemApplicationMapper;
@@ -37,13 +39,12 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 /**
  * 知识草稿及评审工作区服务实现类
- * 负责平台草稿库的修改保存、自动缓存（基于 Redis + 本地 JVM 内存兜底）、修订版本行级差异计算和确认归档。
+ * 负责平台草稿库的修改保存、自动缓存（基于 Redis）、修订版本行级差异计算和确认归档。
  * 自 v0.3 起移除驳回相关流程；复核反馈通过直接编辑修改草稿实现。
  */
 @Slf4j
@@ -77,7 +78,15 @@ public class DraftServiceImpl implements DraftService {
     @Autowired
     private SystemApplicationMapper systemMapper;
 
-    // 自动装配 Redis，若容器中未装配，则自动降级到本地内存缓存
+    @Autowired
+    private com.company.codeinsight.modules.prompt.service.DecompilePromptService decompilePromptService;
+
+    @Autowired
+    private ClusterProperties clusterProperties;
+
+    @Autowired
+    private DraftEditLockService draftEditLockService;
+
     @Autowired(required = false)
     private StringRedisTemplate redisTemplate;
 
@@ -87,9 +96,6 @@ public class DraftServiceImpl implements DraftService {
      */
     @Value("${code-insight.storage.local-path:./storage}")
     private String storageLocalPath;
-
-    // 单元测试与无 Redis 环境下的 Fallback 内存缓存容器
-    private static final ConcurrentHashMap<Long, String> memoryAutoSave = new ConcurrentHashMap<>();
 
     /**
      * 查询指定评审工作区下的所有草稿
@@ -178,25 +184,20 @@ public class DraftServiceImpl implements DraftService {
 
         // 1. 尝试从 Redis 自动保存区拿
         String autoSavedContent = null;
-        try {
-            if (redisTemplate != null) {
+        if (redisTemplate != null) {
+            try {
                 autoSavedContent = redisTemplate.opsForValue().get("draft:autosave:" + draftId);
+            } catch (Exception e) {
+                log.warn("从 Redis 读取自动保存失败", e);
             }
-        } catch (Exception e) {
-            log.warn("从 Redis 读取自动保存失败，退回内存读取", e);
-        }
-        
-        // 2. 如果 Redis 没有或读取失败，退回到并发内存缓存中查找
-        if (autoSavedContent == null) {
-            autoSavedContent = memoryAutoSave.get(draftId);
         }
 
-        // 3. 如果找到了有效的自动保存缓存，直接返回该临时内容
+        // 2. 如果找到了有效的自动保存缓存，直接返回该临时内容
         if (StringUtils.hasText(autoSavedContent)) {
             return autoSavedContent;
         }
 
-        // 4. 若无自动保存痕迹，从原始 URI 地址读取磁盘上的正式草稿文件
+        // 3. 若无自动保存痕迹，从原始 URI 地址读取磁盘上的正式草稿文件
         try {
             Path path = DraftFileUtil.resolveDraftPath(draft.getContentUri(), storageLocalPath);
             File file = path.toFile();
@@ -229,6 +230,7 @@ public class DraftServiceImpl implements DraftService {
         // 推送锁定：任务进入 PUSHING / PUSHED 后草稿只读，service 层兜底拦截
         // 防止前端绕 UI 直接调接口绕过锁定。前端也对应 disabled + tooltip 提示。
         assertNotPushed(draft);
+        renewEditLockIfCluster(draftId, author);
 
         try {
             // 读取原有的物理正文以对比差异
@@ -249,12 +251,15 @@ public class DraftServiceImpl implements DraftService {
             Files.writeString(draftPath, content);
 
             // 成功保存后，立即清理所有自动保存的临时缓存
-            try {
-                if (redisTemplate != null) {
+            if (redisTemplate != null) {
+                try {
                     redisTemplate.delete("draft:autosave:" + draftId);
+                } catch (Exception ignored) {
                 }
-            } catch (Exception ignored) {}
-            memoryAutoSave.remove(draftId);
+            }
+            if (clusterProperties.isEnabled()) {
+                draftEditLockService.release(draftId, author);
+            }
 
             // 计算 MD5 哈希校验和，状态流转为 EDITING (复核人已编辑)
             String hash = DigestUtils.md5DigestAsHex(content.getBytes());
@@ -310,15 +315,23 @@ public class DraftServiceImpl implements DraftService {
      */
     @Override
     public void autoSaveDraft(Long draftId, String content, String author) {
-        try {
-            if (redisTemplate != null) {
-                // 以过期时间 7 天暂存至 Redis
-                redisTemplate.opsForValue().set("draft:autosave:" + draftId, content, 7, TimeUnit.DAYS);
-            }
-        } catch (Exception e) {
-            log.warn("保存到 Redis 自动保存区失败，降级到内存缓存", e);
+        requireRedisForDraftCache();
+        renewEditLockIfCluster(draftId, author);
+        redisTemplate.opsForValue().set("draft:autosave:" + draftId, content, 7, TimeUnit.DAYS);
+    }
+
+    private void requireRedisForDraftCache() {
+        if (redisTemplate == null) {
+            throw new BusinessException(clusterProperties.isEnabled()
+                    ? "集群模式需要 Redis 支持草稿自动保存"
+                    : "草稿自动保存需要 Redis，请检查 Redis 连接");
         }
-        memoryAutoSave.put(draftId, content);
+    }
+
+    private void renewEditLockIfCluster(Long draftId, String author) {
+        if (clusterProperties.isEnabled()) {
+            draftEditLockService.renew(draftId, author);
+        }
     }
 
     /**
@@ -751,8 +764,11 @@ public class DraftServiceImpl implements DraftService {
         List<DraftWorkspace> workspaces = workspaceMapper.selectList(wsQw);
         if (workspaces.isEmpty()) {
             RepositoryReadinessDto dto = new RepositoryReadinessDto();
-            dto.setReady(true);
             dto.setUnconfirmedCount(0);
+            applyPromptReadiness(dto, systemId);
+            if (dto.isPromptsConfigured()) {
+                dto.setReady(true);
+            }
             return dto;
         }
         List<Long> workspaceIds = workspaces.stream()
@@ -770,6 +786,7 @@ public class DraftServiceImpl implements DraftService {
         RepositoryReadinessDto dto = new RepositoryReadinessDto();
         dto.setUnconfirmedCount(blocking.size());
         dto.setReady(blocking.isEmpty());
+        applyPromptReadiness(dto, systemId);
         if (blocking.isEmpty()) {
             return dto;
         }
@@ -796,5 +813,18 @@ public class DraftServiceImpl implements DraftService {
         }
         dto.setBlockingDrafts(items);
         return dto;
+    }
+
+    private void applyPromptReadiness(RepositoryReadinessDto dto, Long systemId) {
+        if (systemId == null) {
+            dto.setPromptsConfigured(true);
+            return;
+        }
+        boolean configured = decompilePromptService.isSystemPromptsConfigured(systemId);
+        dto.setPromptsConfigured(configured);
+        if (!configured) {
+            dto.setReady(false);
+            dto.setPromptsMessage(decompilePromptService.getSystemPromptsConfigurationMessage(systemId));
+        }
     }
 }

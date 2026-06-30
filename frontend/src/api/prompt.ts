@@ -27,6 +27,11 @@ export const listPrompts = (params: {
   promptType?: 'MODULARIZE' | 'DOCUMENT_GENERATION' | string;
   /** 生命周期过滤：DRAFT / RELEASED / ARCHIVED */
   lifecycle?: 'DRAFT' | 'RELEASED' | 'ARCHIVED' | string;
+  /** 提示词分类：DEFAULT-全局默认 / USER-用户自定义 */
+  category?: 'DEFAULT' | 'USER' | string;
+  /** USER 提示词 scope 限定(只在查 USER 类别时) */
+  scopeId?: number | null;
+  isDefault?: number;
 }): Promise<PageResult<Prompt>> => {
   return request.get('/prompts', { params });
 };

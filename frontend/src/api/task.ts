@@ -88,6 +88,10 @@ export interface BlockingDraft {
 
 export interface RepositoryReadiness {
   ready: boolean;
+  /** 系统是否已绑定模块提取 + 文档生成提示词 */
+  promptsConfigured?: boolean;
+  /** 提示词未配置时的说明 */
+  promptsMessage?: string;
   unconfirmedCount: number;
   blockingDrafts: BlockingDraft[];
 }

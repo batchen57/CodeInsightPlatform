@@ -50,7 +50,7 @@ interface NavItem {
  *   任务概览 / AI 模型用量 / 流水线分析 / 系统覆盖报表 / Token 审计 / 操作日志
  *
  * - 知识生成大类 {@link knowledgeNav}：端到端知识生产流水线
- *   系统与仓库 → 知识构建任务 → 模块层级 / 知识入口复核 → 知识查看 / 复核 → 知识推送
+ *   系统与仓库 → 知识构建任务 → 入口复核 / 模块层级复核 → 知识查看 / 复核 → 知识推送
  *
  * - 基础配置大类 {@link basicNav}：后台管理类页面（模型、提示词、权限、流量）
  *
@@ -147,18 +147,18 @@ const knowledgeNav: NavItem[] = [
     description: '手动选择系统与仓库，配置入口扫描与提示词后下发知识构建任务。',
   },
   {
+    key: '/tasks/entrypoint-review',
+    icon: <ApartmentOutlined />,
+    label: <TabLink to="/tasks/entrypoint-review">入口复核</TabLink>,
+    title: '入口复核',
+    description: '集中处理处于入口复核断点的任务，确认入口类清单后由 AI 继续提炼模块层级。',
+  },
+  {
     key: '/tasks/hierarchy-review',
     icon: <SwapOutlined />,
     label: <TabLink to="/tasks/hierarchy-review">模块层级复核</TabLink>,
     title: '模块层级复核',
     description: '集中处理处于模块层级调试断点的任务，对 AI 提炼的模块 / 子模块 / 功能树进行增删改。',
-  },
-  {
-    key: '/tasks/entrypoint-review',
-    icon: <ApartmentOutlined />,
-    label: <TabLink to="/tasks/entrypoint-review">知识入口复核</TabLink>,
-    title: '知识入口复核',
-    description: '集中处理处于知识入口调试断点的任务，确认入口类清单后由 AI 继续提炼模块层级。',
   },
   {
     key: '/drafts',

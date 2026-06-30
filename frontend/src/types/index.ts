@@ -50,11 +50,15 @@ export interface Prompt {
   name: string;
   content: string;
   version: number;
-  isDefault: number; // 0-否, 1-是
+  isDefault: number; // 0-否, 1-是（仅 category=DEFAULT 时生效）
   /** 提示词用途：MODULARIZE-模块提取 / DOCUMENT_GENERATION-文档生成 */
   promptType?: 'MODULARIZE' | 'DOCUMENT_GENERATION' | string;
   /** 生命周期：DRAFT-草稿(可编辑) / RELEASED-已发布(锁定) / ARCHIVED-已归档 */
   lifecycle?: 'DRAFT' | 'RELEASED' | 'ARCHIVED' | string;
+  /** 分类：DEFAULT-全局默认提示词 / USER-用户自定义（按 scopeId 隔离） */
+  category?: 'DEFAULT' | 'USER' | string;
+  /** USER 提示词的 scope ID（系统ID）；DEFAULT 为 null */
+  scopeId?: number | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -73,7 +77,6 @@ export interface Task {
   status: string;
   type: 'INITIAL' | 'INCREMENTAL';
   progress: number;
-  logUri?: string;
   errorReason?: string;
   durationMs: number;
   startedAt?: string;

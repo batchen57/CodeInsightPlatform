@@ -35,6 +35,8 @@ interface Props {
   promptType: 'MODULARIZE' | 'DOCUMENT_GENERATION';
   /** 类型中文标签,例如「模块提取 / 文档生成」 */
   promptTypeLabel: string;
+  /** USER 提示词 scope_id（系统ID）；创建时作为 scopeId 传入 — null=全局 DEFAULT */
+  scopeId?: number | null;
   /** 关闭 */
   onClose: () => void;
   /** 创建成功后回调,返回新 prompt 的完整对象 */
@@ -69,6 +71,7 @@ const SystemPromptEditorModal: React.FC<Props> = ({
   sourcePrompt,
   defaultPrompt,
   systemName,
+  scopeId,
   promptType,
   promptTypeLabel,
   onClose,
@@ -133,6 +136,8 @@ const SystemPromptEditorModal: React.FC<Props> = ({
         promptType,
         lifecycle: 'DRAFT',
         isDefault: 0,
+        category: scopeId != null ? 'USER' : 'DEFAULT',
+        scopeId: scopeId ?? null,
       });
       message.success(`已创建${promptTypeLabel}提示词草稿`);
       onCreated(created);

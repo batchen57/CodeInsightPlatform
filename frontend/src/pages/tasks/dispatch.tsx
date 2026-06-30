@@ -53,7 +53,7 @@ const DEFAULT_EXCLUDE_CLASSPATHS = ['**/*Test', '**/*Tests', '**/*TestCase'];
  * 「手动下发」全屏页签
  *
  *  - 步骤 0：选择系统 + 代码库
- *  - 步骤 1：选择任务类型、AI 模型、扫描规则、是否启用模块层级调试
+ *  - 步骤 1：选择任务类型、AI 模型、扫描规则、是否启用入口复核 / 模块层级复核
  *          （提示词由系统级绑定 + 默认提示词提供，任务不再单独选择）
  *  - 步骤 2：确认 + 提交
  *
@@ -98,27 +98,24 @@ const TaskDispatchPage: React.FC = () => {
         const repo = await getRepository(repositoryId);
         form.setFieldsValue({ entryScanConfig: parseRepoEntryScanConfig(repo) });
       } catch {
-        const repo = repositories.find((r) => r.id === repositoryId);
-        form.setFieldsValue({ entryScanConfig: parseRepoEntryScanConfig(repo) });
+        form.setFieldsValue({ entryScanConfig: buildScanConfigWithDefaults(undefined) });
       }
     },
-    [form, repositories],
+    [form],
   );
 
   // 选中的系统对象（用于只读展示绑定的提示词）
   const selectedSystem: System | undefined = systems.find((s) => s.id === selectedSystemId);
 
-  /** 把 system.modularizePromptId / documentPromptId 转成名称展示；未绑定的回退默认提示词 */
+  /** 把 system.modularizePromptId / documentPromptId 转成名称展示 */
   const resolveBoundName = (
     boundId: number | null | undefined,
-    fallbackId: number | null | undefined,
     map: Record<number, Prompt>,
-  ): { name: string; isDefault: boolean; prompt?: Prompt } => {
-    const id = boundId ?? fallbackId;
-    if (id == null) return { name: '未绑定（运行时回退默认提示词）', isDefault: true };
-    const p = map[id];
-    if (p) return { name: `${p.name} (v${p.version})`, isDefault: false, prompt: p };
-    return { name: `#${id}（详情待加载）`, isDefault: false };
+  ): { name: string; isBound: boolean; prompt?: Prompt } => {
+    if (boundId == null) return { name: '未绑定', isBound: false };
+    const p = map[boundId];
+    if (p) return { name: `${p.name} (v${p.version})`, isBound: true, prompt: p };
+    return { name: `#${boundId}（详情待加载）`, isBound: true };
   };
 
   // 拉系统/模型列表
@@ -138,27 +135,31 @@ const TaskDispatchPage: React.FC = () => {
     }
   }, []);
 
-  // 选系统变化时，按需懒加载系统绑定的提示词 + 默认提示词
+  // 选系统变化时，按需懒加载系统绑定的提示词
   useEffect(() => {
-    if (!selectedSystem) return;
-    const needModularize = selectedSystem.modularizePromptId;
-    const needDocument = selectedSystem.documentPromptId;
+    if (!selectedSystemId) return;
+    const system = systems.find((s) => s.id === selectedSystemId);
+    if (!system) return;
+    const needModularize = system.modularizePromptId;
+    const needDocument = system.documentPromptId;
     const fetchOne = async (type: 'MODULARIZE' | 'DOCUMENT_GENERATION', id?: number | null) => {
       if (id == null) return null;
       const all = await listPrompts({ current: 1, size: 200, lifecycle: 'RELEASED', promptType: type });
       return all.records.find((p) => p.id === id) || null;
     };
-    if (needModularize && !modularizeById[needModularize]) {
+    if (needModularize != null) {
       fetchOne('MODULARIZE', needModularize).then((p) => {
-        if (p) setModularizeById((m) => ({ ...m, [p.id]: p }));
+        if (!p) return;
+        setModularizeById((m) => (m[p.id] ? m : { ...m, [p.id]: p }));
       });
     }
-    if (needDocument && !documentById[needDocument]) {
+    if (needDocument != null) {
       fetchOne('DOCUMENT_GENERATION', needDocument).then((p) => {
-        if (p) setDocumentById((m) => ({ ...m, [p.id]: p }));
+        if (!p) return;
+        setDocumentById((m) => (m[p.id] ? m : { ...m, [p.id]: p }));
       });
     }
-  }, [selectedSystem, modularizeById, documentById]);
+  }, [selectedSystemId, systems]);
 
   const refreshReadiness = useCallback(async (systemId?: number, repositoryId?: number) => {
     setReadinessLoading(true);
@@ -206,6 +207,17 @@ const TaskDispatchPage: React.FC = () => {
     loadOptions();
   }, [loadOptions]);
 
+  // 模型列表加载后，若未选模型则默认选中 isDefault 项
+  useEffect(() => {
+    if (models.length === 0) return;
+    const current = form.getFieldValue('modelName') as string | undefined;
+    if (current) return;
+    const defaultModel = models.find((m) => m.isDefault === 'true')?.identifier;
+    if (defaultModel) {
+      form.setFieldValue('modelName', defaultModel);
+    }
+  }, [form, models]);
+
   // 系统变化 → 拉取仓库
   useEffect(() => {
     if (!selectedSystemId) {
@@ -246,23 +258,32 @@ const TaskDispatchPage: React.FC = () => {
 
     setSubmitting(true);
     try {
-      const values = form.getFieldsValue();
+      // 用 getFieldValue 逐个取字段值（避免 display:none 时 getFieldsValue 漏字段）
+      const systemId = form.getFieldValue('systemId') as number;
+      const repositoryId = form.getFieldValue('repositoryId') as number;
+      const modelName = form.getFieldValue('modelName') as string | undefined;
+      const taskType = form.getFieldValue('taskType') as string | undefined;
+      const entryScanConfig = form.getFieldValue('entryScanConfig') as EntryScanConfig | undefined;
+      const requireEntrypointReview = form.getFieldValue('requireEntrypointReview') as boolean | undefined;
+      const requireHierarchyReview = form.getFieldValue('requireHierarchyReview') as boolean | undefined;
+
       const payload = {
-        systemId: values.systemId,
-        repositoryId: values.repositoryId,
-        modelName: values.modelName,
-        entryScanConfig: values.entryScanConfig,
-        requireHierarchyReview: values.requireHierarchyReview !== false,
+        systemId,
+        repositoryId,
+        modelName,
+        entryScanConfig,
+        requireEntrypointReview: requireEntrypointReview !== false,
+        requireHierarchyReview: requireHierarchyReview !== false,
       };
-      if (values.taskType === 'INITIAL') {
+      if ((taskType || 'INITIAL') === 'INITIAL') {
         await createInitialTask(payload);
       } else {
         await createIncrementalTask(payload);
       }
+      const entryReviewOn = requireEntrypointReview !== false;
+      const hierarchyReviewOn = requireHierarchyReview !== false;
       message.success(
-        values.requireHierarchyReview === false
-          ? '任务已创建（跳过模块层级调试）'
-          : '任务已创建（启用模块层级调试）',
+        `任务已创建（入口复核：${entryReviewOn ? '启用' : '跳过'}；模块层级复核：${hierarchyReviewOn ? '启用' : '跳过'}）`,
       );
       navigate('/tasks/query');
     } finally {
@@ -271,11 +292,13 @@ const TaskDispatchPage: React.FC = () => {
   };
 
   const handleSyncRepoScanConfig = async () => {
-    if (!selectedRepositoryId) {
+    const repositoryId =
+      selectedRepositoryId ?? (form.getFieldValue('repositoryId') as number | undefined);
+    if (!repositoryId) {
       message.warning('请先选择仓库');
       return;
     }
-    await applyRepositoryScanConfig(selectedRepositoryId);
+    await applyRepositoryScanConfig(repositoryId);
     message.success('已恢复为仓库默认配置');
   };
 
@@ -287,14 +310,16 @@ const TaskDispatchPage: React.FC = () => {
   const summaryScan = form.getFieldValue('entryScanConfig') as
     | (EntryScanConfig & Record<string, unknown>)
     | undefined;
-  const summaryRequire = form.getFieldValue('requireHierarchyReview');
+  const summaryRequireEntry = form.getFieldValue('requireEntrypointReview');
+  const summaryRequireHierarchy = form.getFieldValue('requireHierarchyReview');
 
   const modularizeDisplay = selectedSystem
-    ? resolveBoundName(selectedSystem.modularizePromptId, undefined, modularizeById)
-    : { name: '请先选择系统', isDefault: true };
+    ? resolveBoundName(selectedSystem.modularizePromptId, modularizeById)
+    : { name: '请先选择系统', isBound: false };
   const documentDisplay = selectedSystem
-    ? resolveBoundName(selectedSystem.documentPromptId, undefined, documentById)
-    : { name: '请先选择系统', isDefault: true };
+    ? resolveBoundName(selectedSystem.documentPromptId, documentById)
+    : { name: '请先选择系统', isBound: false };
+  const promptsBlocking = !modularizeDisplay.isBound || !documentDisplay.isBound;
 
   const systemStateWarn =
     selectedSystem && selectedSystem.state && selectedSystem.state !== 'ACTIVE'
@@ -331,12 +356,11 @@ const TaskDispatchPage: React.FC = () => {
           initialValues={{
             taskType: 'INITIAL',
             entryScanConfig: { excludeClasspaths: DEFAULT_EXCLUDE_CLASSPATHS },
-            requireHierarchyReview: true,
-            modelName: models.find((m) => m.isDefault === 'true')?.identifier,
+            requireEntrypointReview: false,
+            requireHierarchyReview: false,
           }}
         >
-          {currentStep === 0 && (
-            <Row gutter={[16, 16]}>
+          <Row gutter={[16, 16]} style={{ display: currentStep === 0 ? undefined : 'none' }}>
               <Col xs={24} md={12}>
                 <Form.Item
                   name="systemId"
@@ -372,8 +396,7 @@ const TaskDispatchPage: React.FC = () => {
                   />
                 </Form.Item>
               </Col>
-            </Row>
-          )}
+          </Row>
 
           {currentStep === 1 && (
             <>
@@ -389,28 +412,40 @@ const TaskDispatchPage: React.FC = () => {
 
               {/* 系统绑定的提示词：只读展示 */}
               <Card size="small" style={{ marginBottom: 16, background: '#fafafa' }}>
-                <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                <Space direction="vertical" size={8} style={{ width: '100%' }}>
                   <Text type="secondary" style={{ fontSize: 12 }}>
-                    系统已绑定提示词（任务创建后按 任务显式 → 系统绑定 → 默认提示词 顺序解析）
+                    任务仅使用当前系统在「系统与仓库」中绑定的提示词，未绑定将无法创建或启动任务。
                   </Text>
+                  {promptsBlocking && (
+                    <Alert
+                      type="error"
+                      showIcon
+                      message="当前系统尚未完整绑定提示词"
+                      description="请前往「系统与仓库」，在对应系统行点击「提示词」完成模块提取与文档生成的绑定后再下发任务。"
+                    />
+                  )}
                   <Space wrap>
                     <Tooltip title="AI_ANALYZING / MODULE_HIERARCHY 阶段使用">
-                      <Tag color="geekblue" icon={modularizeDisplay.isDefault ? undefined : '✓'}>
+                      <Tag color={modularizeDisplay.isBound ? 'geekblue' : 'default'} icon={modularizeDisplay.isBound ? '✓' : undefined}>
                         模块提取：{modularizeDisplay.name}
                       </Tag>
                     </Tooltip>
                     <Tooltip title="GENERATING_DOC 阶段使用">
-                      <Tag color="geekblue" icon={documentDisplay.isDefault ? undefined : '✓'}>
+                      <Tag color={documentDisplay.isBound ? 'geekblue' : 'default'} icon={documentDisplay.isBound ? '✓' : undefined}>
                         文档生成：{documentDisplay.name}
                       </Tag>
                     </Tooltip>
-                    <Button
-                      type="link"
-                      size="small"
-                      onClick={() => navigate(`/basic/prompts/defaults`)}
-                    >
-                      前往「基础配置 → 默认提示词维护」
-                    </Button>
+                    {selectedSystemId ? (
+                      <Button
+                        type="link"
+                        size="small"
+                        onClick={() =>
+                          navigate(`/systems?systemId=${selectedSystemId}&action=prompts`)
+                        }
+                      >
+                        前往「系统与仓库」绑定提示词
+                      </Button>
+                    ) : null}
                   </Space>
                 </Space>
               </Card>
@@ -420,7 +455,6 @@ const TaskDispatchPage: React.FC = () => {
                   <Form.Item
                     name="taskType"
                     label="任务类型"
-                    initialValue="INITIAL"
                     rules={[{ required: true }]}
                   >
                     <Select
@@ -435,7 +469,6 @@ const TaskDispatchPage: React.FC = () => {
                   <Form.Item
                     name="modelName"
                     label="AI模型"
-                    initialValue={models.find((m) => m.isDefault === 'true')?.identifier}
                     rules={[{ required: true, message: '请选择AI模型' }]}
                   >
                     <Select
@@ -521,11 +554,28 @@ const TaskDispatchPage: React.FC = () => {
                 </Row>
               </div>
 
+              <Alert
+                type="info"
+                showIcon
+                style={{ marginTop: 12 }}
+                message="人工复核断点"
+                description="启用入口复核或模块层级复核后，流水线会在对应阶段暂停，需前往复核页面手动确认后才能继续。默认关闭，任务将自动跑完全流程。"
+              />
+
+              <Form.Item
+                name="requireEntrypointReview"
+                label="入口复核"
+                tooltip="启用后，代码切片完成会停在「入口复核」断点，需在「入口复核」页面确认入口类清单后才继续 AI 分析。"
+                valuePropName="checked"
+                style={{ marginTop: 12, marginBottom: 0 }}
+              >
+                <Switch checkedChildren="启用" unCheckedChildren="跳过" />
+              </Form.Item>
+
               <Form.Item
                 name="requireHierarchyReview"
-                label="模块层级调试"
-                tooltip="AI 提炼模块层级完成后是否暂停等待人工调试。开启后任务停在「模块层级调试」状态，需在任务列表中点击「开始调试」确认后才继续生成文档。"
-                initialValue={true}
+                label="模块层级复核"
+                tooltip="启用后，AI 提炼模块层级完成会停在「模块层级复核」断点，需在复核页面确认后才继续生成文档。"
                 valuePropName="checked"
                 style={{ marginTop: 12, marginBottom: 0 }}
               >
@@ -573,11 +623,19 @@ const TaskDispatchPage: React.FC = () => {
                 </b>
               </p>
               <p>
-                模块层级调试：
+                入口复核：
                 <b>
-                  {summaryRequire === false
-                    ? '跳过（AI 提炼后直接生成文档）'
-                    : '启用（AI 提炼后停在「模块层级调试」等待人工确认）'}
+                  {summaryRequireEntry === true
+                    ? '启用（切片后暂停，需人工复核后继续）'
+                    : '跳过（切片后直接进入 AI 分析）'}
+                </b>
+              </p>
+              <p>
+                模块层级复核：
+                <b>
+                  {summaryRequireHierarchy === true
+                    ? '启用（AI 提炼后暂停，需人工复核后继续）'
+                    : '跳过（AI 提炼后直接生成文档）'}
                 </b>
               </p>
               <Text type="secondary">任务将以草稿状态创建，可在「任务查询」列表中手动启动。</Text>
@@ -625,89 +683,122 @@ const TaskDispatchPage: React.FC = () => {
         >
           <Card
             style={{ width: 720, height: 'calc(100vh - 24px)', margin: '24px auto 0' }}
-            styles={{
-              
-            }}
             title={
               <Space>
                 <CloseCircleOutlined style={{ color: '#c4485d' }} />
-                <span>无法新建任务：尚有未确认的草稿</span>
+                <span>
+                  {readiness?.promptsConfigured === false
+                    ? '无法新建任务：系统未绑定提示词'
+                    : '无法新建任务：尚有未确认的草稿'}
+                </span>
               </Space>
             }
             extra={
               <Space>
                 <Button onClick={() => setReadinessModalOpen(false)}>关闭</Button>
-                <Button
-                  type="primary"
-                  onClick={() => {
-                    setReadinessModalOpen(false);
-                    navigate('/drafts');
-                  }}
-                >
-                  前往复核工作区
-                </Button>
+                {readiness?.promptsConfigured === false && (
+                  <Button
+                    type="primary"
+                    onClick={() => {
+                      setReadinessModalOpen(false);
+                      const sid = form.getFieldValue('systemId') as number | undefined;
+                      if (sid) {
+                        navigate(`/systems?systemId=${sid}&action=prompts`);
+                      } else {
+                        navigate('/systems');
+                      }
+                    }}
+                  >
+                    前往绑定提示词
+                  </Button>
+                )}
+                {(readiness?.unconfirmedCount ?? 0) > 0 && (
+                  <Button
+                    type={readiness?.promptsConfigured === false ? 'default' : 'primary'}
+                    onClick={() => {
+                      setReadinessModalOpen(false);
+                      navigate('/drafts');
+                    }}
+                  >
+                    前往复核工作区
+                  </Button>
+                )}
               </Space>
             }
             onClick={(e) => e.stopPropagation()}
           >
-            {/* 顶部红色 Alert：明确告诉用户当前是"待复核/待确认"状态 */}
-            <Alert
-              type="error"
-              showIcon
-              message={
-                <Space size={6}>
-                  <Text strong>检测到 {readiness?.unconfirmedCount ?? 0} 个待处理草稿</Text>
-                  <Text type="secondary" style={{ fontSize: 12 }}>
-                    (DRAFT / EDITING / REJECTED)
-                  </Text>
-                </Space>
-              }
-              description={
-                <Text>
-                  根据「历史任务所有文件已确认」的产品规则，全局仍有 {readiness?.unconfirmedCount ?? 0}
-                  个草稿处于 待复核 / 待确认 状态。请先前往复核工作区完成确认或驳回处置，然后再回到这里新建任务。
-                </Text>
-              }
-              style={{ marginBottom: 12 }}
-            />
-            <Table
-              size="small"
-              pagination={false}
-              rowKey="draftId"
-              dataSource={readiness?.blockingDrafts ?? []}
-              columns={[
-                { title: '模块', dataIndex: 'moduleName', key: 'moduleName', ellipsis: true },
-                {
-                  title: '状态',
-                  dataIndex: 'status',
-                  key: 'status',
-                  width: 110,
-                  render: (s: string) => {
-                    const meta: Record<string, { color: string; label: string }> = {
-                      DRAFT: { color: 'magenta', label: '待处理' },
-                      EDITING: { color: 'geekblue', label: '已编辑' },
-                      REJECTED: { color: 'red', label: '已驳回' },
-                    };
-                    const m = meta[s] ?? { color: 'default', label: s };
-                    return <Tag color={m.color}>{m.label}</Tag>;
-                  },
-                },
-                {
-                  title: '所属任务',
-                  dataIndex: 'taskId',
-                  key: 'taskId',
-                  width: 100,
-                  render: (taskId?: number) => (taskId ? <Text code>#{taskId}</Text> : '-'),
-                },
-                {
-                  title: '更新时间',
-                  dataIndex: 'updatedAt',
-                  key: 'updatedAt',
-                  width: 170,
-                  render: (t: string) => (t ? new Date(t).toLocaleString() : '-'),
-                },
-              ]}
-            />
+            {readiness?.promptsConfigured === false && (
+              <Alert
+                type="error"
+                showIcon
+                message="系统提示词未配置"
+                description={
+                  readiness.promptsMessage ??
+                  '请前往「系统与仓库」，在对应系统行点击「提示词」完成模块提取与文档生成的绑定。'
+                }
+                style={{ marginBottom: 12 }}
+              />
+            )}
+            {(readiness?.unconfirmedCount ?? 0) > 0 && (
+              <>
+                <Alert
+                  type="error"
+                  showIcon
+                  message={
+                    <Space size={6}>
+                      <Text strong>检测到 {readiness?.unconfirmedCount ?? 0} 个待处理草稿</Text>
+                      <Text type="secondary" style={{ fontSize: 12 }}>
+                        (DRAFT / EDITING)
+                      </Text>
+                    </Space>
+                  }
+                  description={
+                    <Text>
+                      当前系统和代码库下仍有未确认草稿。请先前往复核工作区完成确认，然后再回到这里新建任务。
+                    </Text>
+                  }
+                  style={{ marginBottom: 12 }}
+                />
+                <Table
+                  size="small"
+                  pagination={false}
+                  rowKey="draftId"
+                  dataSource={readiness?.blockingDrafts ?? []}
+                  columns={[
+                    { title: '模块', dataIndex: 'moduleName', key: 'moduleName', ellipsis: true },
+                    {
+                      title: '状态',
+                      dataIndex: 'status',
+                      key: 'status',
+                      width: 110,
+                      render: (s: string) => {
+                        const meta: Record<string, { color: string; label: string }> = {
+                          DRAFT: { color: 'magenta', label: '待处理' },
+                          EDITING: { color: 'geekblue', label: '已编辑' },
+                          REJECTED: { color: 'red', label: '已驳回' },
+                        };
+                        const m = meta[s] ?? { color: 'default', label: s };
+                        return <Tag color={m.color}>{m.label}</Tag>;
+                      },
+                    },
+                    {
+                      title: '所属任务',
+                      dataIndex: 'taskId',
+                      key: 'taskId',
+                      width: 100,
+                      render: (taskId?: number) => (taskId ? <Text code>#{taskId}</Text> : '-'),
+                    },
+                    {
+                      title: '更新时间',
+                      dataIndex: 'updatedAt',
+                      key: 'updatedAt',
+                      width: 170,
+                      render: (t: string) => (t ? new Date(t).toLocaleString() : '-'),
+                    },
+                  ]}
+                />
+              </>
+            )}
           </Card>
         </div>
       )}
@@ -716,7 +807,7 @@ const TaskDispatchPage: React.FC = () => {
         type="info"
         showIcon
         style={{ marginTop: 16 }}
-        message="小贴士：提示词由系统级绑定，未设置时回退到「基础配置 → 默认提示词」页面设定的默认项；创建后请到「任务查询」中点击「启动」按钮开始执行。"
+        message="小贴士：请先在「系统与仓库」为系统绑定模块提取与文档生成提示词；创建后请到「任务查询」中点击「启动」按钮开始执行。"
       />
     </div>
   );

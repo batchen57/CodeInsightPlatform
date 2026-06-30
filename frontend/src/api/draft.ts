@@ -1,8 +1,11 @@
 import request from './request';
 import {
   isMockEnabled,
+  mockAcquireDraftEditLock,
   mockAutoSaveDraft,
   mockConfirmDraft,
+  mockRenewDraftEditLock,
+  mockReleaseDraftEditLock,
   mockGetComments,
   mockGetDraftContent,
   mockGetReferences,
@@ -161,6 +164,24 @@ export function saveDraft(draftId: number, content: string, author?: string, rem
 export function autoSaveDraft(draftId: number, content: string, author?: string): Promise<void> {
   if (isMockEnabled()) return mockAutoSaveDraft(draftId, content, author);
   return request.post(`/drafts/${draftId}/autosave`, { content, author });
+}
+
+/** 获取草稿编辑锁（进入可编辑草稿时调用） */
+export function acquireDraftEditLock(draftId: number, author?: string): Promise<void> {
+  if (isMockEnabled()) return mockAcquireDraftEditLock(draftId, author);
+  return request.post(`/drafts/${draftId}/edit-lock/acquire`, { author });
+}
+
+/** 续租草稿编辑锁（周期调用，间隔应小于后端 TTL） */
+export function renewDraftEditLock(draftId: number, author?: string): Promise<void> {
+  if (isMockEnabled()) return mockRenewDraftEditLock(draftId, author);
+  return request.post(`/drafts/${draftId}/edit-lock/renew`, { author });
+}
+
+/** 释放草稿编辑锁（切换草稿 / 离开页面时调用） */
+export function releaseDraftEditLock(draftId: number, author?: string): Promise<void> {
+  if (isMockEnabled()) return mockReleaseDraftEditLock(draftId, author);
+  return request.post(`/drafts/${draftId}/edit-lock/release`, { author });
 }
 
 export function confirmDraft(draftId: number, author?: string, comment?: string): Promise<void> {

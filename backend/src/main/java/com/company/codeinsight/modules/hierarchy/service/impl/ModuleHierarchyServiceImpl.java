@@ -2,6 +2,7 @@ package com.company.codeinsight.modules.hierarchy.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.company.codeinsight.common.exception.BusinessException;
+import com.company.codeinsight.common.storage.TaskWorkspacePaths;
 import com.company.codeinsight.common.util.Base62Generator;
 import com.company.codeinsight.common.util.PromptTemplateLoader;
 import com.company.codeinsight.modules.ai.service.AiSummaryService;
@@ -93,6 +94,9 @@ public class ModuleHierarchyServiceImpl implements ModuleHierarchyService {
     @Autowired
     private com.company.codeinsight.modules.prompt.service.DecompilePromptService decompilePromptService;
 
+    @Autowired
+    private TaskWorkspacePaths taskWorkspacePaths;
+
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     /** AI 调用专用线程池，并发度由 {@code code-insight.ai.hierarchy-parallelism} 控制，避免打爆 LLM API */
@@ -138,14 +142,9 @@ public class ModuleHierarchyServiceImpl implements ModuleHierarchyService {
         List<EntryPoint> entries = entrypointReviewService.loadEnabledEntries(taskId);
         log.info("ModuleHierarchyService.buildAndPersist taskId={} entries={} ctx={}", taskId, entries.size(), effective);
 
-        // 3. 加载 prompt 模板（仅一次）
-        //    优先 DB（按 task.modularizePromptVersion 或同类型默认），找不到再回退到 classpath 资源，保证向后兼容
-        String promptTemplate = decompilePromptService.resolveTaskPromptContent(task,
+        // 3. 加载 prompt 模板（仅一次，必须来自任务快照的提示词绑定）
+        String promptTemplate = decompilePromptService.requireTaskPromptContent(task,
                 com.company.codeinsight.modules.prompt.entity.DecompilePrompt.TYPE_MODULARIZE);
-        if (!StringUtils.hasText(promptTemplate)) {
-            log.warn("taskId={} 数据库中无 MODULARIZE 提示词可用，回退到 classpath 资源 {}", taskId, MODULARIZE_PROMPT_FALLBACK_PATH);
-            promptTemplate = promptTemplateLoader.load(MODULARIZE_PROMPT_FALLBACK_PATH);
-        }
 
         // 4. 收集需处理的入口（增量模式下跳过未变更入口）
         int skippedByIncremental = 0;
@@ -342,7 +341,7 @@ public class ModuleHierarchyServiceImpl implements ModuleHierarchyService {
             }
 
             String businessKnowledge = readOptionalFile(
-                    Paths.get("temp_repos", "task_" + task.getId(), "docs", "code-insight", "meta", "business_knowledge.md")
+                    taskWorkspacePaths.taskDocsCodeInsight(task.getId()).resolve("meta/business_knowledge.md")
             );
             // 注意：并行阶段不传 hierarchy JSON——各入口无法看到其他入口的并发写入，
             // AI 本身已通过 prompt 中的入口源码即可判定业务领域归属，缺失上下文不影响模块归属准确性

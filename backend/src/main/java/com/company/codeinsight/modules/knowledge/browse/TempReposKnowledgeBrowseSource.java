@@ -1,6 +1,8 @@
 package com.company.codeinsight.modules.knowledge.browse;
 
 import com.company.codeinsight.common.exception.BusinessException;
+import com.company.codeinsight.common.storage.TaskWorkspacePaths;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
@@ -33,16 +35,18 @@ import java.util.List;
  */
 @Slf4j
 @Component
+@RequiredArgsConstructor
 @ConditionalOnProperty(name = "code-insight.browse.source", havingValue = "temp-repos", matchIfMissing = true)
 public class TempReposKnowledgeBrowseSource implements KnowledgeBrowseSource {
+
+    private final TaskWorkspacePaths taskWorkspacePaths;
 
     /** 单文件大小上限（字节）；超过此大小拒绝读取 */
     static final long SIZE_LIMIT_BYTES = 5L * 1024 * 1024;
 
     /** 临时仓库根目录（与 KnowledgeServiceImpl.createVersion 一致） */
-    private static final String TEMP_REPOS_BASE = "temp_repos";
 
-    /** 允许访问的子路径前缀（相对 temp_repos/task_{id}/） */
+    /** 允许访问的子路径前缀（相对 task 工作区根） */
     private static final String DOCS_INSIGHT_SUBDIR = "docs" + java.io.File.separatorChar + "code-insight";
 
     /** 索引文件目录（在 docs/code-insight 下） */
@@ -122,8 +126,7 @@ public class TempReposKnowledgeBrowseSource implements KnowledgeBrowseSource {
      * 解析 taskId 对应的 docs/code-insight 根目录；不存在返回 null。
      */
     private Path locateDocsInsightRoot(Long taskId) {
-        Path base = Paths.get(TEMP_REPOS_BASE, "task_" + taskId).toAbsolutePath().normalize();
-        return base.resolve(DOCS_INSIGHT_SUBDIR).normalize();
+        return taskWorkspacePaths.taskDocsCodeInsight(taskId).toAbsolutePath().normalize();
     }
 
     /**

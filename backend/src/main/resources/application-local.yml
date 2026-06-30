@@ -43,6 +43,9 @@ code-insight:
     system-monthly-limit: ${TOKEN_SYSTEM_MONTHLY_LIMIT:1000000}
   storage:
     local-path: ${STORAGE_LOCAL_PATH:./storage}
+    workspace-root: ${STORAGE_WORKSPACE_ROOT:./temp_repos}
+  cluster:
+    enabled: ${CLUSTER_ENABLED:false}
   push:
     queue:
       enabled: ${PUSH_QUEUE_ENABLED:true}

@@ -1,11 +1,13 @@
 package com.company.codeinsight.modules.quotacontrol.controller;
 
 import com.company.codeinsight.common.auth.OperatorContext;
+import com.company.codeinsight.common.cluster.ConfigRefreshPublisher;
 import com.company.codeinsight.common.response.ApiResponse;
 import com.company.codeinsight.modules.quotacontrol.dto.SystemConfigUpdateRequest;
 import com.company.codeinsight.modules.quotacontrol.entity.SystemConfig;
 import com.company.codeinsight.modules.quotacontrol.service.AiConcurrencyService;
 import com.company.codeinsight.modules.quotacontrol.service.SystemConfigService;
+import com.company.codeinsight.modules.task.service.TaskConcurrencyLimiter;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -23,6 +25,12 @@ public class SystemConfigController {
 
     @Autowired
     private AiConcurrencyService aiConcurrencyService;
+
+    @Autowired
+    private TaskConcurrencyLimiter taskConcurrencyLimiter;
+
+    @Autowired
+    private ConfigRefreshPublisher configRefreshPublisher;
 
     @Operation(summary = "列出所有配置")
     @GetMapping
@@ -46,14 +54,19 @@ public class SystemConfigController {
             if (old != null) desc = old.getDescription();
         }
         systemConfigService.putString(key, body.getValue(), desc, OperatorContext.get());
-        // 关键 key 变更后驱动 AiConcurrencyService 重建
         if ("ai.concurrency".equals(key)) {
             try {
                 aiConcurrencyService.rebuild(Integer.parseInt(body.getValue()));
             } catch (NumberFormatException ignored) {
-                // 容错
             }
         }
+        if ("task.concurrency".equals(key)) {
+            try {
+                taskConcurrencyLimiter.rebuildGlobal(Integer.parseInt(body.getValue()));
+            } catch (NumberFormatException ignored) {
+            }
+        }
+        configRefreshPublisher.publish(key);
         return ApiResponse.success();
     }
 }

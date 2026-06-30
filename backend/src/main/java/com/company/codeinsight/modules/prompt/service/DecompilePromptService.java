@@ -28,7 +28,7 @@ public interface DecompilePromptService extends IService<DecompilePrompt> {
      */
     Page<DecompilePrompt> listPromptsPage(int current, int size, String name,
                                          String promptType, String lifecycle, String category,
-                                         Long scopeId);
+                                         Long scopeId, Integer isDefault);
 
     /**
      * 克隆复制指定 ID 提示词模板以创建一条全新副本
@@ -71,20 +71,38 @@ public interface DecompilePromptService extends IService<DecompilePrompt> {
     PromptTestResultDto testRun(Long id, String sampleCode, Long modelId, String resolvedContent);
 
     /**
-     * 解析任务运行时指定类型的提示词正文（用于流水线各阶段）
-     * <p>
-     * 解析顺序：
-     * <ol>
-     *     <li>任务记录中显式保存的提示词版本（{@code modularizePromptVersion} 或 {@code documentPromptVersion}）</li>
-     *     <li>任务未指定 → 取同 {@code prompt_type} 下 is_default=1 且 lifecycle=RELEASED 的默认版本</li>
-     *     <li>都不存在 → 返回 null，由调用方按各自阶段的 classpath 兜底处理</li>
-     * </ol>
+     * 解析任务运行时指定类型的提示词正文（仅使用任务快照的提示词 ID，无系统/默认兜底）。
      *
-     * @param task         任务实体（用于读取显式版本号）
-     * @param promptType   提示词用途：{@code MODULARIZE} 或 {@code DOCUMENT_GENERATION}
-     * @return 提示词正文；找不到返回 null
+     * @param task       任务实体
+     * @param promptType 提示词用途：{@code MODULARIZE} 或 {@code DOCUMENT_GENERATION}
+     * @return 提示词正文；找不到或无效时返回 null
      */
     String resolveTaskPromptContent(com.company.codeinsight.modules.task.entity.DecompileTask task, String promptType);
+
+    /**
+     * 按任务快照的提示词 ID 解析正文；缺失或无效时抛 {@link com.company.codeinsight.common.exception.BusinessException}。
+     */
+    String requireTaskPromptContent(com.company.codeinsight.modules.task.entity.DecompileTask task, String promptType);
+
+    /**
+     * 校验系统已绑定模块提取 + 文档生成提示词（均为 RELEASED 且类型匹配）。
+     */
+    void validateSystemPromptBinding(Long systemId);
+
+    /**
+     * 校验任务快照的两类提示词 ID 可用。
+     */
+    void validateTaskPromptBinding(Long modularizePromptId, Long documentPromptId);
+
+    /**
+     * 系统提示词是否已完整绑定（不抛异常，供就绪度 API 使用）。
+     */
+    boolean isSystemPromptsConfigured(Long systemId);
+
+    /**
+     * 系统提示词未配置时的错误说明；已配置时返回 null。
+     */
+    String getSystemPromptsConfigurationMessage(Long systemId);
 
     /**
      * 流式试跑提示词模板，按内容增量和结束事件输出。

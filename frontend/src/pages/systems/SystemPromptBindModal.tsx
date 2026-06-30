@@ -11,9 +11,9 @@ import {
   message,
 } from 'antd';
 import { PlayCircleOutlined, PlusOutlined } from '@ant-design/icons';
-import { listPrompts, type Prompt, getPrompt } from '../../api/prompt';
+import { listPrompts, getPrompt, deletePrompt } from '../../api/prompt';
 import { updateSystem } from '../../api/system';
-import type { System } from '../../types';
+import type { Prompt, System } from '../../types';
 import SystemPromptEditorModal from './SystemPromptEditorModal';
 import SystemPromptTrialModal from './SystemPromptTrialModal';
 
@@ -54,21 +54,37 @@ const SystemPromptBindModal: React.FC<Props> = ({ open, system, onClose, onSaved
   const [trialOpen, setTrialOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
-  // 拉取可用提示词(按类型筛 RELEASED),并按需懒加载当前已绑定的 prompt 详情
+  // 拉取可用提示词(DEFAULT is_default=1 + 该系统下 USER 提示词)
   const fetchAll = async () => {
     setPromptsLoading(true);
     try {
       const all: Prompt[] = [];
-      for (const t of Object.values(TYPE_NAME)) {
-        const res = await listPrompts({
+      const sysId = system?.id;
+      for (const t of Object.keys(TYPE_NAME) as ('MODULARIZE' | 'DOCUMENT_GENERATION')[]) {
+        // 拉 DEFAULT 类别的
+        const defRes = await listPrompts({
           current: 1,
           size: 200,
           lifecycle: 'RELEASED',
           promptType: t,
+          category: 'DEFAULT',
+          isDefault: 1,
         });
-        all.push(...res.records);
+        all.push(...defRes.records);
+        // 拉该系统下的 USER 提示词
+        if (sysId) {
+          const userRes = await listPrompts({
+            current: 1,
+            size: 200,
+            lifecycle: 'RELEASED',
+            promptType: t,
+            category: 'USER',
+            scopeId: sysId,
+          });
+          all.push(...userRes.records);
+        }
       }
-      // 把当前系统已绑定的草稿(DRAFT) 也拉一份进来,这样自定义草稿也能展示
+      // DRAFT 的也补进来
       if (system) {
         const boundIds = [system.modularizePromptId, system.documentPromptId].filter(
           Boolean,
@@ -118,7 +134,7 @@ const SystemPromptBindModal: React.FC<Props> = ({ open, system, onClose, onSaved
   const modularizeOptions = useMemo(
     () =>
       prompts
-        .filter((p) => p.promptType === 'MODULARIZE' && p.status === 1)
+        .filter((p) => p.promptType === 'MODULARIZE' && p.lifecycle === 'RELEASED')
         .map((p) => ({
           value: p.id,
           label: `${p.name} (v${p.version})${p.isDefault === 1 ? ' · 默认' : ''}`,
@@ -128,7 +144,7 @@ const SystemPromptBindModal: React.FC<Props> = ({ open, system, onClose, onSaved
   const documentOptions = useMemo(
     () =>
       prompts
-        .filter((p) => p.promptType === 'DOCUMENT_GENERATION' && p.status === 1)
+        .filter((p) => p.promptType === 'DOCUMENT_GENERATION' && p.lifecycle === 'RELEASED')
         .map((p) => ({
           value: p.id,
           label: `${p.name} (v${p.version})${p.isDefault === 1 ? ' · 默认' : ''}`,
@@ -136,12 +152,25 @@ const SystemPromptBindModal: React.FC<Props> = ({ open, system, onClose, onSaved
     [prompts],
   );
 
+  /** 清理孤立的 USER 提示词(旧绑定是 USER + 同 scopeId + 不再被任何系统引用) */
+  const cleanupOrphanedUserPrompt = async (_promptType: 'MODULARIZE' | 'DOCUMENT_GENERATION', oldPrompt: Prompt | null) => {
+    if (!oldPrompt || oldPrompt.category !== 'USER') return;
+    if (!system) return;
+    if (oldPrompt.scopeId !== system.id) return;
+    try {
+      await deletePrompt(oldPrompt.id);
+    } catch {
+      // 后端拦截(如仍被引用)自动阻止
+    }
+  };
+
   /** 从下拉框切换提示词 → 立即调后端 updateSystem */
   const handleSelectExisting = async (
     promptType: 'MODULARIZE' | 'DOCUMENT_GENERATION',
     id: number,
   ) => {
     if (!system) return;
+    const oldPrompt = promptType === 'MODULARIZE' ? selectedModularize : selectedDocument;
     const payload: Partial<System> =
       promptType === 'MODULARIZE'
         ? { modularizePromptId: id }
@@ -153,6 +182,8 @@ const SystemPromptBindModal: React.FC<Props> = ({ open, system, onClose, onSaved
     } catch {
       // 拦截器已提示
     }
+    // 异步清理(不阻塞 UI)
+    cleanupOrphanedUserPrompt(promptType, oldPrompt);
   };
 
   /** 打开自定义编辑器 */
@@ -167,6 +198,7 @@ const SystemPromptBindModal: React.FC<Props> = ({ open, system, onClose, onSaved
   /** 自定义创建成功 → 调用后端 updateSystem 绑定到对应字段 */
   const handlePromptCreated = async (p: Prompt) => {
     if (!system) return;
+    const oldPrompt = p.promptType === 'MODULARIZE' ? selectedModularize : selectedDocument;
     const fieldName = p.promptType === 'MODULARIZE' ? 'modularizePromptId' : 'documentPromptId';
     setSubmitting(true);
     try {
@@ -183,6 +215,8 @@ const SystemPromptBindModal: React.FC<Props> = ({ open, system, onClose, onSaved
     } finally {
       setSubmitting(false);
     }
+    // 异步清理旧的 USER 孤立提示词
+    cleanupOrphanedUserPrompt(p.promptType as 'MODULARIZE' | 'DOCUMENT_GENERATION', oldPrompt);
   };
 
   const renderCard = (promptType: 'MODULARIZE' | 'DOCUMENT_GENERATION') => {
@@ -300,6 +334,7 @@ const SystemPromptBindModal: React.FC<Props> = ({ open, system, onClose, onSaved
             editorState.promptType === 'MODULARIZE' ? defaultModularize : defaultDocument
           }
           systemName={system?.name}
+          scopeId={system?.id}
           promptType={editorState.promptType}
           promptTypeLabel={TYPE_LABEL[editorState.promptType]}
           onClose={() => setEditorState(null)}

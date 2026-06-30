@@ -17,7 +17,6 @@ import {
   ArrowLeftOutlined,
   ArrowRightOutlined,
   CheckCircleOutlined,
-  EditOutlined,
   PlusOutlined,
   SyncOutlined,
 } from '@ant-design/icons';
@@ -117,14 +116,34 @@ const SystemWizardModal: React.FC<Props> = ({ open, initialSystemId, onClose, on
     promptForm.resetFields();
   }, [open, initialSystemId, systemForm, repoForm, scanForm, promptForm]);
 
-  // Step 4：拉取可用提示词
+  // Step 4：拉取可用提示词（DEFAULT is_default=1 + 该系统下 USER 提示词）
   const fetchPrompts = useCallback(async () => {
     setPromptsLoading(true);
     try {
       const all: Prompt[] = [];
       for (const t of Object.values(DEFAULT_PROMPTS)) {
-        const res = await listPrompts({ current: 1, size: 200, lifecycle: 'RELEASED', promptType: t.key });
-        all.push(...res.records);
+        // 拉 DEFAULT 类别 is_default=1 的
+        const defRes = await listPrompts({
+          current: 1,
+          size: 200,
+          lifecycle: 'RELEASED',
+          promptType: t.key,
+          category: 'DEFAULT',
+          isDefault: 1,
+        });
+        all.push(...defRes.records);
+        // 如已有 systemId,顺便拉该系统下的 USER 提示词
+        if (systemId) {
+          const userRes = await listPrompts({
+            current: 1,
+            size: 200,
+            lifecycle: 'RELEASED',
+            promptType: t.key,
+            category: 'USER',
+            scopeId: systemId,
+          });
+          all.push(...userRes.records);
+        }
       }
       setPrompts(all);
     } catch {
@@ -132,7 +151,7 @@ const SystemWizardModal: React.FC<Props> = ({ open, initialSystemId, onClose, on
     } finally {
       setPromptsLoading(false);
     }
-  }, []);
+  }, [systemId]);
 
   useEffect(() => {
     if (open && currentStep === 3) fetchPrompts();
@@ -191,9 +210,32 @@ const SystemWizardModal: React.FC<Props> = ({ open, initialSystemId, onClose, on
   }, [currentStep, prompts, defaultModularize, defaultDocument, promptForm]);
 
   /** Step 4 交互处理 */
+  /* 下拉选择先暂存，不直接写表单；用户点"保存"后才提交 */
+  const [pendingModularizeId, setPendingModularizeId] = useState<number | undefined>();
+  const [pendingDocumentId, setPendingDocumentId] = useState<number | undefined>();
+
   const handleSelectExisting = (promptType: 'MODULARIZE' | 'DOCUMENT_GENERATION', id: number) => {
-    const fieldName = promptType === 'MODULARIZE' ? 'modularizePromptId' : 'documentPromptId';
-    promptForm.setFieldValue(fieldName, id);
+    if (promptType === 'MODULARIZE') {
+      setPendingModularizeId(id);
+    } else {
+      setPendingDocumentId(id);
+    }
+  };
+
+  const handleSavePrompt = (promptType: 'MODULARIZE' | 'DOCUMENT_GENERATION') => {
+    if (promptType === 'MODULARIZE') {
+      if (pendingModularizeId != null) {
+        promptForm.setFieldValue('modularizePromptId', pendingModularizeId);
+        setPendingModularizeId(undefined);
+        message.success('模块提取提示词已保存');
+      }
+    } else {
+      if (pendingDocumentId != null) {
+        promptForm.setFieldValue('documentPromptId', pendingDocumentId);
+        setPendingDocumentId(undefined);
+        message.success('文档生成提示词已保存');
+      }
+    }
   };
   const openCustomPrompt = (promptType: 'MODULARIZE' | 'DOCUMENT_GENERATION') => {
     setEditorState({ open: true, mode: 'custom', promptType });
@@ -507,7 +549,7 @@ const SystemWizardModal: React.FC<Props> = ({ open, initialSystemId, onClose, on
                   optionFilterProp="label"
                   placeholder="选择已有提示词"
                   style={{ width: 320 }}
-                  value={selectedModularize?.id}
+                  value={pendingModularizeId ?? selectedModularize?.id}
                   onChange={(id) => handleSelectExisting('MODULARIZE', id)}
                   options={modularizeOptions}
                   loading={promptsLoading}
@@ -519,6 +561,9 @@ const SystemWizardModal: React.FC<Props> = ({ open, initialSystemId, onClose, on
                 >
                   自定义
                 </Button>
+                {pendingModularizeId != null && (
+                  <Button key="save-m" type="primary" size="small" onClick={() => handleSavePrompt('MODULARIZE')}>保存</Button>
+                )}
                 {selectedModularize && (
                   <Button
                     size="small"
@@ -558,7 +603,7 @@ const SystemWizardModal: React.FC<Props> = ({ open, initialSystemId, onClose, on
                   optionFilterProp="label"
                   placeholder="选择已有提示词"
                   style={{ width: 320 }}
-                  value={selectedDocument?.id}
+                  value={pendingDocumentId ?? selectedDocument?.id}
                   onChange={(id) => handleSelectExisting('DOCUMENT_GENERATION', id)}
                   options={documentOptions}
                   loading={promptsLoading}
@@ -570,6 +615,9 @@ const SystemWizardModal: React.FC<Props> = ({ open, initialSystemId, onClose, on
                 >
                   自定义
                 </Button>
+                {pendingDocumentId != null && (
+                  <Button key="save-d" type="primary" size="small" onClick={() => handleSavePrompt('DOCUMENT_GENERATION')}>保存</Button>
+                )}
                 {selectedDocument && (
                   <Button
                     size="small"
@@ -641,6 +689,7 @@ const SystemWizardModal: React.FC<Props> = ({ open, initialSystemId, onClose, on
             editorState.promptType === 'MODULARIZE' ? defaultModularize : defaultDocument
           }
           systemName={systemName}
+          scopeId={systemId}
           promptType={editorState.promptType}
           promptTypeLabel={
             editorState.promptType === 'MODULARIZE'

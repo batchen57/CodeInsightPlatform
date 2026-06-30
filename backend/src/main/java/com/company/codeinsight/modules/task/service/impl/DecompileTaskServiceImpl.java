@@ -3,7 +3,10 @@ package com.company.codeinsight.modules.task.service.impl;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.company.codeinsight.common.cluster.ClusterInstanceId;
+import com.company.codeinsight.common.cluster.ClusterProperties;
 import com.company.codeinsight.common.exception.BusinessException;
+import com.company.codeinsight.common.storage.TaskWorkspacePaths;
 import com.company.codeinsight.modules.ai.mapper.AiCallRecordMapper;
 import com.company.codeinsight.modules.draft.entity.KnowledgeDraft;
 import com.company.codeinsight.modules.draft.enums.DraftStatus;
@@ -39,6 +42,9 @@ import java.util.concurrent.CompletableFuture;
 @Service
 public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, DecompileTask> implements DecompileTaskService {
 
+    @org.springframework.beans.factory.annotation.Value("${code-insight.storage.local-path:./storage}")
+    private String storageBase;
+
     // 运行态任务的共享内存快照映射，避免事务提交延迟导致高频轮询读不到内存状态的竞争情况
     public static final java.util.Map<Long, DecompileTask> taskCache = new java.util.concurrent.ConcurrentHashMap<>();
 
@@ -46,7 +52,7 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
      * 流水线断点恢复所需的轻量上下文（projectDir + IncrementalContext）。
      * <p>在 {@code runPipeline} 入口识别步骤完成后入缓存；在断点（ENTRYPOINT_REVIEW）resume 时读取使用，
      * 避免重新调用 {@code pullAndScan}（INCREMENTAL 任务会重复克隆仓库、可能更新 lastCommitId）。</p>
-     * <p>key 与 {@link #taskCache} 同步生命周期：在 pipeline 与 resume 方法的 finally 中一起清理。</p>
+     * <p>在 {@code ENTRYPOINT_REVIEW} 暂停期间保留；由 resume / reject 或 pipeline 正常结束时清理。</p>
      */
     public record PipelineContext(java.io.File projectDir, com.company.codeinsight.modules.scanner.model.IncrementalContext ctx) {}
     public static final java.util.Map<Long, PipelineContext> pipelineContextCache = new java.util.concurrent.ConcurrentHashMap<>();
@@ -64,7 +70,7 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
     private com.company.codeinsight.modules.ai.service.AiSummaryService aiSummaryService;
 
     @Autowired
-    private com.company.codeinsight.modules.prompt.mapper.DecompilePromptMapper promptMapper;
+    private com.company.codeinsight.modules.prompt.service.DecompilePromptService decompilePromptService;
 
     @Autowired
     private com.company.codeinsight.modules.model.mapper.AiModelMapper aiModelMapper;
@@ -102,6 +108,15 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
 
     @Autowired
     private com.company.codeinsight.modules.draft.mapper.DraftWorkspaceMapper workspaceMapper;
+
+    @Autowired
+    private ClusterProperties clusterProperties;
+
+    @Autowired
+    private ClusterInstanceId clusterInstanceId;
+
+    @Autowired
+    private TaskWorkspacePaths taskWorkspacePaths;
 
     /**
      * 分页获取任务列表
@@ -218,10 +233,12 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
         // 验证系统和仓库的从属合法性
         validateTaskSource(systemId, repositoryId);
         validateNoUnconfirmedDrafts(systemId, repositoryId);
+        decompilePromptService.validateSystemPromptBinding(systemId);
         DecompileTask task = new DecompileTask();
         task.setSystemId(systemId);
         task.setRepositoryId(repositoryId);
         applyPromptIds(task, modularizePromptId, documentPromptId);
+        decompilePromptService.validateTaskPromptBinding(task.getModularizePromptId(), task.getDocumentPromptId());
         task.setStatus(TaskStatus.DRAFT.name());
         task.setType("INITIAL");
         task.setProgress(0);
@@ -275,10 +292,12 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
                                                Boolean requireEntrypointReview) {
         validateTaskSource(systemId, repositoryId);
         validateNoUnconfirmedDrafts(systemId, repositoryId);
+        decompilePromptService.validateSystemPromptBinding(systemId);
         DecompileTask task = new DecompileTask();
         task.setSystemId(systemId);
         task.setRepositoryId(repositoryId);
         applyPromptIds(task, modularizePromptId, documentPromptId);
+        decompilePromptService.validateTaskPromptBinding(task.getModularizePromptId(), task.getDocumentPromptId());
         task.setStatus(TaskStatus.DRAFT.name());
         task.setType("INCREMENTAL");
         task.setProgress(0);
@@ -396,36 +415,25 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
 
     /**
      * 把传入的两类提示词 id 写入 task。
-     * 解析顺序：①调用方显式传入 → ②系统级绑定（ci_system.modularize_prompt_id / document_prompt_id）→ ③默认提示词（is_default=1）。
+     * 解析顺序：①调用方显式传入 → ②系统级绑定（ci_system.modularize_prompt_id / document_prompt_id）。
+     * 不做全局默认提示词兜底。
      */
     private void applyPromptIds(DecompileTask task, Long modularizePromptId, Long documentPromptId) {
-        // ② 系统级绑定（如果调用方未传）
-        Long sysModularize = null, sysDocument = null;
+        Long sysModularize = null;
+        Long sysDocument = null;
         if (modularizePromptId == null || documentPromptId == null) {
             SystemApplication sys = systemApplicationService.getById(task.getSystemId());
             if (sys != null) {
-                if (modularizePromptId == null) sysModularize = sys.getModularizePromptId();
-                if (documentPromptId == null) sysDocument = sys.getDocumentPromptId();
+                if (modularizePromptId == null) {
+                    sysModularize = sys.getModularizePromptId();
+                }
+                if (documentPromptId == null) {
+                    sysDocument = sys.getDocumentPromptId();
+                }
             }
         }
-        task.setModularizePromptId(modularizePromptId != null
-                ? modularizePromptId
-                : (sysModularize != null ? sysModularize : findDefaultPromptId(com.company.codeinsight.modules.prompt.entity.DecompilePrompt.TYPE_MODULARIZE)));
-        task.setDocumentPromptId(documentPromptId != null
-                ? documentPromptId
-                : (sysDocument != null ? sysDocument : findDefaultPromptId(com.company.codeinsight.modules.prompt.entity.DecompilePrompt.TYPE_DOCUMENT_GENERATION)));
-    }
-
-    private Long findDefaultPromptId(String promptType) {
-        if (!org.springframework.util.StringUtils.hasText(promptType)) return null;
-        com.company.codeinsight.modules.prompt.entity.DecompilePrompt prompt = promptMapper.selectOne(
-                new LambdaQueryWrapper<com.company.codeinsight.modules.prompt.entity.DecompilePrompt>()
-                        .eq(com.company.codeinsight.modules.prompt.entity.DecompilePrompt::getPromptType, promptType)
-                        .eq(com.company.codeinsight.modules.prompt.entity.DecompilePrompt::getIsDefault, 1)
-                        .eq(com.company.codeinsight.modules.prompt.entity.DecompilePrompt::getLifecycle, com.company.codeinsight.modules.prompt.entity.DecompilePrompt.LIFECYCLE_RELEASED)
-                        .last("LIMIT 1")
-        );
-        return prompt != null ? prompt.getId() : null;
+        task.setModularizePromptId(modularizePromptId != null ? modularizePromptId : sysModularize);
+        task.setDocumentPromptId(documentPromptId != null ? documentPromptId : sysDocument);
     }
 
     /**
@@ -511,9 +519,15 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
         if (!TaskStatus.DRAFT.name().equals(task.getStatus())) {
             throw new BusinessException("仅 DRAFT 状态可启动；当前状态: " + task.getStatus());
         }
+        decompilePromptService.validateTaskPromptBinding(task.getModularizePromptId(), task.getDocumentPromptId());
         // 缺省优先级：SCHEDULED=60, MANUAL=50
         if (task.getPriority() == null) {
             task.setPriority(defaultPriorityFor(task.getTriggerSource()));
+        // 清除上次失败痕迹:清 error_reason + 清空 pipeline.log(否则前端展示上次异常日志)
+        task.setErrorReason(null);
+        this.updateById(task);
+        truncatePipelineLog(id);
+
         }
         taskCache.put(task.getId(), task);
         // DRAFT → PENDING（TaskQueueDispatcher 在下个 tick 拉起）
@@ -554,9 +568,28 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
         if (task.getPriority() == null) {
             task.setPriority(defaultPriorityFor(task.getTriggerSource()));
         }
+        // 清除上次失败痕迹:清 error_reason + 清空 pipeline.log(否则前端展示上次异常日志)
+        task.setErrorReason(null);
+        task.setClaimedBy(null);
+        task.setClaimedAt(null);
+        task.setLeaseUntil(null);
+        this.updateById(task);
+        truncatePipelineLog(id);
         taskCache.put(task.getId(), task);
         // FAILED/CANCELLED → PENDING（dispatcher 在下个 tick 拉起）
         stateMachineService.transitTo(task, TaskStatus.PENDING, null);
+    }
+
+    /** 清空 pipeline.log:新建空文件供新一次流水线续写 */
+    private void truncatePipelineLog(Long taskId) {
+        try {
+            File logFile = new File(storageBase, "task_" + taskId + "/pipeline.log");
+            if (logFile.exists()) {
+                try (java.io.FileOutputStream fos = new java.io.FileOutputStream(logFile)) { }
+            }
+        } catch (Exception e) {
+            log.warn("清空 pipeline.log 失败 task={}: {}", taskId, e.getMessage());
+        }
     }
 
     /**
@@ -575,11 +608,13 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
         if (current != TaskStatus.MODULE_HIERARCHY_REVIEW) {
             throw new BusinessException("仅在模块层级复核状态下可恢复，当前状态: " + current);
         }
+        assertTaskAffinity(task);
 
         taskCache.put(task.getId(), task);
         CompletableFuture.runAsync(() -> {
             try {
-                String promptContent = resolvePromptContent(task);
+                String promptContent = decompilePromptService.requireTaskPromptContent(task,
+                        com.company.codeinsight.modules.prompt.entity.DecompilePrompt.TYPE_DOCUMENT_GENERATION);
                 List<CodeChunk> chunks = codeChunkService.getChunksByTaskId(id);
 
                 // 进入草稿汇总归档阶段 (GENERATING_DOC)
@@ -618,13 +653,18 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
         if (current != TaskStatus.ENTRYPOINT_REVIEW) {
             throw new BusinessException("仅在知识入口复核状态下可恢复，当前状态: " + current);
         }
+        assertTaskAffinity(task);
 
         taskCache.put(task.getId(), task);
         CompletableFuture.runAsync(() -> {
             try {
                 PipelineContext pctx = pipelineContextCache.get(id);
                 if (pctx == null) {
-                    throw new BusinessException("流水线上下文丢失（projectDir / IncrementalContext），请重试任务");
+                    pctx = rebuildPipelineContext(task);
+                    if (pctx == null) {
+                        throw new BusinessException("流水线上下文丢失（projectDir / IncrementalContext），请重试任务");
+                    }
+                    execLog.log(id, "  pipelineContext 已从 temp_repos 重建（内存缓存失效，如后端重启）");
                 }
                 continueAfterEntrypointReview(id, task, pctx.projectDir(), pctx.ctx());
             } catch (Exception e) {
@@ -666,7 +706,40 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
     }
 
     /**
-     * ENTRYPOINT_REVIEW 之后的共享流水线尾段：AI_ANALYZING → MODULE_HIERARCHY →（按 requireHierarchyReview 决定）
+     * 从磁盘上的任务工作目录重建断点恢复上下文（后端重启导致内存缓存丢失时的兜底）。
+     */
+    private PipelineContext rebuildPipelineContext(DecompileTask task) {
+        File projectDir = taskWorkspacePaths.taskProjectDir(task.getId());
+        if (!projectDir.isDirectory()) {
+            return null;
+        }
+        return new PipelineContext(projectDir,
+                com.company.codeinsight.modules.scanner.model.IncrementalContext.fullScan());
+    }
+
+    /**
+     * 集群断点恢复：若任务由其他节点执行且本地无工作目录，则拒绝恢复（需共享卷或原节点）。
+     */
+    private void assertTaskAffinity(DecompileTask task) {
+        if (!clusterProperties.isEnabled()) {
+            return;
+        }
+        File projectDir = taskWorkspacePaths.taskProjectDir(task.getId());
+        if (!projectDir.isDirectory()) {
+            String owner = task.getClaimedBy();
+            throw new BusinessException("任务工作目录不在本节点"
+                    + (owner != null ? "（认领节点: " + owner + "）" : "")
+                    + "。请确认 temp_repos 已挂载为共享存储，或在原节点继续操作。");
+        }
+        if (StringUtils.hasText(task.getClaimedBy())
+                && !task.getClaimedBy().equals(clusterInstanceId.get())) {
+            log.warn("任务 #{} 由节点 {} 执行，当前节点 {} 因共享卷存在继续恢复",
+                    task.getId(), task.getClaimedBy(), clusterInstanceId.get());
+        }
+    }
+
+    /**
+     * ENTRYPOINT_REVIEW 之后的共享流水线尾段
      * <p>从 {@code runPipeline}（断点跳过时）与 {@code resumeAfterEntrypointReview}（用户确认后）复用同一份代码。</p>
      */
     private void continueAfterEntrypointReview(Long taskId, DecompileTask task,
@@ -694,7 +767,10 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
             execLog.log(taskId, ">>> GENERATING_DOC — 生成文档");
             t1 = System.currentTimeMillis();
             stateMachineService.transitTo(taskId, TaskStatus.GENERATING_DOC, null);
-            aiSummaryService.generateDraftDocument(taskId, chunks, resolvePromptContent(task), incrementalCtx);
+            aiSummaryService.generateDraftDocument(taskId, chunks,
+                    decompilePromptService.requireTaskPromptContent(task,
+                            com.company.codeinsight.modules.prompt.entity.DecompilePrompt.TYPE_DOCUMENT_GENERATION),
+                    incrementalCtx);
             stateMachineService.transitTo(taskId, TaskStatus.PENDING_REVIEW, null);
             execLog.log(taskId, "  耗时 " + (System.currentTimeMillis() - t1) + "ms");
             // AI 阶段终态汇总：从 ci_ai_call_record 统计本次任务的成功/失败次数
@@ -715,31 +791,6 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
     }
 
     /**
-     * 按 task 记录的 documentPromptId（或 DOCUMENT_GENERATION 类型的默认提示词）解析草稿生成时所用的提示词正文。
-     */
-    private String resolvePromptContent(DecompileTask task) {
-        final String fallback = "你是一个代码归纳助手，请对以下代码的业务功能进行高度归纳。";
-        if (task.getDocumentPromptId() != null) {
-            com.company.codeinsight.modules.prompt.entity.DecompilePrompt prompt = promptMapper.selectById(task.getDocumentPromptId());
-            if (prompt != null && com.company.codeinsight.modules.prompt.entity.DecompilePrompt.LIFECYCLE_RELEASED.equals(prompt.getLifecycle())) return prompt.getContent();
-        }
-        // 兜底：DOCUMENT_GENERATION 默认
-        com.company.codeinsight.modules.prompt.entity.DecompilePrompt defaultPrompt = promptMapper.selectOne(
-                new LambdaQueryWrapper<com.company.codeinsight.modules.prompt.entity.DecompilePrompt>()
-                        .eq(com.company.codeinsight.modules.prompt.entity.DecompilePrompt::getPromptType, com.company.codeinsight.modules.prompt.entity.DecompilePrompt.TYPE_DOCUMENT_GENERATION)
-                        .eq(com.company.codeinsight.modules.prompt.entity.DecompilePrompt::getIsDefault, 1)
-                        .eq(com.company.codeinsight.modules.prompt.entity.DecompilePrompt::getLifecycle, com.company.codeinsight.modules.prompt.entity.DecompilePrompt.LIFECYCLE_RELEASED)
-                        .last("LIMIT 1")
-        );
-        if (defaultPrompt != null) {
-            task.setDocumentPromptId(defaultPrompt.getId());
-            this.updateById(task);
-            return defaultPrompt.getContent();
-        }
-        return fallback;
-    }
-
-    /**
      * 异步流水线核心控制器
      * 将代码扫描、切片、AI分析和归纳归整串联在一起的无阻塞后台流水线。
      */
@@ -751,6 +802,7 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
                 : (this.getById(taskId) != null ? this.getById(taskId).getSystemId() : null);
         CompletableFuture.runAsync(() -> {
             long t0 = System.currentTimeMillis();
+            boolean pausedForEntrypointReview = false;
             try {
                 execLog.log(taskId, "══════ 流水线启动 taskId=" + taskId + " ══════");
 
@@ -759,6 +811,9 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
                 DecompileTask task = this.getById(taskId);
                 if (task == null) task = taskCache.get(taskId);
                 if (task == null) throw new BusinessException("任务不存在, ID: " + taskId);
+
+                decompilePromptService.validateTaskPromptBinding(
+                        task.getModularizePromptId(), task.getDocumentPromptId());
 
                 execLog.log(taskId, ">>> PULLING_CODE — 拉取代码");
                 execLog.log(taskId, "  model          = " + (task.getModelName() != null ? task.getModelName() : "(default)"));
@@ -821,8 +876,10 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
                 pipelineContextCache.put(taskId, new PipelineContext(projectDir, incrementalCtx));
 
                 if (Boolean.TRUE.equals(task.getRequireEntrypointReview())) {
+                    execLog.log(taskId, ">>> ENTRYPOINT_REVIEW — 入口复核");
                     stateMachineService.transitTo(taskId, TaskStatus.ENTRYPOINT_REVIEW, null);
                     execLog.log(taskId, "<<< 暂停 — 等待人工复核知识入口 (已耗时 " + (System.currentTimeMillis() - t0) + "ms)");
+                    pausedForEntrypointReview = true;
                     return;
                 }
                 // 跳过断点：直接进入 AI 阶段（continueAfterEntrypointReview 复用）
@@ -842,10 +899,12 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
                 }
             } finally {
                 taskCache.remove(taskId);
-                pipelineContextCache.remove(taskId);
+                if (!pausedForEntrypointReview) {
+                    pipelineContextCache.remove(taskId);
+                }
                 // 释放任务并发许可（TaskQueueDispatcher / startTask 获取的全局 + 系统 Semaphore）
                 if (systemId != null) {
-                    taskConcurrencyLimiter.release(systemId);
+                    taskConcurrencyLimiter.release(systemId, taskId);
                 }
             }
         });

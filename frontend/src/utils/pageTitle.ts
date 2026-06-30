@@ -24,8 +24,8 @@ export const PATH_META: Record<string, PathMeta> = {
   '/tasks/dispatch': { title: '手动下发', parent: '知识构建任务' },
   '/tasks/jobs': { title: 'JOB配置', parent: '知识构建任务' },
   '/tasks/jobs/new': { title: '新建定时任务', parent: '知识构建任务' },
+  '/tasks/entrypoint-review': { title: '入口复核' },
   '/tasks/hierarchy-review': { title: '模块层级复核' },
-  '/tasks/entrypoint-review': { title: '知识入口复核' },
 
   '/drafts': { title: '知识复核' },
   '/push': { title: '知识推送' },
@@ -47,6 +47,13 @@ export function getPageTitle(pathname: string): string {
   const taskMatch = pathname.match(/^\/tasks\/(\d+)$/);
   if (taskMatch) return `任务详情 #${taskMatch[1]}`;
 
+  const entryReviewMatch = pathname.match(/^\/tasks\/entrypoint-review\/(\d+)$/);
+  if (entryReviewMatch) return `入口复核 #${entryReviewMatch[1]}`;
+
+  // 知识复核详情 /drafts/:taskId
+  const draftReviewMatch = pathname.match(/^\/drafts\/(\d+)$/);
+  if (draftReviewMatch) return `知识复核 #${draftReviewMatch[1]}`;
+
   // 定时任务编辑 /tasks/jobs/:id/edit
   const jobEditMatch = pathname.match(/^\/tasks\/jobs\/(\d+)\/edit$/);
   if (jobEditMatch) return `编辑定时任务 #${jobEditMatch[1]}`;
@@ -65,6 +72,8 @@ export function getPageTitle(pathname: string): string {
 export const isSidebarRoute = (pathname: string): boolean => {
   if (PATH_META[pathname]) return true;
   if (/^\/tasks\/(\d+)$/.test(pathname)) return true;
+  if (/^\/tasks\/entrypoint-review\/(\d+)$/.test(pathname)) return true;
+  if (/^\/drafts\/(\d+)$/.test(pathname)) return true;
   if (/^\/tasks\/jobs\/(\d+)(?:\/edit)?$/.test(pathname)) return true;
   return false;
 };

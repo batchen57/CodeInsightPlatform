@@ -1,10 +1,13 @@
 package com.company.codeinsight.modules.hierarchy.model;
 
-import com.company.codeinsight.common.util.jackson.YnBooleanDeserializer;
-import com.company.codeinsight.common.util.jackson.YnBooleanSerializer;
-import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
-import com.fasterxml.jackson.databind.annotation.JsonSerialize;
+import com.company.codeinsight.common.util.jackson.YnBooleanJson;
+import com.fasterxml.jackson.annotation.JsonGetter;
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonSetter;
+import lombok.AccessLevel;
 import lombok.Data;
+import lombok.Getter;
+import lombok.Setter;
 
 import java.util.LinkedHashSet;
 import java.util.Set;
@@ -40,7 +43,27 @@ public class FunctionDto {
     /**
      * 人工逐项复核确认标记：JSON 中以 "Y" / "N" 字符串形式呈现
      */
-    @JsonSerialize(using = YnBooleanSerializer.class)
-    @JsonDeserialize(using = YnBooleanDeserializer.class)
+    @Getter(AccessLevel.NONE)
+    @Setter(AccessLevel.NONE)
     private Boolean confirmed;
+
+    @JsonIgnore
+    public Boolean getConfirmed() {
+        return confirmed;
+    }
+
+    @JsonIgnore
+    public void setConfirmed(Boolean confirmed) {
+        this.confirmed = confirmed;
+    }
+
+    @JsonGetter("confirmed")
+    public String getConfirmedYn() {
+        return YnBooleanJson.format(confirmed);
+    }
+
+    @JsonSetter("confirmed")
+    public void setConfirmedYn(String raw) {
+        this.confirmed = YnBooleanJson.parse(raw);
+    }
 }

@@ -1,6 +1,6 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { Card, Form, Space, Table, message } from 'antd';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   changeSystemState,
   deleteSystem,
@@ -36,6 +36,7 @@ import { useRepositories, useSystemsList } from './hooks';
  */
 const Systems: React.FC = () => {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
 
   // ===== 数据 =====
   const list = useSystemsList();
@@ -129,6 +130,22 @@ const Systems: React.FC = () => {
     setSelectedSystem(system);
     setPromptBindOpen(true);
   }, []);
+
+  // 从任务下发等页面深链打开提示词绑定弹窗：/systems?systemId=1&action=prompts
+  useEffect(() => {
+    const action = searchParams.get('action');
+    const sysId = Number(searchParams.get('systemId'));
+    if (action !== 'prompts' || !Number.isFinite(sysId) || sysId <= 0 || systems.length === 0) {
+      return;
+    }
+    const system = systems.find((s) => s.id === sysId);
+    if (!system) return;
+    openPromptBind(system);
+    const next = new URLSearchParams(searchParams);
+    next.delete('systemId');
+    next.delete('action');
+    setSearchParams(next, { replace: true });
+  }, [openPromptBind, searchParams, setSearchParams, systems]);
 
   // ===== 仓库删除 =====
   const handleDeleteRepository = useCallback(

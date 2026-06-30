@@ -2,6 +2,7 @@ package com.company.codeinsight.modules.scanner.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.company.codeinsight.common.exception.BusinessException;
+import com.company.codeinsight.common.storage.TaskWorkspacePaths;
 import com.company.codeinsight.modules.repository.entity.CodeRepository;
 import com.company.codeinsight.modules.repository.mapper.CodeRepositoryMapper;
 import com.company.codeinsight.modules.scanner.entity.CodeFileSnapshot;
@@ -55,6 +56,9 @@ public class CodeScannerServiceImpl implements CodeScannerService {
     @Autowired
     private SqlSessionFactory sqlSessionFactory;
 
+    @Autowired
+    private TaskWorkspacePaths taskWorkspacePaths;
+
     /** 快照批量写入大小，减少 DB 往返次数 */
     private static final int SNAPSHOT_BATCH_SIZE = 500;
 
@@ -80,8 +84,8 @@ public class CodeScannerServiceImpl implements CodeScannerService {
             throw new BusinessException("未找到关联的代码库配置");
         }
 
-        // 确定该任务的临时存放目录 (temp_repos/task_{taskId})
-        File targetDir = new File("temp_repos/task_" + taskId);
+        // 确定该任务的临时存放目录 (workspace-root/task_{taskId})
+        File targetDir = taskWorkspacePaths.taskProjectDir(taskId);
         // 清理上一次运行残留的临时旧目录
         deleteDirectory(targetDir);
 
