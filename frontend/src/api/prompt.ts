@@ -23,7 +23,6 @@ export const listPrompts = (params: {
   current: number;
   size: number;
   name?: string;
-  status?: number;
   /** MODULARIZE-模块提取 / DOCUMENT_GENERATION-文档生成 */
   promptType?: 'MODULARIZE' | 'DOCUMENT_GENERATION' | string;
   /** 生命周期过滤：DRAFT / RELEASED / ARCHIVED */
@@ -46,10 +45,6 @@ export const updatePrompt = (id: number, data: Partial<Prompt>): Promise<Prompt>
 
 export const clonePrompt = (id: number): Promise<Prompt> => {
   return request.post(`/prompts/${id}/clone`);
-};
-
-export const changePromptStatus = (id: number, status: number): Promise<void> => {
-  return request.put(`/prompts/${id}/status`, null, { params: { status } });
 };
 
 /**

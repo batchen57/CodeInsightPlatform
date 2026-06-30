@@ -19,6 +19,7 @@ import {
 import {
   ArrowLeftOutlined,
   CloseCircleOutlined,
+  ExclamationCircleOutlined,
   SyncOutlined,
 } from '@ant-design/icons';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -29,9 +30,13 @@ import {
   type RepositoryReadiness,
 } from '../../api/task';
 import { listPrompts } from '../../api/prompt';
-import { listRepositories } from '../../api/repository';
+import { listRepositories, getRepository } from '../../api/repository';
 import { listSystems } from '../../api/system';
 import { listModels } from '../../api/model';
+import {
+  buildScanConfigWithDefaults,
+  parseRepoEntryScanConfig,
+} from '../systems/repositoryUtils';
 import type {
   AiModel,
   EntryScanConfig,
@@ -43,31 +48,6 @@ import type {
 const { Text } = Typography;
 
 const DEFAULT_EXCLUDE_CLASSPATHS = ['**/*Test', '**/*Tests', '**/*TestCase'];
-
-const buildScanConfigWithDefaults = (
-  config: EntryScanConfig | Record<string, unknown> | undefined,
-): EntryScanConfig => {
-  const base = (config || {}) as EntryScanConfig;
-  return {
-    ...base,
-    excludeClasspaths:
-      Array.isArray(base.excludeClasspaths) && base.excludeClasspaths.length > 0
-        ? base.excludeClasspaths
-        : DEFAULT_EXCLUDE_CLASSPATHS,
-  };
-};
-
-const parseRepoEntryScanConfig = (repo: Repository | undefined) => {
-  if (!repo?.entryScanConfig) return buildScanConfigWithDefaults(undefined);
-  if (typeof repo.entryScanConfig === 'string') {
-    try {
-      return buildScanConfigWithDefaults(JSON.parse(repo.entryScanConfig));
-    } catch {
-      return buildScanConfigWithDefaults(undefined);
-    }
-  }
-  return buildScanConfigWithDefaults(repo.entryScanConfig);
-};
 
 /**
  * 「手动下发」全屏页签
@@ -106,6 +86,24 @@ const TaskDispatchPage: React.FC = () => {
 
   const selectedSystemId = Form.useWatch('systemId', form);
   const selectedRepositoryId = Form.useWatch('repositoryId', form);
+
+  /** 从仓库详情拉取 entryScanConfig 并写入表单（避免列表接口/加载时序导致未带出） */
+  const applyRepositoryScanConfig = useCallback(
+    async (repositoryId?: number) => {
+      if (!repositoryId) {
+        form.setFieldsValue({ entryScanConfig: buildScanConfigWithDefaults(undefined) });
+        return;
+      }
+      try {
+        const repo = await getRepository(repositoryId);
+        form.setFieldsValue({ entryScanConfig: parseRepoEntryScanConfig(repo) });
+      } catch {
+        const repo = repositories.find((r) => r.id === repositoryId);
+        form.setFieldsValue({ entryScanConfig: parseRepoEntryScanConfig(repo) });
+      }
+    },
+    [form, repositories],
+  );
 
   // 选中的系统对象（用于只读展示绑定的提示词）
   const selectedSystem: System | undefined = systems.find((s) => s.id === selectedSystemId);
@@ -147,7 +145,7 @@ const TaskDispatchPage: React.FC = () => {
     const needDocument = selectedSystem.documentPromptId;
     const fetchOne = async (type: 'MODULARIZE' | 'DOCUMENT_GENERATION', id?: number | null) => {
       if (id == null) return null;
-      const all = await listPrompts({ current: 1, size: 200, status: 1, promptType: type });
+      const all = await listPrompts({ current: 1, size: 200, lifecycle: 'RELEASED', promptType: type });
       return all.records.find((p) => p.id === id) || null;
     };
     if (needModularize && !modularizeById[needModularize]) {
@@ -214,29 +212,28 @@ const TaskDispatchPage: React.FC = () => {
       setRepositories([]);
       return;
     }
-    listRepositories({ current: 1, size: 50, systemId: selectedSystemId }).then((data) => {
+    listRepositories({ current: 1, size: 50, systemId: selectedSystemId }).then(async (data) => {
       setRepositories(data.records);
-      const currentRepoId = form.getFieldValue('repositoryId');
+      const currentRepoId = form.getFieldValue('repositoryId') as number | undefined;
       if (currentRepoId && !data.records.some((r) => r.id === currentRepoId)) {
         form.setFieldValue('repositoryId', undefined);
+        form.setFieldsValue({ entryScanConfig: buildScanConfigWithDefaults(undefined) });
+      } else if (currentRepoId) {
+        await applyRepositoryScanConfig(currentRepoId);
       }
     });
-  }, [form, selectedSystemId]);
+  }, [applyRepositoryScanConfig, form, selectedSystemId]);
 
-  // 仓库变化 → 用仓库默认配置初始化 entryScanConfig
+  // 仓库变化 → 拉取仓库详情并初始化 entryScanConfig
   useEffect(() => {
-    if (!selectedRepositoryId) {
-      form.setFieldValue('entryScanConfig', buildScanConfigWithDefaults(undefined));
-      return;
-    }
-    const repo = repositories.find((r) => r.id === selectedRepositoryId);
-    form.setFieldValue('entryScanConfig', parseRepoEntryScanConfig(repo));
-  }, [form, repositories, selectedRepositoryId]);
+    applyRepositoryScanConfig(selectedRepositoryId);
+  }, [applyRepositoryScanConfig, selectedRepositoryId]);
 
   const handleNext = async () => {
     if (currentStep === 0) {
       const vals = await form.validateFields(['systemId', 'repositoryId']);
       if (!(await ensureReadinessOrBlock(vals.systemId, vals.repositoryId))) return;
+      await applyRepositoryScanConfig(vals.repositoryId);
     } else if (currentStep === 1) {
       await form.validateFields(['taskType', 'modelName']);
     }
@@ -273,17 +270,12 @@ const TaskDispatchPage: React.FC = () => {
     }
   };
 
-  const handleSyncRepoScanConfig = () => {
+  const handleSyncRepoScanConfig = async () => {
     if (!selectedRepositoryId) {
       message.warning('请先选择仓库');
       return;
     }
-    const repo = repositories.find((r) => r.id === selectedRepositoryId);
-    if (!repo) {
-      message.warning('未找到当前仓库');
-      return;
-    }
-    form.setFieldsValue({ entryScanConfig: parseRepoEntryScanConfig(repo) });
+    await applyRepositoryScanConfig(selectedRepositoryId);
     message.success('已恢复为仓库默认配置');
   };
 
@@ -464,18 +456,20 @@ const TaskDispatchPage: React.FC = () => {
                 >
                   <div>
                     <Text type="secondary" style={{ fontSize: 12 }}>扫描规则</Text>
-                    <Tooltip title="配置仅对该任务生效；任一入口列表为空即走默认 Controller/JOB/MQ 识别">
-                      <Text type="secondary" style={{ fontSize: 12, marginLeft: 6 }}>（不配置走默认）</Text>
+                    <Tooltip title="选中仓库时,扫描规则会自动带出仓库的 entryScanConfig；点击「重置」可恢复为仓库默认配置。">
+                      <ExclamationCircleOutlined style={{ color: '#faad14', marginLeft: 6, fontSize: 12 }} />
                     </Tooltip>
                   </div>
-                  <Button
-                    size="small"
-                    icon={<SyncOutlined />}
-                    onClick={handleSyncRepoScanConfig}
-                    disabled={!selectedRepositoryId}
-                  >
-                    同步仓库配置
-                  </Button>
+                  <Tooltip title="重置为仓库配置">
+                    <Button
+                      size="small"
+                      icon={<SyncOutlined />}
+                      onClick={handleSyncRepoScanConfig}
+                      disabled={!selectedRepositoryId}
+                    >
+                      重置
+                    </Button>
+                  </Tooltip>
                 </div>
                 <Row gutter={[8, 6]}>
                   <Col xs={24} md={12}>
@@ -622,15 +616,18 @@ const TaskDispatchPage: React.FC = () => {
             position: 'fixed',
             inset: 0,
             background: 'rgba(0,0,0,0.45)',
-            zIndex: 1100,
+            zIndex: 1500,
             display: 'flex',
-            alignItems: 'center',
+            alignItems: 'flex-end',
             justifyContent: 'center',
           }}
           onClick={() => setReadinessModalOpen(false)}
         >
           <Card
-            style={{ width: 640 }}
+            style={{ width: 720, height: 'calc(100vh - 24px)', margin: '24px auto 0' }}
+            styles={{
+              
+            }}
             title={
               <Space>
                 <CloseCircleOutlined style={{ color: '#c4485d' }} />
@@ -653,10 +650,26 @@ const TaskDispatchPage: React.FC = () => {
             }
             onClick={(e) => e.stopPropagation()}
           >
-            <Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
-              根据「历史任务所有文件已确认」的产品规则，全局仍有 {readiness?.unconfirmedCount ?? 0}
-              个草稿处于 DRAFT / EDITING / REJECTED 状态。请先前往复核工作区完成确认或驳回处置，然后再回到这里新建任务。
-            </Text>
+            {/* 顶部红色 Alert：明确告诉用户当前是"待复核/待确认"状态 */}
+            <Alert
+              type="error"
+              showIcon
+              message={
+                <Space size={6}>
+                  <Text strong>检测到 {readiness?.unconfirmedCount ?? 0} 个待处理草稿</Text>
+                  <Text type="secondary" style={{ fontSize: 12 }}>
+                    (DRAFT / EDITING / REJECTED)
+                  </Text>
+                </Space>
+              }
+              description={
+                <Text>
+                  根据「历史任务所有文件已确认」的产品规则，全局仍有 {readiness?.unconfirmedCount ?? 0}
+                  个草稿处于 待复核 / 待确认 状态。请先前往复核工作区完成确认或驳回处置，然后再回到这里新建任务。
+                </Text>
+              }
+              style={{ marginBottom: 12 }}
+            />
             <Table
               size="small"
               pagination={false}

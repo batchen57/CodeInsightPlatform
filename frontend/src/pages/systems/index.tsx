@@ -1,18 +1,28 @@
 import React, { useCallback, useState } from 'react';
-import { Card, Space, Table, message } from 'antd';
+import { Card, Form, Space, Table, message } from 'antd';
 import { useNavigate } from 'react-router-dom';
 import {
   changeSystemState,
   deleteSystem,
   updateSystem,
 } from '../../api/system';
-import { deleteRepository } from '../../api/repository';
+import {
+  createRepository,
+  deleteRepository,
+  testRepositoryConnection,
+  updateRepository,
+} from '../../api/repository';
 import type { Repository, System, SystemState } from '../../types';
 import { getSystemColumns } from './columns';
 import SystemFilterBar from './SystemFilterBar';
+import SystemFormModal, { type SystemFormValues } from './SystemFormModal';
 import SystemWizardModal from './SystemWizardModal';
+import SystemPromptBindModal from './SystemPromptBindModal';
 import SystemStatusTag from '../../components/SystemStatusTag';
 import RepositoryDrawer from './RepositoryDrawer';
+import RepositoryFormModal, { type RepositoryFormValues } from './RepositoryFormModal';
+import RepositoryScanConfigModal, { type ScanConfigFormValues } from './RepositoryScanConfigModal';
+import { parseRepoEntryScanConfig } from './repositoryUtils';
 import { useRepositories, useSystemsList } from './hooks';
 
 /**
@@ -35,18 +45,43 @@ const Systems: React.FC = () => {
   const [wizardOpen, setWizardOpen] = useState(false);
   const openWizard = useCallback(() => setWizardOpen(true), []);
 
-  // ===== 编辑基本信息（无向导，仅改 name/nameCn/owner/description）=====
+  // ===== 编辑基本信息（name / nameCn / owner / description）=====
+  const [editModalOpen, setEditModalOpen] = useState(false);
+  const [editingSystem, setEditingSystem] = useState<System | null>(null);
+  const [editSubmitting, setEditSubmitting] = useState(false);
+  const [editForm] = Form.useForm<SystemFormValues>();
+
   const handleEdit = useCallback(
-    async (record: System) => {
-      const name = window.prompt('修改系统名称', record.name);
-      if (name && name !== record.name) {
-        await updateSystem(record.id, { name });
-        message.success('已更新');
-        list.fetch();
-      }
+    (record: System) => {
+      setEditingSystem(record);
+      editForm.setFieldsValue({
+        name: record.name,
+        nameCn: record.nameCn,
+        owner: record.owner,
+        description: record.description,
+      });
+      setEditModalOpen(true);
     },
-    [list],
+    [editForm],
   );
+
+  const handleEditSubmit = useCallback(async () => {
+    if (!editingSystem) return;
+    try {
+      const values = await editForm.validateFields();
+      setEditSubmitting(true);
+      await updateSystem(editingSystem.id, values);
+      message.success('系统信息已更新');
+      setEditModalOpen(false);
+      setEditingSystem(null);
+      list.fetch();
+    } catch (err) {
+      if (err && typeof err === 'object' && 'errorFields' in err) return;
+      console.error(err);
+    } finally {
+      setEditSubmitting(false);
+    }
+  }, [editForm, editingSystem, list]);
 
   // ===== 启停切换 =====
   const handleStatusToggle = useCallback(
@@ -88,6 +123,13 @@ const Systems: React.FC = () => {
     setDrawerOpen(true);
   }, []);
 
+  // ===== 提示词聚焦编辑弹窗 =====
+  const [promptBindOpen, setPromptBindOpen] = useState(false);
+  const openPromptBind = useCallback((system: System) => {
+    setSelectedSystem(system);
+    setPromptBindOpen(true);
+  }, []);
+
   // ===== 仓库删除 =====
   const handleDeleteRepository = useCallback(
     async (repo: Repository) => {
@@ -112,9 +154,121 @@ const Systems: React.FC = () => {
     [navigate],
   );
 
+  // ===== 代码库添加 / 编辑 =====
+  const [repoModalOpen, setRepoModalOpen] = useState(false);
+  const [editingRepo, setEditingRepo] = useState<Repository | null>(null);
+  const [repoTesting, setRepoTesting] = useState(false);
+  const [repoSubmitting, setRepoSubmitting] = useState(false);
+  const [repoForm] = Form.useForm<RepositoryFormValues>();
+
+  const openAddRepo = useCallback(() => {
+    if (!selectedSystem) return;
+    setEditingRepo(null);
+    repoForm.resetFields();
+    repoForm.setFieldsValue({ branch: 'main', scanRoot: '/' });
+    setRepoModalOpen(true);
+  }, [repoForm, selectedSystem]);
+
+  const openEditRepo = useCallback(
+    (repo: Repository) => {
+      setEditingRepo(repo);
+      repoForm.setFieldsValue({
+        gitUrl: repo.gitUrl,
+        branch: repo.branch,
+        scanRoot: repo.scanRoot,
+        username: repo.username,
+        password: repo.password,
+        excludeDirs: repo.excludeDirs,
+        excludeFileTypes: repo.excludeFileTypes,
+      });
+      setRepoModalOpen(true);
+    },
+    [repoForm],
+  );
+
+  const handleRepoSubmit = useCallback(async () => {
+    if (!selectedSystem) return;
+    try {
+      const values = await repoForm.validateFields();
+      setRepoSubmitting(true);
+      if (editingRepo) {
+        await updateRepository(editingRepo.id, { id: editingRepo.id, ...values });
+        message.success('代码库已更新');
+      } else {
+        await createRepository({ systemId: selectedSystem.id, ...values });
+        message.success('代码库已添加');
+      }
+      setRepoModalOpen(false);
+      setEditingRepo(null);
+      repoHook.refresh(selectedSystem.id);
+      list.fetch();
+    } catch (err) {
+      if (err && typeof err === 'object' && 'errorFields' in err) return;
+      console.error(err);
+    } finally {
+      setRepoSubmitting(false);
+    }
+  }, [editingRepo, list, repoForm, repoHook, selectedSystem]);
+
+  const handleRepoTest = useCallback(async () => {
+    try {
+      const values = await repoForm.validateFields(['gitUrl', 'branch', 'username', 'password']);
+      setRepoTesting(true);
+      const payload = editingRepo ? { id: editingRepo.id, ...values } : values;
+      const ok = await testRepositoryConnection(payload);
+      if (ok) message.success('Git 连接测试成功');
+      else message.error('Git 连接测试失败');
+    } catch (err) {
+      if (err && typeof err === 'object' && 'errorFields' in err) return;
+      console.error(err);
+    } finally {
+      setRepoTesting(false);
+    }
+  }, [editingRepo, repoForm]);
+
+  // ===== 代码库入口扫描规则 =====
+  const [scanModalOpen, setScanModalOpen] = useState(false);
+  const [scanConfigRepo, setScanConfigRepo] = useState<Repository | null>(null);
+  const [scanSubmitting, setScanSubmitting] = useState(false);
+  const [scanForm] = Form.useForm<ScanConfigFormValues>();
+
+  const openScanConfig = useCallback(
+    (repo: Repository) => {
+      setScanConfigRepo(repo);
+      scanForm.setFieldsValue({ entryScanConfig: parseRepoEntryScanConfig(repo) });
+      setScanModalOpen(true);
+    },
+    [scanForm],
+  );
+
+  const handleScanConfigSubmit = useCallback(async () => {
+    if (!scanConfigRepo || !selectedSystem) return;
+    try {
+      const values = await scanForm.validateFields();
+      setScanSubmitting(true);
+      await updateRepository(scanConfigRepo.id, {
+        id: scanConfigRepo.id,
+        entryScanConfig: values.entryScanConfig
+          ? JSON.stringify(values.entryScanConfig)
+          : null,
+      } as Partial<Repository>);
+      message.success('入口扫描规则已保存');
+      setScanModalOpen(false);
+      setScanConfigRepo(null);
+      repoHook.refresh(selectedSystem.id);
+      list.fetch();
+    } catch (err) {
+      if (err && typeof err === 'object' && 'errorFields' in err) return;
+      console.error(err);
+    } finally {
+      setScanSubmitting(false);
+    }
+  }, [list, repoHook, scanConfigRepo, scanForm, selectedSystem]);
+
   // ===== 列配置 =====
   const systemColumns = getSystemColumns({
     onEdit: handleEdit,
+    onEditPrompts: openPromptBind,
     onOpenDetail: openDetailDrawer,
     onDelete: handleDeleteSystem,
     onStatusToggle: handleStatusToggle,
@@ -178,20 +332,65 @@ const Systems: React.FC = () => {
         }}
       />
 
+      <SystemFormModal
+        open={editModalOpen}
+        form={editForm}
+        submitting={editSubmitting}
+        onCancel={() => {
+          setEditModalOpen(false);
+          setEditingSystem(null);
+        }}
+        onSubmit={handleEditSubmit}
+      />
+
       <RepositoryDrawer
         open={drawerOpen}
         system={selectedSystem}
         repositories={repoHook.repositories}
         loading={repoHook.loading}
         onClose={() => setDrawerOpen(false)}
-        onAddRepo={() => {
-          // 直接用 wizard 的 Step 2 入口；为简化这里直接打开 drawer + 用户自己点添加
-        }}
-        onEditRepo={() => {
-          // 编辑入口已删除（向导内统一配置）
-        }}
+        onAddRepo={openAddRepo}
+        onEditRepo={openEditRepo}
         onDeleteRepo={handleDeleteRepository}
         onScan={handleScan}
+        onScanConfig={openScanConfig}
+      />
+
+      <SystemPromptBindModal
+        open={promptBindOpen}
+        system={selectedSystem}
+        onClose={() => {
+          setPromptBindOpen(false);
+          setSelectedSystem(null);
+        }}
+        onSaved={() => {
+          list.fetch();
+        }}
+      />
+
+      <RepositoryFormModal
+        open={repoModalOpen}
+        editing={!!editingRepo}
+        testing={repoTesting}
+        submitting={repoSubmitting}
+        form={repoForm}
+        onCancel={() => {
+          setRepoModalOpen(false);
+          setEditingRepo(null);
+        }}
+        onSubmit={handleRepoSubmit}
+        onTest={handleRepoTest}
+      />
+
+      <RepositoryScanConfigModal
+        open={scanModalOpen}
+        form={scanForm}
+        submitting={scanSubmitting}
+        onCancel={() => {
+          setScanModalOpen(false);
+          setScanConfigRepo(null);
+        }}
+        onSubmit={handleScanConfigSubmit}
       />
     </div>
   );

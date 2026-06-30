@@ -1,5 +1,5 @@
 import { Button, Popconfirm, Space, Switch, Tag, Tooltip, Typography } from 'antd';
-import { DeleteOutlined, EditOutlined, SettingOutlined } from '@ant-design/icons';
+import { DeleteOutlined, EditOutlined, FileTextOutlined, SettingOutlined } from '@ant-design/icons';
 import type { System, SystemState } from '../../types';
 import SystemStatusTag from '../../components/SystemStatusTag';
 
@@ -12,6 +12,8 @@ export interface SystemColumnHandlers {
   onDelete: (system: System) => void;
   /** 启用 / 停用：state 在 PROMPT_CONFIGURED / ACTIVE / DISABLED 之间切换 */
   onStatusToggle: (nextActive: boolean, system: System) => void;
+  /** 修改系统提示词绑定 */
+  onEditPrompts: (system: System) => void;
 }
 
 /**
@@ -136,6 +138,13 @@ export const getSystemColumns = (handlers: SystemColumnHandlers) => [
       <Space size={6} wrap>
         <Button size="small" icon={<EditOutlined />} onClick={() => handlers.onEdit(record)}>
           编辑
+        </Button>
+        <Button
+          size="small"
+          icon={<FileTextOutlined />}
+          onClick={() => handlers.onEditPrompts(record)}
+        >
+          提示词
         </Button>
         <Button
           size="small"

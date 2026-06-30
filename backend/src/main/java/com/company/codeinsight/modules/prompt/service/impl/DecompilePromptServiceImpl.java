@@ -73,24 +73,39 @@ public class DecompilePromptServiceImpl extends ServiceImpl<DecompilePromptMappe
     private final HttpClient httpClient = HttpClient.newBuilder().build();
 
     /**
-     * 分页查询提示词模板，支持按名称/状态/用途（MODULARIZE / DOCUMENT_GENERATION）过滤，按创建时间倒序排列
+     * 分页查询提示词模板，支持按名称/状态/用途/生命周期/分类/scope 过滤，按创建时间倒序排列
+     * <p>category + scopeId 过滤规则:</p>
+     * <ul>
+     *     <li>category=DEFAULT(或不传) → 不按 scope 过滤(全局可见,基础配置 → 提示词页用)</li>
+     *     <li>category=USER + scopeId=N → 只看 scope_id=N 的 USER 提示词(系统/仓库配置用,互不可见)</li>
+     *     <li>category=USER 不传 scopeId → 查所有 USER(罕见,调试用)</li>
+     * </ul>
      */
     @Override
-    public Page<DecompilePrompt> listPromptsPage(int current, int size, String name, Integer status, String promptType, String lifecycle) {
+    public Page<DecompilePrompt> listPromptsPage(int current, int size, String name,
+                                                 String promptType, String lifecycle, String category,
+                                                 Long scopeId) {
         Page<DecompilePrompt> page = new Page<>(current, size);
         LambdaQueryWrapper<DecompilePrompt> queryWrapper = new LambdaQueryWrapper<>();
         queryWrapper.like(StringUtils.hasText(name), DecompilePrompt::getName, name)
-                .eq(status != null, DecompilePrompt::getStatus, status)
                 .eq(StringUtils.hasText(promptType), DecompilePrompt::getPromptType, promptType)
-                .eq(StringUtils.hasText(lifecycle), DecompilePrompt::getLifecycle, lifecycle)
-                .orderByDesc(DecompilePrompt::getCreatedAt);
+                .eq(StringUtils.hasText(lifecycle), DecompilePrompt::getLifecycle, lifecycle);
+        // category 过滤
+        if (StringUtils.hasText(category)) {
+            queryWrapper.eq(DecompilePrompt::getCategory, category);
+            // USER 类且指定 scopeId 时,只看该 scope 的
+            if ("USER".equalsIgnoreCase(category) && scopeId != null) {
+                queryWrapper.eq(DecompilePrompt::getScopeId, scopeId);
+            }
+        }
+        queryWrapper.orderByDesc(DecompilePrompt::getCreatedAt);
         return this.page(page, queryWrapper);
     }
 
     /**
      * 复制/克隆提示词模板
-     * 无论源是 DRAFT/RELEASED/ARCHIVED, 复制都生成 version=1、status=0、is_default=0、lifecycle=DRAFT 的草稿;
-     * 用户可继续编辑/试跑/发布。
+     * 无论源是 DRAFT/RELEASED/ARCHIVED, 复制都生成 version=源版本+1、is_default=0、lifecycle=DRAFT 的草稿;
+     * 分类(category) 和 scope_id 与源一致 — 保持同 scope 内可继续编辑/试跑/发布。
      */
     @Override
     public DecompilePrompt clonePrompt(Long id) {
@@ -101,11 +116,13 @@ public class DecompilePromptServiceImpl extends ServiceImpl<DecompilePromptMappe
         DecompilePrompt cloned = new DecompilePrompt();
         cloned.setName(original.getName() + " - 副本");
         cloned.setContent(original.getContent());
-        cloned.setVersion(1);
-        cloned.setStatus(0); // 默认禁用
+        // 版本号：在源版本基础上 +1（源为 null 时从 1 开始）
+        cloned.setVersion(original.getVersion() == null ? 1 : original.getVersion() + 1);
         cloned.setIsDefault(0); // 默认非默认
         cloned.setPromptType(normalizePromptType(original.getPromptType()));
         cloned.setLifecycle(DecompilePrompt.LIFECYCLE_DRAFT); // 副本为草稿
+        cloned.setCategory(original.getCategory()); // 保持同分类
+        cloned.setScopeId(original.getScopeId()); // 保持同 scope
         this.save(cloned);
         return cloned;
     }
@@ -152,8 +169,8 @@ public class DecompilePromptServiceImpl extends ServiceImpl<DecompilePromptMappe
     }
 
     /**
-     * 同 promptType 下其他提示词的 is_default 批量清零(为新默认让位)。
-     * <p>仅当传入 isDefault=1 时生效(避免误清零其他默认)。</p>
+     * 同 promptType 下其他 DEFAULT 提示词的 is_default 批量清零(为新默认让位)。
+     * <p>仅作用于 DEFAULT 类别;USER 提示词的 is_default 永远不会被清零。</p>
      */
     private void clearDefaultPrompts(String promptType, Long excludeId, Integer isDefault) {
         if (isDefault == null || isDefault != 1) {
@@ -161,37 +178,12 @@ public class DecompilePromptServiceImpl extends ServiceImpl<DecompilePromptMappe
         }
         LambdaUpdateWrapper<DecompilePrompt> updateWrapper = new LambdaUpdateWrapper<DecompilePrompt>()
                 .eq(DecompilePrompt::getPromptType, normalizePromptType(promptType))
+                .eq(DecompilePrompt::getCategory, "DEFAULT")  // 仅清零 DEFAULT 类别
                 .set(DecompilePrompt::getIsDefault, 0);
         if (excludeId != null) {
             updateWrapper.ne(DecompilePrompt::getId, excludeId);
         }
         this.update(updateWrapper);
-    }
-
-    /**
-     * 修改提示词状态（0-禁用, 1-启用）
-     * 并且在此提示词是默认模板时，排他性地将同 {@code prompt_type} 下的其他模板降为非默认。
-     */
-    @Override
-    public void changeStatus(Long id, Integer status) {
-        DecompilePrompt prompt = this.getById(id);
-        if (prompt == null) {
-            throw new BusinessException("提示词不存在");
-        }
-        if (status != 0 && status != 1) {
-            throw new BusinessException("状态非法");
-        }
-        prompt.setStatus(status);
-        this.updateById(prompt);
-
-        // 如果被启用，且是默认模板，将同类型的其它模板降为非默认（不同类型互不影响）
-        if (status == 1 && prompt.getIsDefault() != null && prompt.getIsDefault() == 1) {
-            String promptType = normalizePromptType(prompt.getPromptType());
-            this.update(new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<DecompilePrompt>()
-                    .ne(DecompilePrompt::getId, id)
-                    .eq(DecompilePrompt::getPromptType, promptType)
-                    .set(DecompilePrompt::getIsDefault, 0));
-        }
     }
 
     /**
@@ -231,7 +223,7 @@ public class DecompilePromptServiceImpl extends ServiceImpl<DecompilePromptMappe
                 : task.getDocumentPromptId();
         if (explicitId != null) {
             DecompilePrompt hit = this.baseMapper.selectById(explicitId);
-            if (hit != null && Integer.valueOf(1).equals(hit.getStatus())
+            if (hit != null && hit.isReleased()
                     && promptType.equals(hit.getPromptType())) {
                 return hit.getContent();
             }
@@ -248,7 +240,7 @@ public class DecompilePromptServiceImpl extends ServiceImpl<DecompilePromptMappe
                         : system.getDocumentPromptId();
                 if (systemPromptId != null) {
                     DecompilePrompt hit = this.baseMapper.selectById(systemPromptId);
-                    if (hit != null && Integer.valueOf(1).equals(hit.getStatus())
+                    if (hit != null && hit.isReleased()
                             && promptType.equals(hit.getPromptType())) {
                         return hit.getContent();
                     }
@@ -262,7 +254,7 @@ public class DecompilePromptServiceImpl extends ServiceImpl<DecompilePromptMappe
                 new LambdaQueryWrapper<DecompilePrompt>()
                         .eq(DecompilePrompt::getPromptType, promptType)
                         .eq(DecompilePrompt::getIsDefault, 1)
-                        .eq(DecompilePrompt::getStatus, 1)
+                        .eq(DecompilePrompt::getLifecycle, DecompilePrompt.LIFECYCLE_RELEASED)
                         .last("LIMIT 1")
         );
         return fallback != null ? fallback.getContent() : null;

@@ -1,7 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Avatar, Badge, Button, Dropdown, Layout, Menu, Space, Tag, Tooltip, Typography } from 'antd';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
-import PageTabs from '../components/PageTabs';
 import TabLink from '../components/TabLink';
 import {
   ApartmentOutlined,
@@ -17,6 +16,7 @@ import {
   FileSearchOutlined,
   FileTextOutlined,
   HistoryOutlined,
+  HourglassOutlined,
   KeyOutlined,
   LogoutOutlined,
   MenuFoldOutlined,
@@ -108,9 +108,7 @@ const dashboardNav: NavItem[] = [
 /**
  * 知识生成 大类：端到端知识生产流水线（生产侧）
  *
- * 知识构建任务下 3 个已实现的子页（任务查询 / JOB配置 / 手动下发）不再挂在某个父菜单下，
- * 全部独立成菜单项。Tasks 容器内的对应 Tab 仍然保留。
- * 注：原 Tasks 容器中还有一个『任务队列』Tab，但尚未有对应的路由实现，因此未加入菜单。
+ * 知识构建任务下 4 个子页（任务查询 / 任务队列 / JOB配置 / 手动下发）均通过侧栏独立入口访问。
  */
 const knowledgeNav: NavItem[] = [
   {
@@ -126,6 +124,13 @@ const knowledgeNav: NavItem[] = [
     label: <TabLink to="/tasks/query">任务查询</TabLink>,
     title: '任务查询',
     description: '按系统 / 状态 / 类型多维查询知识构建任务实例，支持启动 / 终止 / 重试 / 进入复核。',
+  },
+  {
+    key: '/tasks/queue',
+    icon: <HourglassOutlined />,
+    label: <TabLink to="/tasks/queue">任务队列</TabLink>,
+    title: '任务队列',
+    description: '查看排队中的 PENDING 任务，调整优先级或取消排队。',
   },
   {
     key: '/tasks/jobs',
@@ -255,6 +260,25 @@ const navFlatMap = new Map<string, NavItem>([
 // 兜底 currentPage：取基础配置第一项（保证页面顶部 kicker / title 一定有值）
 const fallbackCurrentPage = basicNav[0];
 
+/** 四大类导航分组的展示名（顺序与侧边栏渲染顺序一致） */
+const NAV_GROUPS: ReadonlyArray<{ key: string; label: string; items: NavItem[] }> = [
+  { key: 'basic', label: '基础配置', items: basicNav },
+  { key: 'knowledge', label: '知识生成', items: knowledgeNav },
+  { key: 'knowledge-browse', label: '知识查看', items: knowledgeBrowseNav },
+  { key: 'dashboard', label: '仪表盘 / 看板', items: dashboardNav },
+];
+
+/** 在四大类中查找指定 key 所属的分组（含子项）；找不到返回 null。 */
+function findGroupForKey(key: string): { group: typeof NAV_GROUPS[number]; parent: NavItem | null } | null {
+  for (const group of NAV_GROUPS) {
+    for (const item of group.items) {
+      if (item.key === key) return { group, parent: null };
+      if (item.children?.some((c) => c.key === key)) return { group, parent: item };
+    }
+  }
+  return null;
+}
+
 /**
  * 计算 selectedKey 与 openKeys：
  * - selectedKey 取最深匹配的菜单 key（子菜单优先于父菜单）
@@ -262,9 +286,11 @@ const fallbackCurrentPage = basicNav[0];
  * - openKeys 取所有祖先父菜单 key
  */
 const computeMenuState = (pathname: string) => {
-  let selectedKey = basicNav[0].key;
+  // 关键修复:不要把 default key 预先塞进 selectedKeys。
+  // 否则访问其他页面时,选中的菜单项始终包含 basicNav[0] = "/basic/models",造成"多选"假象。
+  let selectedKey: string | null = null;
   let bestDepth = -1;
-  const selectedKeys = new Set<string>([selectedKey]);
+  const selectedKeys = new Set<string>();
   const openKeys = new Set<string>();
 
   const visit = (item: NavItem, ancestors: string[]) => {
@@ -351,8 +377,14 @@ const BasicLayout: React.FC = () => {
   // 实时估算当前页面配置数据以更新页头标题解释
   // 优先取子菜单（如 /tasks/jobs 命中"JOB配置"），否则回退到仪表盘第一项
   const currentPage = useMemo(
-    () => navFlatMap.get(selectedKey) ?? fallbackCurrentPage,
-    [selectedKey],
+    () => (selectedKey ? navFlatMap.get(selectedKey) : null) ?? fallbackCurrentPage,
+    [selectedKey ?? 'null'],
+  );
+
+  // 当前页面所属分组（用于标题区 eyebrow 标签展示）
+  const currentPageGroup = useMemo(
+    () => (currentPage ? findGroupForKey(currentPage.key)?.group ?? null : null),
+    [currentPage],
   );
 
   const handleLogout = () => {
@@ -364,8 +396,8 @@ const BasicLayout: React.FC = () => {
     <Layout className="ci-shell">
       {/* 响应式侧边栏配置 */}
       <Sider
-        width={236}
-        collapsedWidth={isMobile ? 0 : 72}
+        width={208}
+        collapsedWidth={isMobile ? 0 : 64}
         collapsed={collapsed}
         trigger={null}
         breakpoint="lg"
@@ -388,7 +420,8 @@ const BasicLayout: React.FC = () => {
           )}
         </div>
 
-        {/* 侧边栏菜单列表：按 基础配置 / 知识生成 / 知识查看 / 仪表盘 四大类分段渲染 */}
+        {/* 侧边栏菜单区:仅此区独立纵向滚动,brand + footer 保持固定不动 */}
+        <div className="ci-sider-body">
         {/* 第 1 段：基础配置 */}
         <div className="ci-sider-section">
           {!collapsed && <span className="ci-sider-label">基础配置</span>}
@@ -451,6 +484,7 @@ const BasicLayout: React.FC = () => {
             className="ci-menu"
           />
         </div>
+        </div>{/* end ci-sider-body */}
 
         {/* 侧边栏底部:用户信息 + 登出 */}
         <div className="ci-sider-footer">
@@ -514,6 +548,11 @@ const BasicLayout: React.FC = () => {
             </Tooltip>
             <span className="ci-header-divider" aria-hidden="true" />
             <div className="ci-header-context-info">
+              {currentPageGroup && (
+                <Tag className="ci-header-context-eyebrow" color="blue">
+                  {currentPageGroup.label}
+                </Tag>
+              )}
               <Text className="ci-header-context-title">{currentPage.title}</Text>
               {currentPage.description && (
                 <Text type="secondary" className="ci-header-context-desc">
@@ -546,7 +585,6 @@ const BasicLayout: React.FC = () => {
 
         {/* 页面正文内容渲染 */}
         <Content className="ci-content">
-          <PageTabs />
           <Outlet />
         </Content>
       </Layout>

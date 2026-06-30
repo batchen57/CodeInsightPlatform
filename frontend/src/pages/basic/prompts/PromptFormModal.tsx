@@ -1,4 +1,4 @@
-import { Form, Input, Modal, Switch } from 'antd';
+import { Form, Input, Modal } from 'antd';
 import type { FormInstance } from 'antd/es/form';
 import type React from 'react';
 import type { Prompt } from '../../../types';
@@ -27,9 +27,6 @@ const PromptFormModal: React.FC<PromptFormModalProps> = ({ open, promptTypeLabel
       </Form.Item>
       <Form.Item name="content" label="提示词内容" rules={[{ required: true, message: '请输入提示词内容' }]}>
         <Input.TextArea autoSize={{ minRows: 14, maxRows: 24 }} className="ci-code-input" />
-      </Form.Item>
-      <Form.Item name="isDefault" valuePropName="checked">
-        <Switch checkedChildren="默认" unCheckedChildren="普通" />
       </Form.Item>
     </Form>
   </Modal>

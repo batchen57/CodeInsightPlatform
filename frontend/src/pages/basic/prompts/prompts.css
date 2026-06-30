@@ -1,3 +1,49 @@
+.ci-prompts-page .ci-prompt-kpi-row {
+  align-items: stretch;
+}
+
+.ci-prompts-page .ci-prompt-kpi-card {
+  height: 100%;
+}
+
+.ci-prompts-page .ci-prompt-kpi-card .ant-card-body {
+  display: flex;
+  min-height: 92px;
+  align-items: flex-start;
+}
+
+.ci-prompts-page .ci-prompt-kpi-stat {
+  width: 100%;
+  min-width: 0;
+}
+
+.ci-prompts-page .ci-prompt-kpi-stat .ant-statistic-title {
+  margin-bottom: 8px;
+  font-size: 13px;
+  line-height: 1.4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ci-prompts-page .ci-prompt-kpi-stat .ant-statistic-content {
+  display: flex;
+  align-items: center;
+  min-height: 32px;
+}
+
+.ci-prompts-page .ci-prompt-kpi-stat .ant-statistic-content-value {
+  font-size: 24px;
+  line-height: 1.2;
+}
+
+.ci-prompts-page .ci-prompt-kpi-stat--text .ant-statistic-content-value {
+  overflow: hidden;
+  font-size: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .ci-prompts-page .ci-prompt-library .ant-card-body {
   display: flex;
   flex-direction: column;

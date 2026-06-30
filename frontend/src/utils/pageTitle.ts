@@ -20,6 +20,7 @@ export const PATH_META: Record<string, PathMeta> = {
   '/basic/quota': { title: '流量管控', parent: '基础配置' },
 
   '/tasks/query': { title: '任务查询', parent: '知识构建任务' },
+  '/tasks/queue': { title: '任务队列', parent: '知识构建任务' },
   '/tasks/dispatch': { title: '手动下发', parent: '知识构建任务' },
   '/tasks/jobs': { title: 'JOB配置', parent: '知识构建任务' },
   '/tasks/jobs/new': { title: '新建定时任务', parent: '知识构建任务' },

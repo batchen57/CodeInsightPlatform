@@ -10,7 +10,7 @@ import lombok.EqualsAndHashCode;
 
 /**
  * AI 代码分析提示词模板实体类
- * 对应数据库中的 ci_prompt 表，存储系统内置或人工调试优化的 Prompt 核心模板正文、版本号及启用状态。
+ * 对应数据库中的 ci_prompt 表，存储系统内置或人工调试优化的 Prompt 核心模板正文、版本号及生命周期状态。
  * <p>
  * 通过 {@link #promptType} 区分用途：
  * <ul>
@@ -70,11 +70,6 @@ public class DecompilePrompt extends BaseEntity {
     private Integer version;
 
     /**
-     * 模板状态：0-禁用, 1-启用
-     */
-    private Integer status;
-
-    /**
      * 是否是任务分析时默认使用的全局首选模板：0-否, 1-是
      */
     private Integer isDefault;
@@ -96,5 +91,23 @@ public class DecompilePrompt extends BaseEntity {
      * <p>默认 RELEASED 以保持向后兼容；新建提示词可显式指定 DRAFT。</p>
      */
     private String lifecycle;
+
+    /**
+     * 提示词分类
+     * <p>DEFAULT = 全局默认提示词(基础配置 → 提示词页管理,通过 is_default=1 标识真正启用项)</p>
+     * <p>USER = 用户自定义提示词(按 scope_id 隔离,不同 scope 互不可见)</p>
+     */
+    private String category;
+
+    /**
+     * USER 提示词的 scope ID
+     * <p>标识该 USER 提示词归属哪个配置上下文(系统 ID 或 仓库 ID);DEFAULT 提示词此字段为 NULL(全局可见)</p>
+     */
+    private Long scopeId;
+
+    /** 是否已发布、可用于流水线与设为默认 */
+    public boolean isReleased() {
+        return LIFECYCLE_RELEASED.equals(lifecycle);
+    }
 }
 

@@ -95,9 +95,9 @@ const GROUP_LABELS: Record<GroupKey, { label: string; hint: string }> = {
 /**
  * 「任务查询」页签
  *
- * 简单搜索：顶部一个关键字输入框（按任务 ID 或 AI 模型名匹配）
- * 精准搜索：可展开的高级过滤面板（系统/状态/类型/触发源/模型名/创建时间）
- * 状态分组 chips：与搜索条件正交叠加
+ * 简单搜索：按系统筛选
+ * 精准搜索：可展开的高级过滤面板（状态/类型/触发源/模型名/创建时间）
+ * 状态分组 chips：与搜索条件正交叠加；列表默认按创建时间倒序
  */
 const TaskListTab: React.FC = () => {
   const navigate = useNavigate();
@@ -109,11 +109,10 @@ const TaskListTab: React.FC = () => {
   const [current, setCurrent] = useState(1);
   const [size, setSize] = useState(10);
 
-  // 简单搜索关键字
-  const [keyword, setKeyword] = useState('');
+  // 简单搜索：按系统筛选
+  const [filterSystemId, setFilterSystemId] = useState<number | undefined>();
 
   // 精准搜索条件
-  const [filterSystemId, setFilterSystemId] = useState<number | undefined>();
   const [filterStatus, setFilterStatus] = useState<string | undefined>();
   const [filterType, setFilterType] = useState<string | undefined>();
   const [filterTriggerSource, setFilterTriggerSource] = useState<string | undefined>();
@@ -147,7 +146,6 @@ const TaskListTab: React.FC = () => {
         const data = await listTasks({
           current: page,
           size: pageSize,
-          keyword: keyword.trim() || undefined,
           systemId: filterSystemId,
           status: filterStatus,
           statuses: groupStatuses ?? undefined,
@@ -166,7 +164,6 @@ const TaskListTab: React.FC = () => {
     [
       current,
       size,
-      keyword,
       filterSystemId,
       filterStatus,
       filterType,
@@ -188,7 +185,7 @@ const TaskListTab: React.FC = () => {
 
   const loadOptions = useCallback(async () => {
     try {
-      const sysData = await listSystems({ current: 1, size: 100, status: 1 });
+      const sysData = await listSystems({ current: 1, size: 200 });
       setSystems(sysData.records);
     } catch {
       // ignore
@@ -473,16 +470,21 @@ const TaskListTab: React.FC = () => {
       <Card className="ci-filter-card">
         <Row gutter={[12, 12]} align="middle">
           <Col xs={24} md={10}>
-            <Input.Search
+            <Select
               allowClear
-              placeholder="简单搜索：任务 ID 或 AI 模型名"
-              enterButton
-              value={keyword}
-              onChange={(e) => setKeyword(e.target.value)}
-              onSearch={() => {
+              showSearch
+              placeholder="简单搜索：选择系统"
+              style={{ width: '100%' }}
+              value={filterSystemId}
+              optionFilterProp="label"
+              onChange={(v) => {
+                setFilterSystemId(v);
                 setCurrent(1);
-                fetchTasks(1, size);
               }}
+              options={systems.map((s) => ({
+                value: s.id,
+                label: s.nameCn ? `${s.name}（${s.nameCn}）` : s.name,
+              }))}
             />
           </Col>
           <Col xs={24} md={14}>
@@ -496,7 +498,7 @@ const TaskListTab: React.FC = () => {
               <Button
                 icon={<ReloadOutlined />}
                 onClick={() => {
-                  setKeyword('');
+                  setFilterSystemId(undefined);
                   handleResetAdvanced();
                 }}
               >
@@ -525,19 +527,6 @@ const TaskListTab: React.FC = () => {
               showArrow: false,
               children: (
                 <Row gutter={[12, 12]}>
-                  <Col xs={24} md={6}>
-                    <Select
-                      placeholder="系统"
-                      allowClear
-                      style={{ width: '100%' }}
-                      value={filterSystemId}
-                      onChange={(v) => {
-                        setFilterSystemId(v);
-                        setCurrent(1);
-                      }}
-                      options={systems.map((s) => ({ value: s.id, label: s.name }))}
-                    />
-                  </Col>
                   <Col xs={24} md={6}>
                     <Select
                       placeholder="状态"
@@ -614,7 +603,7 @@ const TaskListTab: React.FC = () => {
       </Card>
 
       {/* 任务表 */}
-      <Card title="任务执行队列" style={{ marginTop: 12 }}>
+      <Card title="任务列表" style={{ marginTop: 12 }}>
         <Table
           dataSource={tasks}
           columns={columns}

@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   Button,
+  Card,
   Form,
   Input,
   Modal,
@@ -16,6 +17,8 @@ import {
   ArrowLeftOutlined,
   ArrowRightOutlined,
   CheckCircleOutlined,
+  EditOutlined,
+  PlusOutlined,
   SyncOutlined,
 } from '@ant-design/icons';
 import { createSystem, updateSystem } from '../../api/system';
@@ -27,6 +30,8 @@ import {
 import { listPrompts } from '../../api/prompt';
 import type { Repository, System, EntryScanConfig, Prompt } from '../../types';
 import EntryScanConfigEditor from '../../components/EntryScanConfigEditor';
+import SystemPromptEditorModal from './SystemPromptEditorModal';
+import SystemPromptTrialModal from './SystemPromptTrialModal';
 
 const { Text, Paragraph } = Typography;
 
@@ -76,6 +81,7 @@ const SystemWizardModal: React.FC<Props> = ({ open, initialSystemId, onClose, on
   const [submitting, setSubmitting] = useState(false);
 
   const [systemId, setSystemId] = useState<number | null>(initialSystemId ?? null);
+  const [systemName, setSystemName] = useState<string>('');
   const [repoId, setRepoId] = useState<number | null>(null);
 
   const [systemForm] = Form.useForm<SystemFormValues>();
@@ -88,6 +94,16 @@ const SystemWizardModal: React.FC<Props> = ({ open, initialSystemId, onClose, on
 
   const [prompts, setPrompts] = useState<Prompt[]>([]);
   const [promptsLoading, setPromptsLoading] = useState(false);
+
+  /** Step 4:提示词编辑器弹窗状态(自定义/复制默认) */
+  const [editorState, setEditorState] = useState<{
+    open: boolean;
+    mode: 'custom' | 'clone-default';
+    promptType: 'MODULARIZE' | 'DOCUMENT_GENERATION';
+  } | null>(null);
+  /** 试跑弹窗:用已选中的 prompt 直接试跑 */
+  const [trialPrompt, setTrialPrompt] = useState<Prompt | null>(null);
+  const [trialOpen, setTrialOpen] = useState(false);
 
   // 重置 wizard 状态
   useEffect(() => {
@@ -107,7 +123,7 @@ const SystemWizardModal: React.FC<Props> = ({ open, initialSystemId, onClose, on
     try {
       const all: Prompt[] = [];
       for (const t of Object.values(DEFAULT_PROMPTS)) {
-        const res = await listPrompts({ current: 1, size: 200, status: 1, promptType: t.key });
+        const res = await listPrompts({ current: 1, size: 200, lifecycle: 'RELEASED', promptType: t.key });
         all.push(...res.records);
       }
       setPrompts(all);
@@ -133,7 +149,7 @@ const SystemWizardModal: React.FC<Props> = ({ open, initialSystemId, onClose, on
 
   const modularizeOptions = useMemo(
     () => prompts
-      .filter((p) => p.promptType === 'MODULARIZE' && p.status === 1)
+      .filter((p) => p.promptType === 'MODULARIZE' && p.lifecycle === 'RELEASED')
       .map((p) => ({
         value: p.id,
         label: `${p.name} (v${p.version})${p.isDefault === 1 ? ' · 默认' : ''}`,
@@ -142,13 +158,62 @@ const SystemWizardModal: React.FC<Props> = ({ open, initialSystemId, onClose, on
   );
   const documentOptions = useMemo(
     () => prompts
-      .filter((p) => p.promptType === 'DOCUMENT_GENERATION' && p.status === 1)
+      .filter((p) => p.promptType === 'DOCUMENT_GENERATION' && p.lifecycle === 'RELEASED')
       .map((p) => ({
         value: p.id,
         label: `${p.name} (v${p.version})${p.isDefault === 1 ? ' · 默认' : ''}`,
       })),
     [prompts],
   );
+
+  // 当前已选中的 prompt(根据 form 字段实时计算);进入 Step 4 时若未选则自动用全局默认
+  const selectedModularize = useMemo(() => {
+    const id = promptForm.getFieldValue('modularizePromptId') as number | undefined | null;
+    if (!id) return null;
+    return prompts.find((p) => p.id === id) ?? null;
+  }, [prompts, /* form 字段变化触发 */ editorState, trialOpen]);
+  const selectedDocument = useMemo(() => {
+    const id = promptForm.getFieldValue('documentPromptId') as number | undefined | null;
+    if (!id) return null;
+    return prompts.find((p) => p.id === id) ?? null;
+  }, [prompts, editorState, trialOpen]);
+
+  // 进入 Step 4:拉取完默认提示词后,自动填充 form(若用户尚未选过)
+  useEffect(() => {
+    if (currentStep !== 3) return;
+    if (prompts.length === 0) return;
+    if (!promptForm.getFieldValue('modularizePromptId') && defaultModularize) {
+      promptForm.setFieldValue('modularizePromptId', defaultModularize.id);
+    }
+    if (!promptForm.getFieldValue('documentPromptId') && defaultDocument) {
+      promptForm.setFieldValue('documentPromptId', defaultDocument.id);
+    }
+  }, [currentStep, prompts, defaultModularize, defaultDocument, promptForm]);
+
+  /** Step 4 交互处理 */
+  const handleSelectExisting = (promptType: 'MODULARIZE' | 'DOCUMENT_GENERATION', id: number) => {
+    const fieldName = promptType === 'MODULARIZE' ? 'modularizePromptId' : 'documentPromptId';
+    promptForm.setFieldValue(fieldName, id);
+  };
+  const openCustomPrompt = (promptType: 'MODULARIZE' | 'DOCUMENT_GENERATION') => {
+    setEditorState({ open: true, mode: 'custom', promptType });
+  };
+  const openTrial = (p: Prompt) => {
+    setTrialPrompt(p);
+    setTrialOpen(true);
+  };
+  /** 提示词创建成功 → 自动绑定到对应字段并刷新列表 */
+  const handlePromptCreated = async (p: Prompt) => {
+    const fieldName =
+      p.promptType === 'MODULARIZE' ? 'modularizePromptId' : 'documentPromptId';
+    promptForm.setFieldValue(fieldName, p.id);
+    // 把新 prompt 合并到本地列表(后续列表/试跑都要用)
+    setPrompts((prev) => {
+      if (prev.some((x) => x.id === p.id)) return prev;
+      return [...prev, p];
+    });
+    message.success(`已绑定提示词:${p.name}`);
+  };
 
   /** Step 1: 基本信息 */
   const handleStep1Submit = async () => {
@@ -163,6 +228,8 @@ const SystemWizardModal: React.FC<Props> = ({ open, initialSystemId, onClose, on
         setSystemId(sys.id);
       }
       setSystemId(sys.id);
+      // 同步记录系统名称,后续 Step 4 创建自定义提示词时用作命名前缀
+      setSystemName(sys.name ?? values.name ?? '');
       message.success('基本信息已保存');
       setCurrentStep(1);
     } finally {
@@ -227,13 +294,18 @@ const SystemWizardModal: React.FC<Props> = ({ open, initialSystemId, onClose, on
     }
   };
 
+  /** Step 4:提示词(必须两项都选,不再兜底默认) */
   const handleStep4Submit = async () => {
     const values = await promptForm.validateFields();
+    if (!values.modularizePromptId || !values.documentPromptId) {
+      message.error('请为模块提取 / 文档生成提示词各选择一个提示词');
+      return;
+    }
     setSubmitting(true);
     try {
       await updateSystem(systemId!, {
-        modularizePromptId: values.modularizePromptId ?? null,
-        documentPromptId: values.documentPromptId ?? null,
+        modularizePromptId: values.modularizePromptId,
+        documentPromptId: values.documentPromptId,
       });
       message.success('提示词已绑定，系统进入「已配提示词」状态');
       onCompleted(systemId!);
@@ -370,12 +442,19 @@ const SystemWizardModal: React.FC<Props> = ({ open, initialSystemId, onClose, on
             form={scanForm}
             layout="vertical"
             initialValues={{
-              entryScanConfig: { excludeClasspaths: DEFAULT_EXCLUDE },
+              entryScanConfig: {
+                includeAnnotations: ['RestController', 'Controller', 'RequestMapping'],
+                includeClasspaths: [],
+                includeExtends: [],
+                excludeClasspaths: DEFAULT_EXCLUDE,
+                excludePackages: [],
+                excludeAnnotations: ['Deprecated'],
+              },
             }}
           >
             <Space style={{ marginBottom: 12 }}>
               <Button icon={<SyncOutlined />} onClick={handleFillDefaultScan}>
-                填入默认扫描规则
+                重置
               </Button>
             </Space>
             <Form.Item
@@ -397,58 +476,118 @@ const SystemWizardModal: React.FC<Props> = ({ open, initialSystemId, onClose, on
             showIcon
             style={{ marginBottom: 16 }}
             message={
-              <Space direction="vertical">
-                <Text>
-                  为系统绑定模块提取 / 文档生成提示词。未选择时任务运行会回退到「基础配置 → 默认提示词」页面设定的默认项。
+              <Space direction="vertical" size={4}>
+                <Text>系统绑定模块提取 / 文档生成提示词，初始默认绑定到「全局默认提示词」。</Text>
+                <Text type="secondary">
+                  点击「自定义」可基于全局默认提示词复制修改并保存为该系统专属的提示词(自动以「系统名 - 类型 - 时间戳」命名)。
                 </Text>
-                {(defaultModularize || defaultDocument) && (
-                  <Text type="secondary">
-                    当前默认提示词：
-                    {defaultModularize && <Tag color="gold">模块={defaultModularize.name} (v{defaultModularize.version})</Tag>}
-                    {defaultDocument && <Tag color="gold">文档={defaultDocument.name} (v{defaultDocument.version})</Tag>}
-                  </Text>
-                )}
               </Space>
             }
           />
-          <Form
-            form={promptForm}
-            layout="vertical"
-            initialValues={{
-              modularizePromptId: defaultModularize?.id,
-              documentPromptId: defaultDocument?.id,
-            }}
+
+          {/* 模块提取提示词 */}
+          <Card
+            size="small"
+            style={{ marginBottom: 12 }}
+            title={
+              <Space>
+                <span>{DEFAULT_PROMPTS.MODULARIZE.label}</span>
+                {selectedModularize && (
+                  <Tag color="green">
+                    {selectedModularize.name} (v{selectedModularize.version})
+                    {selectedModularize.isDefault === 1 ? ' · 默认' : ' · 自定义'}
+                  </Tag>
+                )}
+              </Space>
+            }
+            extra={
+              <Space size={4} wrap>
+                <Select
+                  showSearch
+                  optionFilterProp="label"
+                  placeholder="选择已有提示词"
+                  style={{ width: 320 }}
+                  value={selectedModularize?.id}
+                  onChange={(id) => handleSelectExisting('MODULARIZE', id)}
+                  options={modularizeOptions}
+                  loading={promptsLoading}
+                  allowClear
+                />
+                <Button
+                  icon={<PlusOutlined />}
+                  onClick={() => openCustomPrompt('MODULARIZE')}
+                >
+                  自定义
+                </Button>
+                {selectedModularize && (
+                  <Button
+                    size="small"
+                    type="link"
+                    onClick={() => openTrial(selectedModularize)}
+                  >
+                    试跑
+                  </Button>
+                )}
+              </Space>
+            }
           >
-            <Form.Item
-              name="modularizePromptId"
-              label={DEFAULT_PROMPTS.MODULARIZE.label}
-              tooltip="AI_ANALYZING / MODULE_HIERARCHY 阶段使用；留空则使用「默认提示词」"
-            >
-              <Select
-                allowClear
-                placeholder="选择提示词（留空使用默认）"
-                options={modularizeOptions}
-                loading={promptsLoading}
-                showSearch
-                optionFilterProp="label"
-              />
-            </Form.Item>
-            <Form.Item
-              name="documentPromptId"
-              label={DEFAULT_PROMPTS.DOCUMENT_GENERATION.label}
-              tooltip="GENERATING_DOC 阶段使用；留空则使用「默认提示词」"
-            >
-              <Select
-                allowClear
-                placeholder="选择提示词（留空使用默认）"
-                options={documentOptions}
-                loading={promptsLoading}
-                showSearch
-                optionFilterProp="label"
-              />
-            </Form.Item>
-          </Form>
-          <Paragraph type="secondary" style={{ marginTop: 16 }}>
+            {!selectedModularize && (
+              <Text type="secondary">未选择。点击右上角「自定义」创建该系统专属的提示词。</Text>
+            )}
+          </Card>
+
+          {/* 文档生成提示词 */}
+          <Card
+            size="small"
+            style={{ marginBottom: 12 }}
+            title={
+              <Space>
+                <span>{DEFAULT_PROMPTS.DOCUMENT_GENERATION.label}</span>
+                {selectedDocument && (
+                  <Tag color="green">
+                    {selectedDocument.name} (v{selectedDocument.version})
+                    {selectedDocument.isDefault === 1 ? ' · 默认' : ' · 自定义'}
+                  </Tag>
+                )}
+              </Space>
+            }
+            extra={
+              <Space size={4} wrap>
+                <Select
+                  showSearch
+                  optionFilterProp="label"
+                  placeholder="选择已有提示词"
+                  style={{ width: 320 }}
+                  value={selectedDocument?.id}
+                  onChange={(id) => handleSelectExisting('DOCUMENT_GENERATION', id)}
+                  options={documentOptions}
+                  loading={promptsLoading}
+                  allowClear
+                />
+                <Button
+                  icon={<PlusOutlined />}
+                  onClick={() => openCustomPrompt('DOCUMENT_GENERATION')}
+                >
+                  自定义
+                </Button>
+                {selectedDocument && (
+                  <Button
+                    size="small"
+                    type="link"
+                    onClick={() => openTrial(selectedDocument)}
+                  >
+                    试跑
+                  </Button>
+                )}
+              </Space>
+            }
+          >
+            {!selectedDocument && (
+              <Text type="secondary">未选择。请从右上角的下拉框选择已有提示词，或「自定义 / 复制默认后修改」创建新提示词。</Text>
+            )}
+          </Card>
+
+          <Paragraph type="secondary" style={{ marginTop: 8 }}>
             提交后系统状态将进入「已配提示词 (PROMPT_CONFIGURED)」。你可以在系统列表点「启用」按钮将其激活为 ACTIVE。
           </Paragraph>
         </>
@@ -485,6 +624,47 @@ const SystemWizardModal: React.FC<Props> = ({ open, initialSystemId, onClose, on
           </Button>
         )}
       </div>
+
+      {/* Step 4:提示词编辑器弹窗(自定义 / 复制默认后修改) */}
+      {editorState && (
+        <SystemPromptEditorModal
+          open={editorState.open}
+          mode={editorState.mode}
+          sourcePrompt={
+            editorState.mode === 'clone-default'
+              ? editorState.promptType === 'MODULARIZE'
+                ? defaultModularize
+                : defaultDocument
+              : null
+          }
+          defaultPrompt={
+            editorState.promptType === 'MODULARIZE' ? defaultModularize : defaultDocument
+          }
+          systemName={systemName}
+          promptType={editorState.promptType}
+          promptTypeLabel={
+            editorState.promptType === 'MODULARIZE'
+              ? DEFAULT_PROMPTS.MODULARIZE.label
+              : DEFAULT_PROMPTS.DOCUMENT_GENERATION.label
+          }
+          onClose={() => setEditorState(null)}
+          onCreated={handlePromptCreated}
+        />
+      )}
+
+      {/* 试跑子弹窗(对已绑定 prompt) */}
+      {trialPrompt && (
+        <SystemPromptTrialModal
+          open={trialOpen}
+          prompt={trialPrompt}
+          promptTypeLabel={
+            trialPrompt.promptType === 'MODULARIZE'
+              ? DEFAULT_PROMPTS.MODULARIZE.label
+              : DEFAULT_PROMPTS.DOCUMENT_GENERATION.label
+          }
+          onClose={() => setTrialOpen(false)}
+        />
+      )}
     </Modal>
   );
 };

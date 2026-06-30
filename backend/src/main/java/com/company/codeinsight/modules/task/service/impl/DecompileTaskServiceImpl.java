@@ -422,7 +422,7 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
                 new LambdaQueryWrapper<com.company.codeinsight.modules.prompt.entity.DecompilePrompt>()
                         .eq(com.company.codeinsight.modules.prompt.entity.DecompilePrompt::getPromptType, promptType)
                         .eq(com.company.codeinsight.modules.prompt.entity.DecompilePrompt::getIsDefault, 1)
-                        .eq(com.company.codeinsight.modules.prompt.entity.DecompilePrompt::getStatus, 1)
+                        .eq(com.company.codeinsight.modules.prompt.entity.DecompilePrompt::getLifecycle, com.company.codeinsight.modules.prompt.entity.DecompilePrompt.LIFECYCLE_RELEASED)
                         .last("LIMIT 1")
         );
         return prompt != null ? prompt.getId() : null;
@@ -721,14 +721,14 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
         final String fallback = "你是一个代码归纳助手，请对以下代码的业务功能进行高度归纳。";
         if (task.getDocumentPromptId() != null) {
             com.company.codeinsight.modules.prompt.entity.DecompilePrompt prompt = promptMapper.selectById(task.getDocumentPromptId());
-            if (prompt != null && Integer.valueOf(1).equals(prompt.getStatus())) return prompt.getContent();
+            if (prompt != null && com.company.codeinsight.modules.prompt.entity.DecompilePrompt.LIFECYCLE_RELEASED.equals(prompt.getLifecycle())) return prompt.getContent();
         }
         // 兜底：DOCUMENT_GENERATION 默认
         com.company.codeinsight.modules.prompt.entity.DecompilePrompt defaultPrompt = promptMapper.selectOne(
                 new LambdaQueryWrapper<com.company.codeinsight.modules.prompt.entity.DecompilePrompt>()
                         .eq(com.company.codeinsight.modules.prompt.entity.DecompilePrompt::getPromptType, com.company.codeinsight.modules.prompt.entity.DecompilePrompt.TYPE_DOCUMENT_GENERATION)
                         .eq(com.company.codeinsight.modules.prompt.entity.DecompilePrompt::getIsDefault, 1)
-                        .eq(com.company.codeinsight.modules.prompt.entity.DecompilePrompt::getStatus, 1)
+                        .eq(com.company.codeinsight.modules.prompt.entity.DecompilePrompt::getLifecycle, com.company.codeinsight.modules.prompt.entity.DecompilePrompt.LIFECYCLE_RELEASED)
                         .last("LIMIT 1")
         );
         if (defaultPrompt != null) {

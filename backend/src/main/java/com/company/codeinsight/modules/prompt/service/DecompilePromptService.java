@@ -18,14 +18,17 @@ public interface DecompilePromptService extends IService<DecompilePrompt> {
     /**
      * 分页、条件查询提示词模板列表
      *
-     * @param current    页码（从 1 开始）
-     * @param size       每页条数
-     * @param name       模板名称模糊关键字（可为 null）
-     * @param status     状态过滤：0-禁用 / 1-启用（可为 null）
-     * @param promptType 提示词用途过滤：{@code MODULARIZE} / {@code DOCUMENT_GENERATION}（可为 null 表示全部）
-     * @param lifecycle  生命周期过滤：{@code DRAFT} / {@code RELEASED} / {@code ARCHIVED}（可为 null 表示全部）
+     * @param current     页码（从 1 开始）
+     * @param size        每页条数
+     * @param name        模板名称模糊关键字（可为 null）
+     * @param promptType  提示词用途过滤：{@code MODULARIZE} / {@code DOCUMENT_GENERATION}（可为 null 表示全部）
+     * @param lifecycle   生命周期过滤：{@code DRAFT} / {@code RELEASED} / {@code ARCHIVED}（可为 null 表示全部）
+     * @param category    提示词分类：{@code DEFAULT} / {@code USER}（可为 null 表示全部）
+     * @param scopeId     USER 提示词的 scope ID（与 category=USER 配合使用，null 表示不按 scope 过滤）
      */
-    Page<DecompilePrompt> listPromptsPage(int current, int size, String name, Integer status, String promptType, String lifecycle);
+    Page<DecompilePrompt> listPromptsPage(int current, int size, String name,
+                                         String promptType, String lifecycle, String category,
+                                         Long scopeId);
 
     /**
      * 克隆复制指定 ID 提示词模板以创建一条全新副本
@@ -44,11 +47,6 @@ public interface DecompilePromptService extends IService<DecompilePrompt> {
      * 归档已发布：RELEASED → ARCHIVED,历史保留。
      */
     DecompilePrompt archivePrompt(Long id);
-
-    /**
-     * 变更指定提示词的使用状态（1-启用, 0-禁用）
-     */
-    void changeStatus(Long id, Integer status);
 
     /**
      * 对提示词模板中的各种自定义占位符变量（如 ${code} 等）进行动态文本替换
@@ -78,7 +76,7 @@ public interface DecompilePromptService extends IService<DecompilePrompt> {
      * 解析顺序：
      * <ol>
      *     <li>任务记录中显式保存的提示词版本（{@code modularizePromptVersion} 或 {@code documentPromptVersion}）</li>
-     *     <li>任务未指定 → 取同 {@code prompt_type} 下 is_default=1 且 status=1 的默认版本</li>
+     *     <li>任务未指定 → 取同 {@code prompt_type} 下 is_default=1 且 lifecycle=RELEASED 的默认版本</li>
      *     <li>都不存在 → 返回 null，由调用方按各自阶段的 classpath 兜底处理</li>
      * </ol>
      *

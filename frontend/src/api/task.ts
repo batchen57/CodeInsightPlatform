@@ -38,7 +38,7 @@ export const listTasks = (params: {
   scheduleId?: number;
   /** 按触发来源过滤：MANUAL / SCHEDULED */
   triggerSource?: 'MANUAL' | 'SCHEDULED' | string;
-  /** 简单搜索：纯数字按 id 精确匹配，否则按 model_name LIKE */
+  /** @deprecated 任务查询简单搜索已改为按 systemId 筛选 */
   keyword?: string;
   /** 精准搜索：模型名精确匹配 */
   modelName?: string;

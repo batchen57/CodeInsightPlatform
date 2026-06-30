@@ -39,8 +39,8 @@ public class DecompilePromptServiceTests {
         prompt.setName("Decompile Class summary template");
         prompt.setContent("Please analyze class ${class_name} and methods ${method_name}. Code:\n${source_code}");
         prompt.setVersion(1);
-        prompt.setStatus(1);
         prompt.setIsDefault(0);
+        prompt.setLifecycle(DecompilePrompt.LIFECYCLE_RELEASED);
         prompt.setPromptType("MODULARIZE");
 
         // Save
@@ -70,10 +70,12 @@ public class DecompilePromptServiceTests {
         Assertions.assertTrue(result.contains("MyController"));
         Assertions.assertTrue(result.contains("getData"));
 
-        // Status change
-        decompilePromptService.changeStatus(prompt.getId(), 0);
-        DecompilePrompt statusChanged = decompilePromptService.getById(prompt.getId());
-        Assertions.assertEquals(0, statusChanged.getStatus());
+        // Archive released prompt
+        prompt.setLifecycle(DecompilePrompt.LIFECYCLE_RELEASED);
+        decompilePromptService.updateById(prompt);
+        decompilePromptService.archivePrompt(prompt.getId());
+        DecompilePrompt archived = decompilePromptService.getById(prompt.getId());
+        Assertions.assertEquals(DecompilePrompt.LIFECYCLE_ARCHIVED, archived.getLifecycle());
 
         // Delete
         boolean removed = decompilePromptService.removeById(prompt.getId());
@@ -86,8 +88,8 @@ public class DecompilePromptServiceTests {
         prompt.setName("Trial Run Test");
         prompt.setContent("Class: ${class_name}, Method: ${method_name}, Code: ${source_code}");
         prompt.setVersion(1);
-        prompt.setStatus(1);
         prompt.setIsDefault(0);
+        prompt.setLifecycle(DecompilePrompt.LIFECYCLE_RELEASED);
         prompt.setPromptType("MODULARIZE");
         decompilePromptService.save(prompt);
 
@@ -130,8 +132,8 @@ public class DecompilePromptServiceTests {
         prompt.setName("Trial Run Configured Model Test");
         prompt.setContent("Class: ${class_name}, Method: ${method_name}, Code: ${source_code}");
         prompt.setVersion(1);
-        prompt.setStatus(1);
         prompt.setIsDefault(0);
+        prompt.setLifecycle(DecompilePrompt.LIFECYCLE_RELEASED);
         prompt.setPromptType("MODULARIZE");
         decompilePromptService.save(prompt);
 
@@ -148,8 +150,8 @@ public class DecompilePromptServiceTests {
         prompt.setName("Trial Run Stream Test");
         prompt.setContent("Class: ${class_name}, Method: ${method_name}, Code: ${source_code}");
         prompt.setVersion(1);
-        prompt.setStatus(1);
         prompt.setIsDefault(0);
+        prompt.setLifecycle(DecompilePrompt.LIFECYCLE_RELEASED);
         prompt.setPromptType("MODULARIZE");
         decompilePromptService.save(prompt);
 

@@ -90,12 +90,12 @@ export const router = createHashRouter([
           { path: 'quota', element: <QuotaControl /> },
         ],
       },
-      // 知识构建任务主入口：tabbed 容器
+      // 知识构建任务：子路由由侧栏独立入口访问（无页签壳）
       {
         path: 'tasks',
         element: <Tasks />,
         children: [
-          { index: true, element: <TaskListTab /> }, // 默认 /tasks → 任务查询
+          { index: true, element: <TaskListTab /> },
           { path: 'query', element: <TaskListTab /> },
           { path: 'queue', element: <TaskQueuePage /> },
           { path: 'dispatch', element: <TaskDispatchPage /> },

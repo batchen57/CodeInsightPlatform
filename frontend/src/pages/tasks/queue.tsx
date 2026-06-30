@@ -29,7 +29,7 @@ import { listSystems } from '../../api/system';
 import type { System, Task } from '../../types';
 const { Text } = Typography;
 /**
- * 「任务队列」页签
+ * 「任务队列」页面
  *
  * 展示所有 PENDING 任务，按 priority DESC + created_at ASC 排序。
  * 支持：

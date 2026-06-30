@@ -3,6 +3,7 @@ import type { TableProps } from 'antd';
 import {
   CopyOutlined,
   DeleteOutlined,
+  EditOutlined,
   InboxOutlined,
   PlayCircleOutlined,
   RocketOutlined,
@@ -21,8 +22,8 @@ interface PromptColumnHandlers {
   onEdit: (prompt: Prompt) => void;
   onClone: (prompt: Prompt) => void;
   onDelete: (id: number) => void;
-  onPublish: (id: number) => void;
-  onArchive: (id: number) => void;
+  onPublish: (prompt: Prompt) => void;
+  onArchive: (prompt: Prompt) => void;
   onSetDefault: (id: number) => void;
 }
 
@@ -147,7 +148,7 @@ export const createPromptColumns = ({
                 size="small"
                 type="primary"
                 icon={<RocketOutlined />}
-                onClick={() => onPublish(record.id)}
+                onClick={() => onPublish(record)}
               >
                 发布
               </Button>
@@ -167,6 +168,11 @@ export const createPromptColumns = ({
 
           {lc === 'RELEASED' && (
             <>
+              <Tooltip title="生成新版本草稿">
+                <Button size="small" icon={<EditOutlined />} onClick={() => onEdit(record)}>
+                  编辑
+                </Button>
+              </Tooltip>
               <Button
                 size="small"
                 icon={isDefault ? <StarFilled /> : <StarOutlined />}
@@ -176,7 +182,7 @@ export const createPromptColumns = ({
               >
                 {isDefault ? '当前默认' : '设为默认'}
               </Button>
-              <Button size="small" icon={<InboxOutlined />} onClick={() => onArchive(record.id)}>
+              <Button size="small" icon={<InboxOutlined />} onClick={() => onArchive(record)}>
                 归档
               </Button>
             </>

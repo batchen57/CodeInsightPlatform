@@ -34,14 +34,14 @@ public class DecompilePromptTypeControllerTest {
         Long documentId = decompilePromptController.createPrompt(documentPrompt).getData().getId();
 
         ApiResponse<PageResult<DecompilePrompt>> modularPage =
-            decompilePromptController.listPrompts(1, 20, null, null, "MODULARIZE");
+            decompilePromptController.listPrompts(1, 20, null, "MODULARIZE", null);
         Assertions.assertTrue(modularPage.getData().getRecords().stream()
             .anyMatch(item -> modularId.equals(item.getId())));
         Assertions.assertTrue(modularPage.getData().getRecords().stream()
             .noneMatch(item -> "DOCUMENT_GENERATION".equals(item.getPromptType())));
 
         ApiResponse<PageResult<DecompilePrompt>> documentPage =
-            decompilePromptController.listPrompts(1, 20, null, null, "DOCUMENT_GENERATION");
+            decompilePromptController.listPrompts(1, 20, null, "DOCUMENT_GENERATION", null);
         Assertions.assertTrue(documentPage.getData().getRecords().stream()
             .anyMatch(item -> documentId.equals(item.getId())));
         Assertions.assertTrue(documentPage.getData().getRecords().stream()
@@ -57,7 +57,7 @@ public class DecompilePromptTypeControllerTest {
         DecompilePrompt clonedDocument = decompilePromptController.clonePrompt(documentId).getData();
         Assertions.assertEquals("DOCUMENT_GENERATION", clonedDocument.getPromptType());
         Assertions.assertEquals(0, clonedDocument.getIsDefault());
-        Assertions.assertEquals(0, clonedDocument.getStatus());
+        Assertions.assertEquals(DecompilePrompt.LIFECYCLE_DRAFT, clonedDocument.getLifecycle());
     }
 
     private DecompilePrompt buildPrompt(String name, String promptType, Integer isDefault) {
@@ -65,8 +65,8 @@ public class DecompilePromptTypeControllerTest {
         prompt.setName(name);
         prompt.setContent("Class: ${class_name}, Method: ${method_name}, Code: ${source_code}");
         prompt.setVersion(1);
-        prompt.setStatus(1);
         prompt.setIsDefault(isDefault);
+        prompt.setLifecycle(DecompilePrompt.LIFECYCLE_RELEASED);
         prompt.setPromptType(promptType);
         return prompt;
     }

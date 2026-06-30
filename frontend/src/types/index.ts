@@ -50,7 +50,6 @@ export interface Prompt {
   name: string;
   content: string;
   version: number;
-  status: number; // 0-禁用, 1-启用
   isDefault: number; // 0-否, 1-是
   /** 提示词用途：MODULARIZE-模块提取 / DOCUMENT_GENERATION-文档生成 */
   promptType?: 'MODULARIZE' | 'DOCUMENT_GENERATION' | string;

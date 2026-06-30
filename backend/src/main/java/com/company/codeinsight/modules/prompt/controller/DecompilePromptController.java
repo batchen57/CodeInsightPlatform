@@ -56,16 +56,26 @@ public class DecompilePromptController {
     public ApiResponse<DecompilePrompt> createPrompt(@Valid @RequestBody DecompilePrompt prompt) {
         prompt.setId(null);
         prompt.setVersion(1);
-        prompt.setStatus(1); // 默认启用
         prompt.setPromptType(normalizePromptType(prompt.getPromptType()));
         if (prompt.getIsDefault() == null) {
             prompt.setIsDefault(0);
+        }
+        // category 缺省为 DEFAULT(全局默认);前端可传 USER 表示用户自定义(scope 隔离)
+        if (!StringUtils.hasText(prompt.getCategory())) {
+            prompt.setCategory("DEFAULT");
+        }
+        // USER 类型的提示词必须带 scopeId,用于按仓库/系统隔离
+        if ("USER".equalsIgnoreCase(prompt.getCategory()) && prompt.getScopeId() == null) {
+            throw new BusinessException("USER 类型提示词必须指定 scopeId(归属的仓库或系统 ID)");
         }
         // lifecycle 缺省为 RELEASED(兼容历史);前端可显式传 DRAFT 表示先创建草稿
         if (!StringUtils.hasText(prompt.getLifecycle())) {
             prompt.setLifecycle(DecompilePrompt.LIFECYCLE_RELEASED);
         }
-        clearDefaultPrompts(prompt.getPromptType(), null, prompt.getIsDefault());
+        // "设为默认"只对 DEFAULT 类别生效(避免误把 USER 提示词设为全局默认)
+        if ("DEFAULT".equalsIgnoreCase(prompt.getCategory()) && prompt.getIsDefault() == 1) {
+            clearDefaultPrompts(prompt.getPromptType(), null, prompt.getIsDefault());
+        }
         decompilePromptService.save(prompt);
         operationLogService.logOperation(null, null, "CREATE_PROMPT", "创建提示词模板: " + prompt.getName(), null, true);
         return ApiResponse.success(prompt);
@@ -137,18 +147,7 @@ public class DecompilePromptController {
     }
 
     /**
-     * 修改提示词的使用启用状态（启用 / 禁用）
-     */
-    @Operation(summary = "修改提示词启用状态")
-    @PutMapping("/{id}/status")
-    public ApiResponse<Void> changeStatus(@PathVariable Long id, @RequestParam Integer status) {
-        decompilePromptService.changeStatus(id, status);
-        operationLogService.logOperation(null, null, "CHANGE_PROMPT_STATUS", "修改提示词模板状态, ID: " + id + ", 状态: " + (status == 1 ? "启用" : "禁用"), null, true);
-        return ApiResponse.success();
-    }
-
-    /**
-     * 获取指定 ID 提示词模板详情
+     * 克隆指定的提示词模板，生成一份副本作为基础模板
      */
     @Operation(summary = "提示词模板详情")
     @GetMapping("/{id}")
@@ -170,14 +169,18 @@ public class DecompilePromptController {
             @RequestParam(required = false) String name,
             @RequestParam(required = false) Integer status,
             @RequestParam(required = false) String promptType,
-            @RequestParam(required = false) String lifecycle) {
+            @RequestParam(required = false) String lifecycle,
+            @RequestParam(required = false) String category,
+            @RequestParam(required = false) Long scopeId) {
         Page<DecompilePrompt> page = decompilePromptService.listPromptsPage(
                 current,
                 size,
                 name,
                 status,
                 normalizeOptionalPromptType(promptType),
-                lifecycle);
+                lifecycle,
+                category,
+                scopeId);
         PageResult<DecompilePrompt> result = new PageResult<>(page.getTotal(), page.getSize(), page.getCurrent(), page.getRecords());
         return ApiResponse.success(result);
     }
@@ -225,10 +228,14 @@ public class DecompilePromptController {
         if (prompt == null) {
             throw new BusinessException("提示词模板不存在");
         }
-        if (prompt.getStatus() == null || prompt.getStatus() == 0) {
-            throw new BusinessException("已禁用的提示词不能设为默认");
+        if (!DecompilePrompt.LIFECYCLE_RELEASED.equals(prompt.getLifecycle())) {
+            throw new BusinessException("仅已发布的提示词可设为默认");
         }
-        // 先把同类型下其他提示词的 is_default 清掉
+        // "设为默认"仅对 DEFAULT 类别生效(USER 提示词永远不能成为全局默认)
+        if (!"DEFAULT".equalsIgnoreCase(prompt.getCategory())) {
+            throw new BusinessException("仅 DEFAULT 类别提示词可设为默认;USER 提示词按 scope 隔离使用");
+        }
+        // 先把同类型下其他 DEFAULT 提示词的 is_default 清掉
         clearDefaultPrompts(prompt.getPromptType(), id, 1);
         prompt.setIsDefault(1);
         decompilePromptService.updateById(prompt);

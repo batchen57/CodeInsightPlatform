@@ -16,11 +16,11 @@ import {
   message,
 } from 'antd';
 import {
-  CodeOutlined,
   InboxOutlined,
   PlusOutlined,
   ReloadOutlined,
   StarFilled,
+  StarOutlined,
 } from '@ant-design/icons';
 import {
   archivePrompt,
@@ -59,13 +59,16 @@ const LIFECYCLE_TONE: Record<LifecycleTab, string> = {
   ARCHIVED: '#8c8c8c',
 };
 
+const toPromptType = (type: string | undefined, fallback: PromptType): PromptType =>
+  type === 'DOCUMENT_GENERATION' || type === 'MODULARIZE' ? type : fallback;
+
 /**
  * 「提示词」单页(基础配置 — 基础配置 — 提示词)
  *
  * 集中管理所有提示词:
  *  - 顶部:lifecycle 切换(草稿/已发布/已归档)
  *  - 顶部:promptType 切换(模块提取/文档生成)+ 名称搜索
- *  - 顶部:3 张统计卡(当前默认 / 当前 lifecycle 数 / 当前页数)
+ *  - 顶部:3 张统计卡(当前 lifecycle 数 / 当前 type 总数 / 当前默认)
  *  - 表格:按 lifecycle 动态显示操作
  *    - DRAFT:编辑 / 试跑 / 发布 / 复制 / 删除
  *    - RELEASED:试跑 / 设为默认 / 归档 / 复制
@@ -86,6 +89,12 @@ const PromptsPage: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [current, setCurrent] = useState(1);
   const [size, setSize] = useState(10);
+
+  /** 当前 type 维度聚合统计（与 lifecycle 筛选无关） */
+  const [typeStats, setTypeStats] = useState({
+    totalAll: 0,
+    defaultPrompt: null as Prompt | null,
+  });
 
   // 模态框
   const [formModalOpen, setFormModalOpen] = useState(false);
@@ -130,6 +139,28 @@ const PromptsPage: React.FC = () => {
     }
   }, [current, size, searchName, promptType, lifecycle]);
 
+  /** 拉取当前 type 的总数 / 当前默认（不受 lifecycle Tab 影响） */
+  const fetchTypeStats = useCallback(async () => {
+    try {
+      const [allRes, releasedRes] = await Promise.all([
+        listPrompts({ current: 1, size: 1, promptType }),
+        listPrompts({ current: 1, size: 200, promptType, lifecycle: 'RELEASED' }),
+      ]);
+      const defaultPrompt = releasedRes.records.find((p) => p.isDefault === 1) ?? null;
+      setTypeStats({
+        totalAll: allRes.total,
+        defaultPrompt,
+      });
+    } catch {
+      // ignore
+    }
+  }, [promptType]);
+
+  const refreshAll = useCallback(() => {
+    fetchPrompts();
+    fetchTypeStats();
+  }, [fetchPrompts, fetchTypeStats]);
+
   /** 拉取可用模型(试跑用) */
   const fetchModels = useCallback(async () => {
     try {
@@ -147,6 +178,10 @@ const PromptsPage: React.FC = () => {
   }, [fetchPrompts]);
 
   useEffect(() => {
+    fetchTypeStats();
+  }, [fetchTypeStats]);
+
+  useEffect(() => {
     fetchModels();
   }, [fetchModels]);
 
@@ -155,46 +190,87 @@ const PromptsPage: React.FC = () => {
     setCurrent(1);
   }, [lifecycle, promptType]);
 
+  /** 编辑弹窗打开时回填表单字段 */
+  useEffect(() => {
+    if (formModalOpen && editingPrompt) {
+      form.setFieldsValue({
+        name: editingPrompt.name,
+        content: editingPrompt.content,
+      });
+    } else if (formModalOpen && !editingPrompt) {
+      form.resetFields();
+    }
+  }, [formModalOpen, editingPrompt, form]);
+
   // ========== 表单模态框 ==========
   const openCreateModal = () => {
     setEditingPrompt(null);
     setFormModalType(promptType);
     setFormModalOpen(true);
   };
-  const openEditModal = (p: Prompt) => {
+  const openEditModal = useCallback(async (p: Prompt) => {
+    // 已发布/已归档的提示词:先克隆为新 DRAFT(版本+1),再打开编辑弹窗
+    if (p.lifecycle === 'RELEASED' || p.lifecycle === 'ARCHIVED') {
+      try {
+        const cloned = await clonePrompt(p.id);
+        const clonedType = toPromptType(cloned.promptType, promptType);
+        setEditingPrompt(cloned);
+        setFormModalType(clonedType);
+        setPromptType(clonedType);
+        setLifecycle('DRAFT');
+        setCurrent(1);
+        setFormModalOpen(true);
+        return;
+      } catch {
+        // 拦截器已提示
+        return;
+      }
+    }
+    // DRAFT 提示词:直接打开编辑弹窗
+    const draftType = toPromptType(p.promptType, promptType);
     setEditingPrompt(p);
-    setFormModalType((p.promptType as PromptType) ?? 'MODULARIZE');
+    setFormModalType(draftType);
+    setPromptType(draftType);
     setFormModalOpen(true);
-  };
+  }, [promptType]);
   const handleFormSubmit = async () => {
     try {
       const values = await form.validateFields();
       if (editingPrompt) {
-        await updatePrompt(editingPrompt.id, values);
+        await updatePrompt(editingPrompt.id, {
+          name: values.name,
+          content: values.content,
+        });
         message.success('已更新(版本号 +1)');
+        setPromptType(toPromptType(editingPrompt.promptType, formModalType));
+        setLifecycle('DRAFT');
       } else {
-        // 新建默认是 DRAFT 草稿
+        // 新建默认是 DRAFT 草稿；是否为「当前默认」由发布后单独「设为默认」操作决定
         await createPrompt({
-          ...values,
-          status: values.status ?? 1,
-          isDefault: values.isDefault ?? 0,
+          name: values.name,
+          content: values.content,
+          promptType: formModalType,
+          isDefault: 0,
           lifecycle: 'DRAFT',
         });
         message.success('已创建草稿');
+        setPromptType(formModalType);
+        setLifecycle('DRAFT');
+        setCurrent(1);
       }
       setFormModalOpen(false);
-      fetchPrompts();
+      fetchTypeStats();
     } catch {
       // 拦截器已提示
     }
   };
 
   // ========== 试跑模态框 ==========
-  const openTrial = (p: Prompt) => {
+  const openTrial = useCallback((p: Prompt) => {
     setTrialPrompt(p);
     setTrialResult(null);
     setTrialOpen(true);
-  };
+  }, []);
   const handleTrialRun = async (params: {
     sampleCode: string;
     variables: Record<string, string>;
@@ -222,51 +298,60 @@ const PromptsPage: React.FC = () => {
 
   // ========== 行内操作 ==========
   // onClone 接 Prompt,其余接 id
-  const handleClone = async (p: Prompt) => {
+  const handleClone = useCallback(async (p: Prompt) => {
     try {
       await clonePrompt(p.id);
       message.success('已复制(产生新草稿)');
-      fetchPrompts();
+      setPromptType(toPromptType(p.promptType, promptType));
+      setLifecycle('DRAFT');
+      setCurrent(1);
+      fetchTypeStats();
     } catch {
       // 拦截器已提示
     }
-  };
-  const handleDelete = async (id: number) => {
+  }, [fetchTypeStats, promptType]);
+  const handleDelete = useCallback(async (id: number) => {
     try {
       await deletePrompt(id);
       message.success('已删除');
-      fetchPrompts();
+      refreshAll();
     } catch {
       // 拦截器已提示
     }
-  };
-  const handlePublish = async (id: number) => {
+  }, [refreshAll]);
+  const handlePublish = useCallback(async (p: Prompt) => {
     try {
-      await publishPrompt(id);
+      await publishPrompt(p.id);
       message.success('已发布');
-      fetchPrompts();
+      setPromptType(toPromptType(p.promptType, promptType));
+      setLifecycle('RELEASED');
+      setCurrent(1);
+      fetchTypeStats();
     } catch {
       // 拦截器已提示
     }
-  };
-  const handleArchive = async (id: number) => {
+  }, [fetchTypeStats, promptType]);
+  const handleArchive = useCallback(async (p: Prompt) => {
     try {
-      await archivePrompt(id);
+      await archivePrompt(p.id);
       message.success('已归档');
-      fetchPrompts();
+      setPromptType(toPromptType(p.promptType, promptType));
+      setLifecycle('ARCHIVED');
+      setCurrent(1);
+      fetchTypeStats();
     } catch {
       // 拦截器已提示
     }
-  };
-  const handleSetDefault = async (id: number) => {
+  }, [fetchTypeStats, promptType]);
+  const handleSetDefault = useCallback(async (id: number) => {
     try {
       await setDefaultPrompt(id);
       message.success('已设为当前默认');
-      fetchPrompts();
+      refreshAll();
     } catch {
       // 拦截器已提示
     }
-  };
+  }, [refreshAll]);
 
   const columns = useMemo(
     () =>
@@ -279,23 +364,20 @@ const PromptsPage: React.FC = () => {
         onArchive: handleArchive,
         onSetDefault: handleSetDefault,
       }),
-    [],
+    [openTrial, openEditModal, handleClone, handleDelete, handlePublish, handleArchive, handleSetDefault],
   );
 
-  /** 当前页里:默认那条提示词(高亮展示) */
-  const currentDefaultForType = useMemo(() => {
-    return prompts.find(
-      (p) => p.promptType === promptType && p.lifecycle === 'RELEASED' && p.isDefault === 1,
-    );
-  }, [prompts, promptType]);
+  const promptTypeLabel = PROMPT_TYPE_TABS.find((t) => t.key === promptType)?.label ?? '';
+  const defaultPromptName = typeStats.defaultPrompt?.name ?? '未设置';
 
   return (
     <div className="ci-page ci-prompts-page">
       {/* 顶部 KPI 卡片 */}
-      <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
-        <Col xs={12} md={6}>
-          <Card size="small">
+      <Row gutter={[16, 16]} className="ci-prompt-kpi-row" style={{ marginBottom: 16 }}>
+        <Col xs={24} md={8}>
+          <Card size="small" className="ci-prompt-kpi-card">
             <Statistic
+              className="ci-prompt-kpi-stat"
               title={`${LIFECYCLE_LABEL[lifecycle]} · 总数`}
               value={total}
               prefix={<InboxOutlined />}
@@ -303,38 +385,31 @@ const PromptsPage: React.FC = () => {
             />
           </Card>
         </Col>
-        <Col xs={12} md={6}>
-          <Card size="small">
+        <Col xs={24} md={8}>
+          <Card size="small" className="ci-prompt-kpi-card">
             <Statistic
-              title="当前 lifecycle 视图(本页)"
-              value={prompts.length}
-              prefix={<CodeOutlined />}
+              className="ci-prompt-kpi-stat"
+              title={`${promptTypeLabel} · 总数`}
+              value={typeStats.totalAll}
+              prefix={<InboxOutlined />}
             />
           </Card>
         </Col>
-        <Col xs={12} md={6}>
-          <Card size="small">
-            <Tooltip title="当前 type + RELEASED 状态下的默认提示词">
+        <Col xs={24} md={8}>
+          <Card size="small" className="ci-prompt-kpi-card">
+            <Tooltip title={typeStats.defaultPrompt ? defaultPromptName : '当前类型下已发布且标记为默认的提示词'}>
               <Statistic
-                title={`${PROMPT_TYPE_TABS.find((t) => t.key === promptType)?.label} · 当前默认`}
-                value={currentDefaultForType ? currentDefaultForType.name : '未设置'}
-                prefix={currentDefaultForType ? <StarFilled style={{ color: '#faad14' }} /> : null}
-                valueStyle={
-                  currentDefaultForType
-                    ? { fontSize: 16 }
-                    : { color: '#bfbfbf', fontSize: 16 }
+                className="ci-prompt-kpi-stat ci-prompt-kpi-stat--text"
+                title={`${promptTypeLabel} · 当前默认`}
+                value={defaultPromptName}
+                prefix={
+                  typeStats.defaultPrompt ? (
+                    <StarFilled style={{ color: '#faad14' }} />
+                  ) : (
+                    <StarOutlined style={{ color: '#bfbfbf' }} />
+                  )
                 }
-              />
-            </Tooltip>
-          </Card>
-        </Col>
-        <Col xs={12} md={6}>
-          <Card size="small">
-            <Tooltip title="在 DRAFT lifecycle 下的草稿数(需发布)">
-              <Statistic
-                title="待发布草稿"
-                value={prompts.filter((p) => p.lifecycle === 'DRAFT').length}
-                valueStyle={{ color: '#faad14' }}
+                valueStyle={typeStats.defaultPrompt ? undefined : { color: '#bfbfbf' }}
               />
             </Tooltip>
           </Card>
@@ -378,7 +453,7 @@ const PromptsPage: React.FC = () => {
         }
         extra={
           <Space>
-            <Button icon={<ReloadOutlined />} onClick={fetchPrompts}>
+            <Button icon={<ReloadOutlined />} onClick={refreshAll}>
               刷新
             </Button>
             <Button type="primary" icon={<PlusOutlined />} onClick={openCreateModal}>

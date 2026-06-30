@@ -16,6 +16,7 @@ interface Props {
   open: boolean;
   editing: boolean;
   testing: boolean;
+  submitting?: boolean;
   form: FormInstance<RepositoryFormValues>;
   onCancel: () => void;
   onSubmit: () => void;
@@ -27,6 +28,7 @@ const RepositoryFormModal: React.FC<Props> = ({
   open,
   editing,
   testing,
+  submitting = false,
   form,
   onCancel,
   onSubmit,
@@ -44,7 +46,7 @@ const RepositoryFormModal: React.FC<Props> = ({
       <Button key="test" loading={testing} onClick={onTest}>
         测试 Git
       </Button>,
-      <Button key="submit" type="primary" onClick={onSubmit}>
+      <Button key="submit" type="primary" loading={submitting} onClick={onSubmit}>
         保存
       </Button>,
     ]}

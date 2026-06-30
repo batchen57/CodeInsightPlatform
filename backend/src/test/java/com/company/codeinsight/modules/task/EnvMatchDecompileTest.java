@@ -107,7 +107,7 @@ public class EnvMatchDecompileTest {
         prompt.setName("默认提示词");
         prompt.setContent("你是一个资深架构师，请对以下代码进行详细的业务与功能归纳。");
         prompt.setVersion(1);
-        prompt.setStatus(1);
+        prompt.setLifecycle(DecompilePrompt.LIFECYCLE_RELEASED);
         prompt.setIsDefault(1);
         decompilePromptService.save(prompt);
         promptId = prompt.getId();

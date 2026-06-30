@@ -116,7 +116,7 @@ COMMENT ON TABLE ci_prompt IS '提示词模板表';
 COMMENT ON COLUMN ci_prompt.name IS '提示词名称';
 COMMENT ON COLUMN ci_prompt.content IS '提示词内容';
 COMMENT ON COLUMN ci_prompt.version IS '版本号';
-COMMENT ON COLUMN ci_prompt.status IS '状态：0-禁用，1-启用';
+COMMENT ON COLUMN ci_prompt.status IS '已废弃，请使用 lifecycle；保留列仅为历史兼容';
 COMMENT ON COLUMN ci_prompt.is_default IS '是否默认：0-否，1-是';
 ALTER TABLE ci_prompt ADD COLUMN IF NOT EXISTS prompt_type VARCHAR(32) DEFAULT 'MODULARIZE' NOT NULL;
 COMMENT ON COLUMN ci_prompt.prompt_type IS '提示词用途：MODULARIZE-模块提取（用于 AI_ANALYZING / MODULE_HIERARCHY 阶段），DOCUMENT_GENERATION-文档生成（用于 GENERATING_DOC 阶段）';
@@ -131,6 +131,17 @@ CREATE UNIQUE INDEX IF NOT EXISTS uk_ci_prompt_type_default
 ALTER TABLE ci_prompt ADD COLUMN IF NOT EXISTS lifecycle VARCHAR(16) DEFAULT 'RELEASED' NOT NULL;
 COMMENT ON COLUMN ci_prompt.lifecycle IS '生命周期：DRAFT-草稿(可编辑) / RELEASED-已发布(锁定,需复制改) / ARCHIVED-已归档';
 CREATE INDEX IF NOT EXISTS idx_prompt_lifecycle ON ci_prompt (lifecycle, prompt_type);
+
+-- 3.4 提示词分类(category)+ scope 隔离(避免不同仓库/系统互相看到对方的自定义提示词)
+ALTER TABLE ci_prompt ADD COLUMN IF NOT EXISTS category VARCHAR(16) DEFAULT 'DEFAULT' NOT NULL;
+COMMENT ON COLUMN ci_prompt.category IS '提示词分类:DEFAULT-全局默认提示词(基础配置 → 提示词页管理,is_default=1 表示真正启用),USER-用户自定义提示词(按 scope 隔离)';
+ALTER TABLE ci_prompt ADD COLUMN IF NOT EXISTS scope_id BIGINT;
+COMMENT ON COLUMN ci_prompt.scope_id IS 'USER 提示词的 scope ID（系统ID或仓库ID,表示该 USER 提示词归属哪个配置上下文）;DEFAULT 提示词此字段为 NULL（全局可见）';
+CREATE INDEX IF NOT EXISTS idx_prompt_category_scope ON ci_prompt (category, scope_id);
+-- 唯一约束改为只在 DEFAULT 类别内:同 prompt_type 只有一条 is_default=1
+DROP INDEX IF EXISTS uk_ci_prompt_type_default;
+CREATE UNIQUE INDEX IF NOT EXISTS uk_ci_prompt_type_default_active
+    ON ci_prompt (prompt_type) WHERE is_default = 1 AND category = 'DEFAULT';
 
 -- 4. 知识构建任务表
 CREATE TABLE IF NOT EXISTS ci_task (
