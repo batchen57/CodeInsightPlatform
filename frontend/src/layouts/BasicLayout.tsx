@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Avatar, Badge, Breadcrumb, Button, Dropdown, Layout, Menu, Space, Tag, Tooltip, Typography } from 'antd';
-import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { Avatar, Badge, Button, Dropdown, Layout, Menu, Space, Tag, Tooltip, Typography } from 'antd';
+import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import PageTabs from '../components/PageTabs';
 import TabLink from '../components/TabLink';
 import {
@@ -31,7 +31,7 @@ import {
 import { useAuthStore } from '../stores/auth';
 
 const { Header, Content, Sider } = Layout;
-const { Text, Title } = Typography;
+const { Text } = Typography;
 
 interface NavItem {
   key: string;
@@ -311,18 +311,6 @@ const computeMenuState = (pathname: string) => {
   };
 };
 
-/** 在四大类里找当前选中节点的父菜单（用于面包屑）。 */
-function findParentNavItem(key: string): NavItem | null {
-  for (const group of [basicNav, knowledgeNav, knowledgeBrowseNav, dashboardNav]) {
-    for (const item of group) {
-      if (item.children?.some((c) => c.key === key)) {
-        return item;
-      }
-    }
-  }
-  return null;
-}
-
 /**
  * 平台通用骨架布局组件 (BasicLayout)
  * 包含左侧侧边栏导航、顶部页头操作栏、实时动态变化的面包屑标题以及核心内容呈现区（Outlet 组件）。
@@ -364,12 +352,6 @@ const BasicLayout: React.FC = () => {
   // 优先取子菜单（如 /tasks/jobs 命中"JOB配置"），否则回退到仪表盘第一项
   const currentPage = useMemo(
     () => navFlatMap.get(selectedKey) ?? fallbackCurrentPage,
-    [selectedKey],
-  );
-
-  // 如果当前选中的是子菜单，取其父菜单用于面包屑（跨三大类查找）
-  const parentNavItem = useMemo(
-    () => findParentNavItem(selectedKey),
     [selectedKey],
   );
 
@@ -469,6 +451,41 @@ const BasicLayout: React.FC = () => {
             className="ci-menu"
           />
         </div>
+
+        {/* 侧边栏底部:用户信息 + 登出 */}
+        <div className="ci-sider-footer">
+          <Dropdown
+            trigger={['click']}
+            menu={{
+              items: [
+                {
+                  key: 'logout',
+                  icon: <LogoutOutlined />,
+                  label: '退出登录',
+                  onClick: handleLogout,
+                },
+              ],
+            }}
+            placement="topRight"
+          >
+            <div
+              className={`ci-sider-user ${collapsed ? 'ci-sider-user--collapsed' : ''}`}
+              aria-label={`当前用户：${session?.displayName ?? '负责人'}，${session?.role ?? 'ADMIN'}`}
+            >
+              <Avatar
+                size={collapsed ? 32 : 36}
+                icon={<UserOutlined />}
+                className="ci-sider-user-avatar"
+              />
+              {!collapsed && (
+                <div className="ci-sider-user-copy">
+                  <strong>{session?.displayName ?? '负责人'}</strong>
+                  <span>{session?.role === 'ADMIN' ? '平台管理员' : '开发负责人'}</span>
+                </div>
+              )}
+            </div>
+          </Dropdown>
+        </div>
       </Sider>
 
       {/* 移动端菜单展开时的背景遮罩 */}
@@ -485,8 +502,8 @@ const BasicLayout: React.FC = () => {
       <Layout className="ci-main">
         {/* 顶部操作页头 */}
         <Header className="ci-header">
-          {/* 折叠切换按钮 */}
-          <Space size={12} className="ci-header-context">
+          {/* 折叠切换按钮 + 页面上下文(标题 + 描述) */}
+          <div className="ci-header-context">
             <Tooltip title={collapsed ? '展开导航' : '收起导航'}>
               <Button
                 type="text"
@@ -495,9 +512,18 @@ const BasicLayout: React.FC = () => {
                 className="ci-icon-button"
               />
             </Tooltip>
-          </Space>
+            <span className="ci-header-divider" aria-hidden="true" />
+            <div className="ci-header-context-info">
+              <Text className="ci-header-context-title">{currentPage.title}</Text>
+              {currentPage.description && (
+                <Text type="secondary" className="ci-header-context-desc">
+                  {currentPage.description}
+                </Text>
+              )}
+            </div>
+          </div>
 
-          {/* 顶部右侧快捷标签与用户属性 */}
+          {/* 顶部右侧快捷标签 */}
           <Space size={16} className="ci-header-actions">
             <div className="ci-pipeline">
               <Tag icon={<BranchesOutlined />} color="blue">
@@ -515,59 +541,12 @@ const BasicLayout: React.FC = () => {
                 <Button type="text" icon={<BellOutlined />} className="ci-icon-button" />
               </Badge>
             </Tooltip>
-            <Dropdown
-              trigger={['click']}
-              menu={{
-                items: [
-                  {
-                    key: 'logout',
-                    icon: <LogoutOutlined />,
-                    label: '退出登录',
-                    onClick: handleLogout,
-                  },
-                ],
-              }}
-            >
-              <div className="ci-user" aria-label={`当前用户：${session?.displayName ?? '负责人'}，${session?.role ?? 'ADMIN'}`}>
-                <Avatar size={34} icon={<UserOutlined />} className="ci-user-avatar" />
-                <div className="ci-user-copy">
-                  <strong>{session?.displayName ?? '负责人'}</strong>
-                  <span>{session?.role === 'ADMIN' ? '平台管理员' : '开发负责人'}</span>
-                </div>
-              </div>
-            </Dropdown>
           </Space>
         </Header>
 
         {/* 页面正文内容渲染 */}
         <Content className="ci-content">
-          {/* 多页签导航条：每个打开的页面 = 一个 tab，工作台不计入。
-             必须放在最顶部,在面包屑/页面标题之前。 */}
           <PageTabs />
-
-          {/* 统一的面包屑及描述页头 */}
-          <section className="ci-page-heading">
-            <div className="ci-page-heading-copy">
-              {parentNavItem && (
-                <Breadcrumb
-                  className="ci-page-breadcrumb"
-                  items={[
-                    { title: <Link to={parentNavItem.key}>{parentNavItem.title}</Link> },
-                    { title: currentPage.title },
-                  ]}
-                />
-              )}
-              <Text className="ci-page-kicker">WORKSPACE</Text>
-              <Title level={2}>{currentPage.title}</Title>
-              <Text type="secondary">{currentPage.description}</Text>
-            </div>
-            <div className="ci-page-heading-status">
-              <Badge status="processing" />
-              <span>Live workspace</span>
-            </div>
-          </section>
-
-          {/* 嵌套子组件渲染 Outlet */}
           <Outlet />
         </Content>
       </Layout>

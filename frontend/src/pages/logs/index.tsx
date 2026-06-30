@@ -41,18 +41,6 @@ const Logs: React.FC = () => {
   const [detailOpen, setDetailOpen] = useState(false);
   const [detailLog, setDetailLog] = useState<OperationLog | null>(null);
 
-  useEffect(() => {
-    listSystems({ current: 1, size: 100, status: 1 }).then((data) => setSystems(data.records));
-  }, []);
-
-  // 从 URL 参数带出 taskId 时，自动查询
-  useEffect(() => {
-    if (urlTaskId) {
-      setCurrent(1);
-      fetchLogs(1, size);
-    }
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
   const fetchLogs = async (page = current, pageSize = size) => {
     setLoading(true);
     try {
@@ -71,6 +59,18 @@ const Logs: React.FC = () => {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    listSystems({ current: 1, size: 100, status: 1 }).then((data) => setSystems(data.records));
+  }, []);
+
+  // 从 URL 参数带出 taskId 时，自动查询
+  useEffect(() => {
+    if (urlTaskId) {
+      setCurrent(1);
+      fetchLogs(1, size);
+    }
+  }, []);
 
   useEffect(() => {
     fetchLogs();

@@ -234,7 +234,6 @@ export async function listAllTasksBySystem(systemId: number): Promise<import('..
   // request.get<T> 在 axios 类型上仍标为 AxiosResponse<T>，response 拦截器实际解包为 T；
   // 这里用 unknown 中转一次拿到 Page，再安全取 records。
   type Page = { records: import('../types').Task[]; total: number; size: number; current: number };
-  const response = await request.get<Page>(`/tasks`, { params: { current: 1, size: 200, systemId } });
-  const page = response as unknown as Page;
+  const page = await request.get<Page, Page>(`/tasks`, { params: { current: 1, size: 200, systemId } });
   return page?.records ?? [];
 }

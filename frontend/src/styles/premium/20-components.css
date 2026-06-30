@@ -1,0 +1,1351 @@
+/**
+ * 20-components.css
+ * 组件层样式,所有值都来自 00-tokens.css
+ * 加载顺序必须在 premium.css 之后,确保本文件能赢过历史 !important 覆盖
+ *
+ * 覆盖目标:
+ *   - Button(Primary / Default / Danger / Text)
+ *   - Input / Select / DatePicker
+ *   - Card
+ *   - Table(含表头 / 行 / hover / 选中)
+ *   - Tag / Status 胶囊
+ *   - Tabs(胶囊感)
+ *   - Switch
+ *   - Modal / Drawer
+ */
+
+/* ============================================
+   Button — 默认全部带边框,只有表格和 icon 按钮是 link 风格
+
+   规则:
+   - 默认(Default / Primary / Danger):白底 + 1px 边框,hover 加深
+   - 例外 1:表格内的按钮 — link 风格(无边框)
+   - 例外 2:icon-only 按钮 — link 风格
+   - 例外 3:显式 type="text" / type="link" — link 风格
+   ============================================ */
+
+/* ---------- 默认:带边框实心按钮 ---------- */
+.ant-btn {
+  border: 1px solid var(--ci-border) !important;
+  background: var(--ci-surface) !important;
+  color: var(--ci-text) !important;
+  box-shadow: none !important;
+  border-radius: var(--ci-radius-md);
+  font-weight: 500;
+  padding-inline: 16px;
+  transition: background-color 180ms ease, border-color 180ms ease, color 180ms ease, box-shadow 180ms ease, transform 160ms ease;
+}
+
+.ant-btn:not(:disabled):hover {
+  background: var(--ci-surface-2) !important;
+  border-color: var(--ci-primary) !important;
+  color: var(--ci-primary) !important;
+}
+
+.ant-btn:not(:disabled):active {
+  background: var(--ci-primary-bg) !important;
+  border-color: var(--ci-primary) !important;
+  color: var(--ci-primary-hover) !important;
+  transform: translateY(1px);
+}
+
+/* Primary 按钮(主蓝实色) */
+.ant-btn-primary,
+.ant-btn.ant-btn-color-primary.ant-btn-variant-solid,
+.ant-btn.ant-btn-color-primary {
+  background: var(--ci-primary) !important;
+  border-color: var(--ci-primary) !important;
+  color: #FFFFFF !important;
+}
+.ant-btn-primary:not(:disabled):hover,
+.ant-btn.ant-btn-color-primary.ant-btn-variant-solid:not(:disabled):hover,
+.ant-btn.ant-btn-color-primary:not(:disabled):hover {
+  background: var(--ci-primary-hover) !important;
+  border-color: var(--ci-primary-hover) !important;
+  color: #FFFFFF !important;
+  box-shadow: var(--ci-shadow-button-primary) !important;
+}
+.ant-btn-primary:not(:disabled):active,
+.ant-btn.ant-btn-color-primary.ant-btn-variant-solid:not(:disabled):active,
+.ant-btn.ant-btn-color-primary:not(:disabled):active {
+  background: var(--ci-primary-active) !important;
+  border-color: var(--ci-primary-active) !important;
+  color: #FFFFFF !important;
+  box-shadow: var(--ci-shadow-button-primary-active) !important;
+}
+
+/* Danger 按钮(白底 + 红色边框) */
+.ant-btn-dangerous,
+.ant-btn-dangerous.ant-btn-default,
+.ant-btn.ant-btn-color-dangerous,
+.ant-btn.ant-btn-color-dangerous.ant-btn-variant-outlined {
+  border-color: #FCA5A5 !important;
+  color: var(--ci-accent-red) !important;
+}
+.ant-btn-dangerous:not(:disabled):hover,
+.ant-btn-dangerous.ant-btn-default:not(:disabled):hover,
+.ant-btn.ant-btn-color-dangerous:not(:disabled):hover,
+.ant-btn.ant-btn-color-dangerous.ant-btn-variant-outlined:not(:disabled):hover {
+  background: var(--ci-accent-red-bg) !important;
+  border-color: var(--ci-accent-red) !important;
+  color: var(--ci-accent-red) !important;
+}
+.ant-btn-dangerous:not(:disabled):active,
+.ant-btn-dangerous.ant-btn-default:not(:disabled):active,
+.ant-btn.ant-btn-color-dangerous:not(:disabled):active,
+.ant-btn.ant-btn-color-dangerous.ant-btn-variant-outlined:not(:disabled):active {
+  background: var(--ci-accent-red-bg) !important;
+  border-color: var(--ci-accent-red) !important;
+  color: #991B1B !important;
+}
+
+/* Danger 在 Primary 实色模式(实心红按钮) */
+.ant-btn-dangerous.ant-btn-primary,
+.ant-btn.ant-btn-color-dangerous.ant-btn-variant-solid {
+  background: var(--ci-accent-red) !important;
+  border-color: var(--ci-accent-red) !important;
+  color: #FFFFFF !important;
+}
+.ant-btn-dangerous.ant-btn-primary:not(:disabled):hover,
+.ant-btn.ant-btn-color-dangerous.ant-btn-variant-solid:not(:disabled):hover {
+  background: #B91C1C !important;
+  border-color: #B91C1C !important;
+  color: #FFFFFF !important;
+}
+
+/* Disabled */
+.ant-btn:disabled,
+.ant-btn-primary:disabled,
+.ant-btn-default:disabled,
+.ant-btn-dangerous:disabled {
+  background: var(--ci-page-bg) !important;
+  border-color: var(--ci-border) !important;
+  color: var(--ci-text-tertiary) !important;
+  cursor: not-allowed;
+  box-shadow: none !important;
+}
+
+/* icon 跟随文字色 */
+.ant-btn .anticon {
+  color: currentColor;
+}
+
+/* ---------- 例外 1:表格内按钮 — link 风格 ---------- */
+/* AntD 6 同时会生成 .ant-btn-primary + .ant-btn-color-primary + .ant-btn-variant-outlined 三套类,
+   后者(默认 outlined 变体)会强制加边框,需要把新语法的 class 也覆盖掉 */
+.ant-table-tbody .ant-btn,
+.ant-table-tbody .ant-btn-primary,
+.ant-table-tbody .ant-btn-default,
+.ant-table-tbody .ant-btn-dangerous,
+.ant-table-tbody .ant-btn-color-primary,
+.ant-table-tbody .ant-btn-color-dangerous,
+.ant-table-tbody .ant-btn-variant-outlined,
+.ant-table-tbody .ant-btn-variant-solid,
+.ant-table-tbody .ant-btn-variant-text,
+.ant-table-tbody .ant-btn-variant-link,
+.ant-table .ant-btn,
+.ant-table .ant-btn-primary,
+.ant-table .ant-btn-color-primary,
+.ant-table .ant-btn-variant-outlined,
+.ant-table .ant-btn-variant-solid,
+.ant-table-cell .ant-btn,
+.ant-table-cell .ant-btn-primary,
+.ant-table-cell .ant-btn-color-primary,
+.ant-table-cell .ant-btn-variant-outlined,
+.ant-table-cell .ant-btn-variant-solid,
+.ant-table-tbody > tr > td .ant-btn,
+.ant-table-tbody > tr > td .ant-btn-primary,
+.ant-table-tbody > tr > td .ant-btn-color-primary,
+.ant-table-tbody > tr > td .ant-btn-variant-outlined,
+.ant-table-tbody > tr > td .ant-btn-variant-solid {
+  border: none !important;
+  background: transparent !important;
+  color: var(--ci-text) !important;
+  box-shadow: none !important;
+  padding-inline: 10px;
+}
+
+.ant-table-tbody .ant-btn:not(:disabled):hover,
+.ant-table-tbody .ant-btn-primary:not(:disabled):hover,
+.ant-table-tbody .ant-btn-color-primary:not(:disabled):hover,
+.ant-table-tbody .ant-btn-variant-outlined:not(:disabled):hover,
+.ant-table-tbody .ant-btn-variant-solid:not(:disabled):hover,
+.ant-table .ant-btn:not(:disabled):hover,
+.ant-table .ant-btn-primary:not(:disabled):hover,
+.ant-table-cell .ant-btn:not(:disabled):hover,
+.ant-table-cell .ant-btn-primary:not(:disabled):hover,
+.ant-table-tbody > tr > td .ant-btn:not(:disabled):hover,
+.ant-table-tbody > tr > td .ant-btn-primary:not(:disabled):hover {
+  background: var(--ci-page-bg) !important;
+  color: var(--ci-primary) !important;
+}
+
+.ant-table-tbody .ant-btn:not(:disabled):active,
+.ant-table-tbody .ant-btn-primary:not(:disabled):active,
+.ant-table-tbody .ant-btn-color-primary:not(:disabled):active,
+.ant-table .ant-btn:not(:disabled):active,
+.ant-table-cell .ant-btn:not(:disabled):active,
+.ant-table-tbody > tr > td .ant-btn:not(:disabled):active {
+  background: var(--ci-primary-bg) !important;
+  color: var(--ci-primary-hover) !important;
+}
+
+/* 表格内 primary 按钮(主操作)— 主蓝文字 */
+.ant-table-tbody .ant-btn-primary,
+.ant-table-tbody .ant-btn-color-primary,
+.ant-table-tbody .ant-btn.ant-btn-color-primary,
+.ant-table .ant-btn-primary,
+.ant-table .ant-btn-color-primary,
+.ant-table-cell .ant-btn-primary,
+.ant-table-cell .ant-btn-color-primary,
+.ant-table-tbody > tr > td .ant-btn-primary,
+.ant-table-tbody > tr > td .ant-btn-color-primary {
+  color: var(--ci-primary) !important;
+  border: none !important;
+  background: transparent !important;
+}
+.ant-table-tbody .ant-btn-primary:not(:disabled):hover,
+.ant-table-tbody .ant-btn-color-primary:not(:disabled):hover,
+.ant-table .ant-btn-primary:not(:disabled):hover,
+.ant-table .ant-btn-color-primary:not(:disabled):hover,
+.ant-table-cell .ant-btn-primary:not(:disabled):hover,
+.ant-table-tbody > tr > td .ant-btn-primary:not(:disabled):hover {
+  background: var(--ci-primary-bg) !important;
+  color: var(--ci-primary-hover) !important;
+}
+
+/* 表格内 danger 按钮(删除)— 红色文字 + 红色 hover 底 */
+.ant-table-tbody .ant-btn-dangerous,
+.ant-table-tbody .ant-btn.ant-btn-color-dangerous,
+.ant-table-tbody .ant-btn-color-dangerous,
+.ant-table .ant-btn-dangerous,
+.ant-table-cell .ant-btn-dangerous,
+.ant-table-tbody > tr > td .ant-btn-dangerous {
+  color: var(--ci-accent-red) !important;
+  border: none !important;
+  background: transparent !important;
+}
+.ant-table-tbody .ant-btn-dangerous:not(:disabled):hover,
+.ant-table-tbody .ant-btn-color-dangerous:not(:disabled):hover,
+.ant-table .ant-btn-dangerous:not(:disabled):hover,
+.ant-table-cell .ant-btn-dangerous:not(:disabled):hover,
+.ant-table-tbody > tr > td .ant-btn-dangerous:not(:disabled):hover {
+  background: var(--ci-accent-red-bg) !important;
+  color: var(--ci-accent-red) !important;
+}
+.ant-table-tbody .ant-btn-dangerous:not(:disabled):active,
+.ant-table-tbody .ant-btn-color-dangerous:not(:disabled):active,
+.ant-table .ant-btn-dangerous:not(:disabled):active,
+.ant-table-cell .ant-btn-dangerous:not(:disabled):active {
+  background: var(--ci-accent-red-bg) !important;
+  color: #991B1B !important;
+}
+
+/* 表格内 disabled */
+.ant-table-tbody .ant-btn:disabled,
+.ant-table .ant-btn:disabled,
+.ant-table-cell .ant-btn:disabled {
+  color: var(--ci-text-tertiary) !important;
+  background: transparent !important;
+  border: none !important;
+  cursor: not-allowed;
+}
+
+/* ---------- 例外 2:icon-only 按钮(link 风格,无边框) ---------- */
+.ci-icon-button,
+.ci-icon-button.ant-btn,
+.ant-btn-circle,
+.ant-btn-circle.ant-btn,
+.ant-btn[shape="circle"],
+.ant-btn-icon-only {
+  border: none !important;
+  background: transparent !important;
+  color: var(--ci-text-secondary) !important;
+  box-shadow: none !important;
+}
+.ci-icon-button:not(:disabled):hover,
+.ci-icon-button.ant-btn:not(:disabled):hover,
+.ant-btn-circle:not(:disabled):hover,
+.ant-btn[shape="circle"]:not(:disabled):hover,
+.ant-btn-icon-only:not(:disabled):hover {
+  background: var(--ci-page-bg) !important;
+  color: var(--ci-primary) !important;
+}
+
+/* ---------- 例外 3:显式 type="text" / type="link" ---------- */
+.ant-btn-text,
+.ant-btn-link,
+.ant-btn-variant-text,
+.ant-btn-variant-link {
+  border: none !important;
+  background: transparent !important;
+  color: var(--ci-text) !important;
+  box-shadow: none !important;
+  padding-inline: 10px;
+}
+.ant-btn-text:not(:disabled):hover,
+.ant-btn-link:not(:disabled):hover,
+.ant-btn-variant-text:not(:disabled):hover,
+.ant-btn-variant-link:not(:disabled):hover {
+  background: var(--ci-page-bg) !important;
+  color: var(--ci-primary) !important;
+}
+.ant-btn-text:not(:disabled):active,
+.ant-btn-link:not(:disabled):active,
+.ant-btn-variant-text:not(:disabled):active,
+.ant-btn-variant-link:not(:disabled):active {
+  background: var(--ci-primary-bg) !important;
+  color: var(--ci-primary-hover) !important;
+}
+
+/* link/text 类型的 danger(表格外的 link 删除)— 红字 + 红色 hover */
+.ant-btn-text.ant-btn-dangerous,
+.ant-btn-link.ant-btn-dangerous,
+.ant-btn-variant-text.ant-btn-color-dangerous,
+.ant-btn-variant-link.ant-btn-color-dangerous {
+  color: var(--ci-accent-red) !important;
+  border: none !important;
+  background: transparent !important;
+}
+.ant-btn-text.ant-btn-dangerous:not(:disabled):hover,
+.ant-btn-link.ant-btn-dangerous:not(:disabled):hover,
+.ant-btn-variant-text.ant-btn-color-dangerous:not(:disabled):hover,
+.ant-btn-variant-link.ant-btn-color-dangerous:not(:disabled):hover {
+  background: var(--ci-accent-red-bg) !important;
+  color: var(--ci-accent-red) !important;
+}
+
+/* ============================================
+   Input / Select / DatePicker
+   ============================================ */
+.ant-input,
+.ant-input-affix-wrapper,
+.ant-input-number,
+.ant-input-number-input,
+.ant-select-selector,
+.ant-picker,
+.ant-cascader-picker {
+  border-radius: var(--ci-radius-md) !important;
+  border-color: var(--ci-border) !important;
+  background: var(--ci-surface) !important;
+  transition: border-color 180ms ease, box-shadow 180ms ease;
+}
+
+.ant-input:hover,
+.ant-input-affix-wrapper:hover,
+.ant-input-number:hover,
+.ant-select:not(.ant-select-disabled):hover .ant-select-selector,
+.ant-picker:hover {
+  border-color: var(--ci-border-hover) !important;
+}
+
+.ant-input:focus,
+.ant-input-affix-wrapper-focused,
+.ant-input-number-focused,
+.ant-select-focused .ant-select-selector,
+.ant-picker-focused {
+  border-color: var(--ci-primary) !important;
+  box-shadow: var(--ci-shadow-input-focus) !important;
+}
+
+.ant-input::placeholder,
+.ant-input-affix-wrapper-input::placeholder {
+  color: var(--ci-text-tertiary);
+}
+
+.ant-input:disabled,
+.ant-input-affix-wrapper-disabled,
+.ant-input-number-disabled,
+.ant-select-disabled .ant-select-selector,
+.ant-picker-disabled {
+  background: var(--ci-page-bg) !important;
+  color: var(--ci-text-tertiary) !important;
+  border-color: var(--ci-border) !important;
+  cursor: not-allowed;
+}
+
+.ant-input-affix-wrapper .ant-input {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+
+/* Select 下拉箭头 */
+.ant-select-arrow,
+.ant-picker-suffix {
+  color: var(--ci-text-tertiary);
+}
+
+/* ============================================
+   Card
+   ============================================ */
+.ant-card {
+  border-radius: var(--ci-radius-lg) !important;
+  border: 1px solid var(--ci-border) !important;
+  box-shadow: var(--ci-shadow-card);
+  background: var(--ci-surface);
+  transition: border-color 200ms ease, box-shadow 200ms ease, transform 200ms ease;
+}
+
+.ant-card:hover {
+  border-color: var(--ci-border-hover) !important;
+  box-shadow: var(--ci-shadow-card-hover);
+}
+
+.ant-card-hoverable:hover,
+.ci-dashboard-card:hover {
+  border-color: color-mix(in srgb, var(--ci-primary) 38%, var(--ci-border)) !important;
+  box-shadow: var(--ci-shadow-card-hover);
+}
+
+.ant-card .ant-card-head {
+  border-bottom: 1px solid var(--ci-border) !important;
+  padding: 0 16px !important;
+  min-height: 48px !important;
+  background: var(--ci-surface-2);
+  border-radius: var(--ci-radius-lg) var(--ci-radius-lg) 0 0 !important;
+}
+
+.ant-card .ant-card-head-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ci-ink);
+  padding: 12px 0;
+}
+
+.ant-card .ant-card-extra {
+  color: var(--ci-text-secondary);
+  font-size: 12px;
+}
+
+.ant-card .ant-card-body {
+  padding: 16px !important;
+}
+
+.ant-card-bordered {
+  border-color: var(--ci-border) !important;
+}
+
+.ant-card-small > .ant-card-head {
+  min-height: 40px !important;
+  padding: 0 12px !important;
+}
+.ant-card-small > .ant-card-head > .ant-card-head-title {
+  padding: 8px 0;
+  font-size: 13px;
+}
+
+/* ============================================
+   Table
+   ============================================ */
+.ant-table-wrapper {
+  background: var(--ci-surface);
+  border-radius: var(--ci-radius-lg);
+  overflow: hidden;
+}
+
+.ant-table-wrapper .ant-table {
+  background: transparent !important;
+  font-size: 13px;
+  color: var(--ci-ink);
+}
+
+.ant-table-thead > tr > th {
+  background: var(--ci-page-bg) !important;
+  color: var(--ci-text-secondary) !important;
+  font-size: 12px !important;
+  font-weight: 500 !important;
+  border-bottom: 1px solid var(--ci-border) !important;
+  letter-spacing: 0.04em;
+  padding: 10px 12px !important;
+  line-height: 1.5;
+}
+
+.ant-table-thead > tr > th::before {
+  display: none !important;
+}
+
+.ant-table-tbody > tr > td {
+  font-size: 13px;
+  color: var(--ci-ink);
+  padding: 12px !important;
+  border-bottom: 1px solid var(--ci-border) !important;
+  line-height: 1.5;
+}
+
+.ant-table-tbody > tr:last-child > td {
+  border-bottom: none !important;
+}
+
+.ant-table-tbody > tr:hover > td,
+.ant-table-tbody > tr.ant-table-row-hover > td {
+  background: var(--ci-surface-2) !important;
+}
+
+.ant-table-tbody > tr.ant-table-row-selected > td {
+  background: var(--ci-primary-bg) !important;
+}
+
+.ant-table-tbody > tr.ant-table-row-selected:hover > td {
+  background: var(--ci-primary-bg) !important;
+}
+
+.ant-table-column-sorter-up.active,
+.ant-table-column-sorter-down.active {
+  color: var(--ci-primary);
+}
+
+.ant-table-pagination.ant-pagination {
+  margin: 16px !important;
+}
+
+/* 表格内的操作列按钮 */
+.ant-table-tbody .ant-btn-text {
+  color: var(--ci-text);
+  padding: 2px 8px;
+  height: auto;
+  font-size: 13px;
+}
+.ant-table-tbody .ant-btn-text:hover {
+  background: var(--ci-primary-bg);
+  color: var(--ci-primary);
+}
+
+/* 空状态 */
+.ant-table-placeholder {
+  background: var(--ci-surface) !important;
+}
+.ant-table-placeholder:hover > td {
+  background: var(--ci-surface) !important;
+}
+
+/* ============================================
+   Tag / Status
+   ============================================ */
+.ant-tag {
+  border-radius: var(--ci-radius-pill) !important;
+  font-size: 12px !important;
+  font-weight: 500 !important;
+  line-height: 20px !important;
+  height: 22px !important;
+  padding: 0 8px !important;
+  border: none !important;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ant-tag .ant-tag-close-icon {
+  margin-left: 2px;
+  font-size: 10px;
+}
+
+/* 覆盖 AntD 默认彩色 Tag(blue/red/green 等)的鲜艳底色 */
+.ant-tag-blue {
+  color: var(--ci-status-primary-text);
+  background: var(--ci-status-primary-bg);
+}
+.ant-tag-purple {
+  color: var(--ci-status-purple-text);
+  background: var(--ci-status-purple-bg);
+}
+.ant-tag-cyan {
+  color: var(--ci-info);
+  background: var(--ci-primary-bg);
+}
+.ant-tag-green {
+  color: var(--ci-status-green-text);
+  background: var(--ci-status-green-bg);
+}
+.ant-tag-orange,
+.ant-tag-gold {
+  color: var(--ci-status-gold-text);
+  background: var(--ci-status-gold-bg);
+}
+.ant-tag-red {
+  color: var(--ci-status-red-text);
+  background: var(--ci-status-red-bg);
+}
+.ant-tag-default {
+  color: var(--ci-status-gray-text);
+  background: var(--ci-status-gray-bg);
+}
+
+/* ============================================
+   Tabs(胶囊感)
+   ============================================ */
+.ant-tabs {
+  color: var(--ci-text);
+}
+.ant-tabs-nav {
+  background: var(--ci-surface-2);
+  padding: 4px;
+  border-radius: var(--ci-radius-lg);
+  margin: 0 0 16px 0 !important;
+}
+.ant-tabs-nav::before {
+  border-bottom: none !important;
+}
+.ant-tabs-nav-list {
+  gap: 2px;
+}
+.ant-tabs-tab {
+  padding: 6px 14px !important;
+  border-radius: var(--ci-radius-md) !important;
+  font-size: 13px;
+  color: var(--ci-text-secondary) !important;
+  transition: all 180ms ease;
+  margin: 0 !important;
+}
+.ant-tabs-tab:hover {
+  color: var(--ci-primary) !important;
+}
+.ant-tabs-tab-active {
+  background: var(--ci-surface) !important;
+  border: 1px solid var(--ci-border) !important;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+.ant-tabs-tab-active .ant-tabs-tab-btn {
+  color: var(--ci-primary) !important;
+  font-weight: 500;
+}
+.ant-tabs-ink-bar {
+  background: var(--ci-primary) !important;
+  height: 2px !important;
+  border-radius: 1px;
+}
+
+/* 卡片内嵌的 Tabs 不需要容器背景 */
+.ant-card .ant-tabs-nav {
+  background: transparent;
+  padding: 0;
+  border-radius: 0;
+}
+
+/* ============================================
+   Switch
+   ============================================ */
+.ant-switch {
+  background: var(--ci-border-hover) !important;
+  min-width: 36px !important;
+  height: 20px !important;
+  border: none !important;
+}
+.ant-switch-checked {
+  background: linear-gradient(90deg, var(--ci-info), var(--ci-primary)) !important;
+}
+.ant-switch-handle {
+  width: 16px !important;
+  height: 16px !important;
+  top: 2px !important;
+  box-shadow: 0 2px 4px rgba(15, 23, 42, 0.1);
+}
+.ant-switch-checked .ant-switch-handle {
+  left: calc(100% - 18px) !important;
+}
+
+/* ============================================
+   Modal / Drawer
+   ============================================ */
+.ant-modal-content {
+  border-radius: var(--ci-radius-xl) !important;
+  box-shadow: var(--ci-shadow-modal) !important;
+  background: var(--ci-surface);
+  padding: 0 !important;
+}
+
+.ant-modal-header {
+  border-bottom: 1px solid var(--ci-border) !important;
+  padding: 16px 20px !important;
+  margin: 0 !important;
+  background: transparent;
+}
+.ant-modal-title {
+  font-size: 16px !important;
+  font-weight: 600 !important;
+  color: var(--ci-ink);
+  line-height: 1.4;
+}
+
+.ant-modal-body {
+  padding: 20px !important;
+  color: var(--ci-ink);
+}
+
+.ant-modal-footer {
+  border-top: 1px solid var(--ci-border) !important;
+  padding: 12px 20px !important;
+  margin: 0 !important;
+}
+
+.ant-modal-close {
+  color: var(--ci-text-tertiary);
+  top: 12px !important;
+}
+.ant-modal-close:hover {
+  color: var(--ci-primary);
+  background: var(--ci-page-bg);
+}
+
+/* Drawer */
+.ant-drawer-content {
+  border-radius: var(--ci-radius-xl) 0 0 var(--ci-radius-xl) !important;
+  box-shadow: var(--ci-shadow-modal) !important;
+}
+.ant-drawer-header {
+  border-bottom: 1px solid var(--ci-border) !important;
+  padding: 16px 20px !important;
+}
+.ant-drawer-title {
+  font-size: 16px !important;
+  font-weight: 600;
+  color: var(--ci-ink);
+}
+.ant-drawer-body {
+  padding: 20px !important;
+}
+
+/* ============================================
+   Form(被 modal / drawer / page 复用)
+   ============================================ */
+.ant-form-item-label > label {
+  color: var(--ci-text) !important;
+  font-size: 12px !important;
+  font-weight: 500 !important;
+}
+.ant-form-item-required::before {
+  color: var(--ci-accent-red) !important;
+}
+
+/* 空状态 */
+.ant-empty-description {
+  color: var(--ci-text-secondary);
+  font-size: 13px;
+}
+
+/* 分页 */
+.ant-pagination .ant-pagination-item,
+.ant-pagination .ant-pagination-prev .ant-pagination-item-link,
+.ant-pagination .ant-pagination-next .ant-pagination-item-link {
+  border-radius: var(--ci-radius-md) !important;
+  border-color: var(--ci-border) !important;
+  background: var(--ci-surface) !important;
+  color: var(--ci-text) !important;
+  transition: all 180ms ease;
+}
+.ant-pagination .ant-pagination-item-active {
+  background: var(--ci-primary) !important;
+  border-color: var(--ci-primary) !important;
+}
+.ant-pagination .ant-pagination-item-active a {
+  color: #FFFFFF !important;
+}
+.ant-pagination .ant-pagination-item:hover,
+.ant-pagination .ant-pagination-prev:hover .ant-pagination-item-link,
+.ant-pagination .ant-pagination-next:hover .ant-pagination-item-link {
+  border-color: var(--ci-primary) !important;
+  color: var(--ci-primary) !important;
+}
+
+/* Alert */
+.ant-alert {
+  border-radius: var(--ci-radius-md) !important;
+  border-color: var(--ci-border) !important;
+  background: var(--ci-surface-2) !important;
+  padding: 10px 14px !important;
+}
+.ant-alert-info {
+  background: var(--ci-primary-bg) !important;
+  border-color: var(--ci-primary-bg) !important;
+}
+.ant-alert-success {
+  background: var(--ci-status-green-bg) !important;
+  border-color: var(--ci-status-green-bg) !important;
+}
+.ant-alert-warning {
+  background: var(--ci-status-gold-bg) !important;
+  border-color: var(--ci-status-gold-bg) !important;
+}
+.ant-alert-error {
+  background: var(--ci-status-red-bg) !important;
+  border-color: var(--ci-status-red-bg) !important;
+}
+
+/* Descriptions */
+.ant-descriptions-bordered .ant-descriptions-view {
+  border-radius: var(--ci-radius-md) !important;
+  overflow: hidden;
+  border-color: var(--ci-border) !important;
+}
+.ant-descriptions-bordered .ant-descriptions-item-label,
+.ant-descriptions-bordered .ant-descriptions-item-content {
+  background: var(--ci-surface) !important;
+  border-color: var(--ci-border) !important;
+  color: var(--ci-ink);
+  font-size: 13px;
+  padding: 12px 16px !important;
+}
+.ant-descriptions-bordered .ant-descriptions-item-label {
+  background: var(--ci-surface-2) !important;
+  color: var(--ci-text-secondary) !important;
+  font-weight: 500;
+}
+
+/* Progress */
+.ant-progress-inner {
+  background: var(--ci-divider) !important;
+}
+.ant-progress-bg {
+  background: var(--ci-primary) !important;
+}
+
+/* Tooltip */
+.ant-tooltip-inner {
+  background: var(--ci-ink) !important;
+  color: #FFFFFF !important;
+  border-radius: var(--ci-radius-md) !important;
+  font-size: 12px !important;
+  padding: 6px 10px !important;
+  box-shadow: var(--ci-shadow-modal);
+}
+.ant-tooltip-arrow::before {
+  background: var(--ci-ink) !important;
+}
+
+/* Badge */
+.ant-badge-count {
+  background: var(--ci-accent-red) !important;
+  color: #FFFFFF !important;
+  border: none !important;
+  box-shadow: 0 0 0 1px var(--ci-surface);
+  font-size: 11px;
+  height: 16px;
+  line-height: 16px;
+  min-width: 16px;
+  padding: 0 4px;
+  border-radius: var(--ci-radius-pill) !important;
+}
+
+/* ============================================
+   Lab Workspace — 全局业务页信息科技质感
+   与 Dashboard 保持同一套浅色 Lab 控制台语言
+   ============================================ */
+.ci-content {
+  position: relative;
+  isolation: isolate;
+  overflow-x: hidden;
+  background:
+    linear-gradient(180deg, rgba(248, 251, 255, 0.86), rgba(241, 247, 251, 0.92)),
+    repeating-linear-gradient(90deg, rgba(47, 95, 173, 0.045) 0 1px, transparent 1px 72px),
+    repeating-linear-gradient(0deg, rgba(12, 117, 132, 0.032) 0 1px, transparent 1px 72px) !important;
+}
+
+.ci-content::before,
+.ci-content::after {
+  position: absolute;
+  pointer-events: none;
+  content: "";
+}
+
+.ci-content::before {
+  inset: 0;
+  z-index: 0;
+  background:
+    linear-gradient(90deg, transparent 0 18px, rgba(47, 95, 173, 0.052) 18px 19px, transparent 19px 42px),
+    linear-gradient(0deg, transparent 0 18px, rgba(12, 117, 132, 0.038) 18px 19px, transparent 19px 42px),
+    linear-gradient(135deg, transparent 0 48%, rgba(47, 95, 173, 0.032) 48% 48.4%, transparent 48.4% 100%);
+  background-size: 168px 96px, 168px 96px, 360px 360px;
+  opacity: 0.32;
+}
+
+.ci-content::after {
+  top: 0;
+  right: -12%;
+  bottom: 0;
+  left: -12%;
+  z-index: 0;
+  background:
+    linear-gradient(90deg, transparent 0 38%, rgba(47, 95, 173, 0.10) 46%, rgba(12, 117, 132, 0.10) 50%, transparent 58%) 0 118px / 100% 1px no-repeat,
+    linear-gradient(90deg, transparent 0 42%, rgba(22, 131, 95, 0.09) 50%, transparent 62%) 0 392px / 100% 1px no-repeat;
+  opacity: 0.38;
+  animation: ci-lab-trace-shift 18s cubic-bezier(0.4, 0, 0.2, 1) infinite alternate;
+}
+
+.ci-content > * {
+  position: relative;
+  z-index: 1;
+}
+
+.ci-content > .ci-page,
+.ci-content > .ci-workspace {
+  width: 100% !important;
+  max-width: none !important;
+  margin-right: 0 !important;
+  margin-left: 0 !important;
+}
+
+.ci-page,
+.ci-workspace {
+  min-width: 0;
+}
+
+.ci-workspace {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.ci-header {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(248, 251, 255, 0.90)),
+    repeating-linear-gradient(90deg, rgba(47, 95, 173, 0.045) 0 1px, transparent 1px 34px) !important;
+  border-bottom-color: var(--ci-lab-line) !important;
+}
+
+.ci-pipeline {
+  background: rgba(255, 255, 255, 0.72) !important;
+  border-color: var(--ci-lab-line-soft) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
+}
+
+.ci-page-heading,
+.ci-page > .ant-card,
+.ci-workspace > .ant-card,
+.ci-workspace-card,
+.ci-table-card,
+.ci-filter-card,
+.ci-systems-table-card,
+.ci-review-panel,
+.ci-prompt-library,
+.ci-prompt-lab,
+.ci-push-console,
+.ci-token-console,
+.ci-dashboard-card,
+.ci-kpi-card,
+.ant-card {
+  border-color: var(--ci-lab-line) !important;
+  border-radius: var(--ci-radius-lg) !important;
+  box-shadow: var(--ci-lab-shadow) !important;
+}
+
+.ant-card {
+  position: relative;
+  overflow: hidden;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 251, 254, 0.96)) !important;
+}
+
+.ant-card::before {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  height: 2px;
+  background: linear-gradient(90deg, var(--ci-lab-blue), rgba(12, 117, 132, 0.72), transparent);
+  opacity: 0.68;
+  content: "";
+}
+
+.ant-card .ant-card {
+  box-shadow: 0 1px 2px rgba(20, 38, 61, 0.04), 0 8px 22px rgba(20, 38, 61, 0.045) !important;
+}
+
+.ant-card .ant-card::before,
+.ant-modal .ant-card::before,
+.ant-drawer .ant-card::before {
+  height: 1px;
+  background: linear-gradient(90deg, rgba(47, 95, 173, 0.26), transparent);
+  opacity: 0.36;
+}
+
+.ant-card:hover,
+.ci-page > .ant-card:hover,
+.ci-workspace-card:hover,
+.ci-table-card:hover,
+.ci-filter-card:hover,
+.ci-review-panel:hover,
+.ci-prompt-library:hover,
+.ci-prompt-lab:hover,
+.ci-push-console:hover,
+.ci-token-console:hover {
+  border-color: var(--ci-lab-line-strong) !important;
+  box-shadow: var(--ci-lab-shadow-hover) !important;
+}
+
+.ant-card .ant-card-head {
+  min-height: 54px !important;
+  background:
+    linear-gradient(180deg, rgba(248, 251, 255, 0.98), rgba(243, 248, 252, 0.98)),
+    repeating-linear-gradient(90deg, rgba(47, 95, 173, 0.05) 0 1px, transparent 1px 22px) !important;
+  border-bottom-color: var(--ci-lab-line-soft) !important;
+}
+
+.ant-card .ant-card-head-title {
+  color: var(--ci-lab-ink) !important;
+  font-weight: 760 !important;
+  letter-spacing: 0 !important;
+}
+
+.ci-card-title-icon,
+.ci-icon-primary,
+.ci-icon-success,
+.ant-card-head-title .anticon {
+  color: var(--ci-lab-cyan) !important;
+}
+
+.ci-filter-card {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(248, 251, 254, 0.92)),
+    repeating-linear-gradient(90deg, rgba(47, 95, 173, 0.04) 0 1px, transparent 1px 24px) !important;
+}
+
+.ci-filter-card .ant-card-body {
+  padding: 14px 16px !important;
+}
+
+.ci-filter-card-premium .ci-filter-section-label,
+.ci-panel-title-kicker {
+  color: var(--ci-lab-subtle) !important;
+  font-family: var(--ci-font-mono);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0;
+}
+
+.ci-filter-card-premium .ci-filter-section-label .anticon {
+  color: var(--ci-lab-cyan) !important;
+}
+
+.ant-table-wrapper {
+  border: 1px solid var(--ci-lab-line) !important;
+  border-radius: var(--ci-radius-lg) !important;
+  box-shadow: var(--ci-lab-shadow) !important;
+  background: var(--ci-lab-surface) !important;
+}
+
+.ant-card .ant-table-wrapper {
+  border: 1px solid var(--ci-lab-line-soft) !important;
+  border-radius: var(--ci-radius-md) !important;
+  box-shadow: none !important;
+}
+
+.ant-table-thead > tr > th {
+  color: var(--ci-lab-muted) !important;
+  background:
+    linear-gradient(180deg, rgba(248, 251, 255, 0.98), rgba(243, 248, 252, 0.98)),
+    repeating-linear-gradient(90deg, rgba(47, 95, 173, 0.045) 0 1px, transparent 1px 22px) !important;
+  border-bottom-color: var(--ci-lab-line-soft) !important;
+  font-weight: 700 !important;
+  letter-spacing: 0 !important;
+}
+
+.ant-table-tbody > tr > td {
+  color: var(--ci-lab-text);
+  border-bottom-color: var(--ci-lab-line-soft) !important;
+}
+
+.ant-table-tbody > tr:hover > td,
+.ant-table-tbody > tr.ant-table-row-hover > td {
+  background: rgba(247, 250, 252, 0.88) !important;
+}
+
+.ci-stat-card,
+.ci-token-page .ci-stat-card,
+.ci-task-detail-page .ci-stat-card {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 251, 254, 0.94)),
+    repeating-linear-gradient(90deg, rgba(47, 95, 173, 0.05) 0 1px, transparent 1px 22px) !important;
+}
+
+.ci-stat-card .ant-statistic-title {
+  color: var(--ci-lab-muted) !important;
+  font-size: 12px !important;
+  font-weight: 700 !important;
+}
+
+.ci-stat-card .ant-statistic-content {
+  color: var(--ci-lab-ink) !important;
+  font-family: var(--ci-font-mono);
+  font-weight: 800 !important;
+  letter-spacing: 0 !important;
+}
+
+.ci-stat-card .ant-statistic-content-prefix {
+  color: var(--ci-lab-cyan) !important;
+}
+
+.ci-guardrail-alert,
+.ant-alert {
+  border: 1px solid var(--ci-lab-line) !important;
+  border-radius: var(--ci-radius-lg) !important;
+  box-shadow: var(--ci-lab-shadow) !important;
+}
+
+.ci-guardrail-alert {
+  background:
+    linear-gradient(180deg, rgba(244, 249, 255, 0.98), rgba(238, 247, 249, 0.94)),
+    repeating-linear-gradient(90deg, rgba(47, 95, 173, 0.05) 0 1px, transparent 1px 22px) !important;
+}
+
+.ant-modal-content,
+.ant-drawer-content {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 251, 254, 0.96)) !important;
+  border: 1px solid var(--ci-lab-line) !important;
+  box-shadow: 0 28px 80px rgba(18, 34, 58, 0.16) !important;
+}
+
+.ant-modal-header,
+.ant-drawer-header {
+  background:
+    linear-gradient(180deg, rgba(248, 251, 255, 0.98), rgba(243, 248, 252, 0.98)),
+    repeating-linear-gradient(90deg, rgba(47, 95, 173, 0.045) 0 1px, transparent 1px 22px) !important;
+  border-bottom-color: var(--ci-lab-line-soft) !important;
+}
+
+.ant-modal-title,
+.ant-drawer-title {
+  color: var(--ci-lab-ink) !important;
+  font-weight: 760 !important;
+}
+
+.ant-descriptions-bordered .ant-descriptions-view {
+  border-color: var(--ci-lab-line) !important;
+}
+
+.ant-descriptions-bordered .ant-descriptions-item-label {
+  color: var(--ci-lab-muted) !important;
+  background:
+    linear-gradient(180deg, rgba(248, 251, 255, 0.98), rgba(243, 248, 252, 0.98)) !important;
+  border-color: var(--ci-lab-line-soft) !important;
+}
+
+.ant-descriptions-bordered .ant-descriptions-item-content {
+  color: var(--ci-lab-text) !important;
+  border-color: var(--ci-lab-line-soft) !important;
+}
+
+.ant-tabs-nav {
+  background:
+    linear-gradient(180deg, rgba(248, 251, 255, 0.98), rgba(243, 248, 252, 0.98)) !important;
+  border: 1px solid var(--ci-lab-line-soft);
+}
+
+.ant-tabs-tab-active {
+  border-color: var(--ci-lab-line) !important;
+}
+
+.ci-detail-header {
+  min-width: 0;
+}
+
+.ci-inline-form {
+  row-gap: 10px;
+}
+
+@keyframes ci-lab-trace-shift {
+  0% {
+    transform: translateX(-5%);
+  }
+
+  100% {
+    transform: translateX(5%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ci-content::after {
+    animation: none;
+  }
+}
+
+/* ============================================
+   Lab Quality Pass — 更明确的企业实验室质感
+   目标：刷新后能明显感知骨架、面板和数据表的品质提升
+   ============================================ */
+.ci-sider {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(246, 250, 253, 0.96)),
+    repeating-linear-gradient(0deg, rgba(47, 95, 173, 0.038) 0 1px, transparent 1px 34px) !important;
+  border-right: 1px solid var(--ci-lab-line-strong) !important;
+  box-shadow: 1px 0 0 rgba(255, 255, 255, 0.82), 10px 0 34px rgba(20, 38, 61, 0.055) !important;
+}
+
+.ci-sider-label {
+  color: var(--ci-lab-subtle) !important;
+  font-family: var(--ci-font-mono);
+  letter-spacing: 0.08em !important;
+}
+
+.ci-menu .ant-menu-item {
+  border: 1px solid transparent;
+}
+
+.ci-menu .ant-menu-item-selected {
+  background:
+    linear-gradient(180deg, rgba(238, 245, 255, 0.92), rgba(247, 251, 255, 0.92)),
+    repeating-linear-gradient(90deg, rgba(47, 95, 173, 0.055) 0 1px, transparent 1px 18px) !important;
+  border-color: rgba(47, 95, 173, 0.16);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.78), 0 8px 20px rgba(47, 95, 173, 0.08) !important;
+}
+
+.ci-menu .ant-menu-item-selected::after {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 6px;
+  height: 6px;
+  background: var(--ci-lab-cyan);
+  border-radius: 50%;
+  box-shadow: 0 0 0 3px rgba(12, 117, 132, 0.10);
+  content: "";
+}
+
+.ci-header {
+  border-bottom-color: var(--ci-lab-line-strong) !important;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.8), 0 10px 26px rgba(20, 38, 61, 0.045) !important;
+}
+
+.ci-header::before {
+  position: absolute;
+  right: 24px;
+  bottom: -1px;
+  left: 24px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(47, 95, 173, 0.36), rgba(12, 117, 132, 0.26), transparent);
+  content: "";
+}
+
+.ci-header-context-title {
+  color: var(--ci-lab-ink) !important;
+  font-weight: 760 !important;
+}
+
+.ci-header-context-desc {
+  color: var(--ci-lab-muted) !important;
+}
+
+.ci-content {
+  background:
+    linear-gradient(180deg, rgba(249, 252, 255, 0.92), rgba(240, 247, 251, 0.96)),
+    repeating-linear-gradient(90deg, rgba(47, 95, 173, 0.06) 0 1px, transparent 1px 72px),
+    repeating-linear-gradient(0deg, rgba(12, 117, 132, 0.045) 0 1px, transparent 1px 72px) !important;
+}
+
+.ci-content::before {
+  opacity: 0.46;
+}
+
+.ci-content::after {
+  opacity: 0.52;
+}
+
+.ci-page > .ant-card:not(.ci-stat-card):not(.ci-kpi-card)::after,
+.ci-workspace > .ant-card::after,
+.ci-workspace-card::after,
+.ci-table-card::after,
+.ci-filter-card::after,
+.ci-systems-table-card::after,
+.ci-prompt-library::after,
+.ci-prompt-lab::after,
+.ci-push-console::after,
+.ci-token-console::after,
+.ci-dashboard-card::after {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 18px;
+  height: 18px;
+  border-top: 1px solid rgba(12, 117, 132, 0.28);
+  border-right: 1px solid rgba(12, 117, 132, 0.28);
+  content: "";
+  pointer-events: none;
+}
+
+.ant-card .ant-card-head-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ant-card .ant-card-head-title::before {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 auto;
+  background: var(--ci-lab-cyan);
+  border-radius: 50%;
+  box-shadow: 0 0 0 3px rgba(12, 117, 132, 0.10);
+  content: "";
+}
+
+.ant-card .ant-card .ant-card-head-title::before,
+.ci-dashboard-page .ant-card-head-title::before {
+  display: none;
+}
+
+.ant-table-wrapper {
+  position: relative;
+}
+
+.ant-table-wrapper::before {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  z-index: 2;
+  height: 2px;
+  background: linear-gradient(90deg, var(--ci-lab-blue), rgba(12, 117, 132, 0.58), transparent);
+  opacity: 0.74;
+  content: "";
+}
+
+.ant-table-tbody > tr > td:first-child {
+  position: relative;
+}
+
+.ant-table-tbody > tr:hover > td:first-child::before {
+  position: absolute;
+  top: 12px;
+  bottom: 12px;
+  left: 0;
+  width: 2px;
+  background: var(--ci-lab-cyan);
+  border-radius: 0 2px 2px 0;
+  content: "";
+}
+
+.ci-stat-card,
+.ci-token-page .ci-stat-card,
+.ci-task-detail-page .ci-stat-card {
+  position: relative;
+  min-height: 118px;
+  border-color: var(--ci-lab-line) !important;
+}
+
+.ci-stat-card::after {
+  position: absolute;
+  right: 16px;
+  bottom: 12px;
+  left: 16px;
+  height: 1px;
+  background: repeating-linear-gradient(90deg, rgba(102, 116, 135, 0.26) 0 6px, transparent 6px 12px);
+  content: "";
+}
+
+.ci-stat-card .ant-card-body {
+  display: flex;
+  min-height: 116px;
+  align-items: center;
+}
+
+.ci-stat-card .ant-statistic {
+  width: 100%;
+}
+
+.ci-filter-card .ant-form-item-label > label,
+.ci-inline-form .ant-form-item-label > label {
+  color: var(--ci-lab-muted) !important;
+  font-family: var(--ci-font-mono);
+  font-size: 11px !important;
+  font-weight: 800 !important;
+}

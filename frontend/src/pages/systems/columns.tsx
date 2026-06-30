@@ -152,9 +152,7 @@ export const getSystemColumns = (handlers: SystemColumnHandlers) => [
           okButtonProps={{ danger: true }}
           onConfirm={() => handlers.onDelete(record)}
         >
-          <Button size="small" danger icon={<DeleteOutlined />}>
-            删除
-          </Button>
+          <Button size="small" danger icon={<DeleteOutlined />} />
         </Popconfirm>
       </Space>
     ),
