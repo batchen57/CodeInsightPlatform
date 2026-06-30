@@ -232,6 +232,6 @@ export async function listAllTasksBySystem(systemId: number): Promise<import('..
   // 这里显式断言返回结构并取 .records，避免历史上把 PageResult 强转成 Task[] 导致的
   // `tasks.map is not a function` 崩溃。
   type Page = { records: import('../types').Task[]; total: number; size: number; current: number };
-  const page = await request.get<Page>(`/tasks`, { params: { current: 1, size: 200, systemId } });
+  const page = await request.get<Page, Page>(`/tasks`, { params: { current: 1, size: 200, systemId } });
   return page?.records ?? [];
 }
