@@ -233,7 +233,7 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
         // 验证系统和仓库的从属合法性
         validateTaskSource(systemId, repositoryId);
         validateNoUnconfirmedDrafts(systemId, repositoryId);
-        decompilePromptService.validateSystemPromptBinding(systemId);
+        decompilePromptService.validateRepositoryPromptBinding(repositoryId);
         DecompileTask task = new DecompileTask();
         task.setSystemId(systemId);
         task.setRepositoryId(repositoryId);
@@ -292,7 +292,7 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
                                                Boolean requireEntrypointReview) {
         validateTaskSource(systemId, repositoryId);
         validateNoUnconfirmedDrafts(systemId, repositoryId);
-        decompilePromptService.validateSystemPromptBinding(systemId);
+        decompilePromptService.validateRepositoryPromptBinding(repositoryId);
         DecompileTask task = new DecompileTask();
         task.setSystemId(systemId);
         task.setRepositoryId(repositoryId);
@@ -523,15 +523,27 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
         // 缺省优先级：SCHEDULED=60, MANUAL=50
         if (task.getPriority() == null) {
             task.setPriority(defaultPriorityFor(task.getTriggerSource()));
-        // 清除上次失败痕迹:清 error_reason + 清空 pipeline.log(否则前端展示上次异常日志)
-        task.setErrorReason(null);
-        this.updateById(task);
-        truncatePipelineLog(id);
-
         }
+        prepareTaskRerun(id, task);
         taskCache.put(task.getId(), task);
         // DRAFT → PENDING（TaskQueueDispatcher 在下个 tick 拉起）
         stateMachineService.transitTo(task, TaskStatus.PENDING, null);
+    }
+
+    /**
+     * 重跑前清理上次失败/取消留下的错误信息、日志与内存上下文。
+     */
+    private void prepareTaskRerun(Long taskId, DecompileTask task) {
+        task.setErrorReason(null);
+        task.setEndedAt(null);
+        task.setDurationMs(null);
+        task.setStartedAt(null);
+        task.setClaimedBy(null);
+        task.setClaimedAt(null);
+        task.setLeaseUntil(null);
+        pipelineContextCache.remove(taskId);
+        execLog.truncate(taskId);
+        this.updateById(task);
     }
 
     private int defaultPriorityFor(String triggerSource) {
@@ -568,28 +580,10 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
         if (task.getPriority() == null) {
             task.setPriority(defaultPriorityFor(task.getTriggerSource()));
         }
-        // 清除上次失败痕迹:清 error_reason + 清空 pipeline.log(否则前端展示上次异常日志)
-        task.setErrorReason(null);
-        task.setClaimedBy(null);
-        task.setClaimedAt(null);
-        task.setLeaseUntil(null);
-        this.updateById(task);
-        truncatePipelineLog(id);
+        prepareTaskRerun(id, task);
         taskCache.put(task.getId(), task);
         // FAILED/CANCELLED → PENDING（dispatcher 在下个 tick 拉起）
         stateMachineService.transitTo(task, TaskStatus.PENDING, null);
-    }
-
-    /** 清空 pipeline.log:新建空文件供新一次流水线续写 */
-    private void truncatePipelineLog(Long taskId) {
-        try {
-            File logFile = new File(storageBase, "task_" + taskId + "/pipeline.log");
-            if (logFile.exists()) {
-                try (java.io.FileOutputStream fos = new java.io.FileOutputStream(logFile)) { }
-            }
-        } catch (Exception e) {
-            log.warn("清空 pipeline.log 失败 task={}: {}", taskId, e.getMessage());
-        }
     }
 
     /**
@@ -804,6 +798,7 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
             long t0 = System.currentTimeMillis();
             boolean pausedForEntrypointReview = false;
             try {
+                execLog.truncate(taskId);
                 execLog.log(taskId, "══════ 流水线启动 taskId=" + taskId + " ══════");
 
                 // 1. PULLING_CODE

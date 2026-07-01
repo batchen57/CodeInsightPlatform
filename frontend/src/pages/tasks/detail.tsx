@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, Button, Card, Col, Descriptions, Modal, Progress, Row, Space, Steps, Statistic, Tag, Timeline, Typography, message } from 'antd';
 import {
   ArrowLeftOutlined,
@@ -21,27 +21,29 @@ const buildDraftsHref = (task: Task) => `/drafts/${task.id}`;
 
 const { Text, Title } = Typography;
 
-// 运行中的核心状态列表
-// 包含 MODULE_HIERARCHY_REVIEW：处于人工调试断点时也要轮询状态，提交保存并继续后会跳到 GENERATING_DOC
-const runningStatuses = ['PENDING', 'PULLING_CODE', 'PARSING_CODE', 'SPLITTING_TASK', 'AI_ANALYZING', 'MODULE_HIERARCHY_REVIEW', 'GENERATING_DOC', 'PUSHING'];
+// 包含 ENTRYPOINT_REVIEW / MODULE_HIERARCHY_REVIEW：处于人工复核断点时也要轮询状态
+const runningStatuses = ['PENDING', 'PULLING_CODE', 'PARSING_CODE', 'SPLITTING_TASK', 'ENTRYPOINT_REVIEW', 'AI_ANALYZING', 'MODULE_HIERARCHY_REVIEW', 'GENERATING_DOC', 'PUSHING'];
+
+/** 执行流程 Steps 固定 9 步（含入口复核）；索引与 statusMeta.step 对齐 */
+const FLOW_STEP_ENTRY_REVIEW = 4;
 
 // 任务执行管道阶段步骤索引与展示元数据配置说明
-// 「模块层级复核」位于「AI 分析」与「生成文档」之间（step 5），是 MODULE_HIERARCHY_REVIEW 状态对应的可视化阶段
 const statusMeta: Record<string, { color: string; label: string; step: number }> = {
   DRAFT: { color: 'default', label: '草稿', step: -1 },
   PENDING: { color: 'blue', label: '排队中', step: 0 },
   PULLING_CODE: { color: 'blue', label: '拉取代码', step: 1 },
   PARSING_CODE: { color: 'cyan', label: '解析代码', step: 2 },
   SPLITTING_TASK: { color: 'purple', label: '任务切片', step: 3 },
-  AI_ANALYZING: { color: 'orange', label: 'AI 分析中', step: 4 },
-  MODULE_HIERARCHY: { color: 'gold', label: '模块层级提炼', step: 4 },
-  MODULE_HIERARCHY_REVIEW: { color: 'geekblue', label: '模块层级复核', step: 5 },
-  GENERATING_DOC: { color: 'gold', label: '生成文档', step: 6 },
-  PENDING_REVIEW: { color: 'magenta', label: '待复核', step: 7 },
-  REVIEWING: { color: 'geekblue', label: '复核中', step: 7 },
-  CONFIRMED: { color: 'green', label: '已确认', step: 7 },
-  PUSHING: { color: 'purple', label: '推送中', step: 7 },
-  PUSHED: { color: 'green', label: '已推送', step: 7 },
+  ENTRYPOINT_REVIEW: { color: 'cyan', label: '入口复核', step: FLOW_STEP_ENTRY_REVIEW },
+  AI_ANALYZING: { color: 'orange', label: 'AI 分析中', step: 5 },
+  MODULE_HIERARCHY: { color: 'gold', label: '模块层级提炼', step: 5 },
+  MODULE_HIERARCHY_REVIEW: { color: 'geekblue', label: '模块层级复核', step: 6 },
+  GENERATING_DOC: { color: 'gold', label: '生成文档', step: 7 },
+  PENDING_REVIEW: { color: 'magenta', label: '待复核', step: 8 },
+  REVIEWING: { color: 'geekblue', label: '复核中', step: 8 },
+  CONFIRMED: { color: 'green', label: '已确认', step: 8 },
+  PUSHING: { color: 'purple', label: '推送中', step: 8 },
+  PUSHED: { color: 'green', label: '已推送', step: 8 },
   FAILED: { color: 'red', label: '失败', step: -1 },
   CANCELLED: { color: 'default', label: '已取消', step: -1 },
 };
@@ -64,32 +66,17 @@ const TaskDetail: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
 
-  // 卡片执行日志内容
-  const [cardLogContent, setCardLogContent] = useState('');
-
-  const loadCardLog = useCallback(async () => {
-    if (!taskId) return;
-    try {
-      const content = await getTaskExecutionLog(taskId);
-      setCardLogContent(content || '');
-    } catch {
-      setCardLogContent('');
-    }
-  }, [taskId]);
-
-  // 任务加载时 + 运行中轮询时刷新卡片日志
-  useEffect(() => {
-    loadCardLog();
-  }, [loadCardLog]);
-
-  useEffect(() => {
-    if (!task || !runningStatuses.includes(task.status)) return;
-    const timer = window.setInterval(loadCardLog, 2500);
-    return () => window.clearInterval(timer);
-  }, [loadCardLog, task]);
-
-  // 结构化日志摘要：阶段耗时、文件/切片计数、AI 成功/失败数、Mock 标记、当前进度
+  // 结构化摘要 / 弹窗日志
   const [summary, setSummary] = useState<TaskLogSummary | null>(null);
+  const [logModalOpen, setLogModalOpen] = useState(false);
+  const [execLogContent, setExecLogContent] = useState('');
+  const [logLoading, setLogLoading] = useState(false);
+  const prevTaskStatusRef = useRef<string | null>(null);
+
+  const clearExecutionLogs = useCallback(() => {
+    setSummary(null);
+    setExecLogContent('');
+  }, []);
 
   const loadSummary = useCallback(async () => {
     if (!taskId) return;
@@ -111,11 +98,6 @@ const TaskDetail: React.FC = () => {
     const timer = window.setInterval(loadSummary, 2500);
     return () => window.clearInterval(timer);
   }, [loadSummary, task]);
-
-  // 执行日志弹窗
-  const [logModalOpen, setLogModalOpen] = useState(false);
-  const [execLogContent, setExecLogContent] = useState('');
-  const [logLoading, setLogLoading] = useState(false);
 
   const openExecLog = async () => {
     if (!taskId) return;
@@ -170,19 +152,39 @@ const TaskDetail: React.FC = () => {
   }, [fetchTaskDetails, task]);
 
   // 包装各类流程操作事件（启动/重跑/终止），并在操作完成后自动重载数据
-  const runAction = async (action: () => Promise<void>, success: string) => {
+  const runAction = async (action: () => Promise<void>, success: string, resetLogs = false) => {
     if (!task) {
       return;
     }
     setActionLoading(true);
     try {
+      if (resetLogs) {
+        clearExecutionLogs();
+      }
       await action();
       message.success(success);
-      fetchTaskDetails();
+      await fetchTaskDetails();
+      await Promise.all([loadSummary()]);
     } finally {
       setActionLoading(false);
     }
   };
+
+  /** 任务从失败/取消重新进入运行态时，丢弃上一轮日志缓存 */
+  useEffect(() => {
+    if (!task) return;
+    const prev = prevTaskStatusRef.current;
+    const cur = task.status;
+    if (
+      prev &&
+      ['FAILED', 'CANCELLED'].includes(prev) &&
+      runningStatuses.includes(cur)
+    ) {
+      clearExecutionLogs();
+      loadSummary();
+    }
+    prevTaskStatusRef.current = cur;
+  }, [task, clearExecutionLogs, loadSummary]);
 
   const meta = task ? statusMeta[task.status] ?? { color: 'default', label: task.status, step: -1 } : null;
 
@@ -231,7 +233,7 @@ const timelineItem = (s: PipelineStageStat) => {
       return `等待人工复核 · 累计耗时 ${sec} 秒`;
     }
     const done = summary?.pipeline?.filter((s) => s.status === 'done' || s.status === 'skipped').length ?? 0;
-    const total = summary?.pipeline?.length ?? 8;
+    const total = summary?.pipeline?.length ?? 9;
     return `正在：${currentStageLabel || meta?.label || task.status} · 已完成 ${done}/${total} 阶段 · 累计 ${sec} 秒`;
   })();
 
@@ -254,6 +256,26 @@ const timelineItem = (s: PipelineStageStat) => {
       />
     );
   }
+
+  /** undefined 时按后端默认 TRUE：启用入口复核 */
+  const entryReviewEnabled = task.requireEntrypointReview !== false;
+  const flowCurrent = meta.step < 0 ? 0 : meta.step;
+  const entryReviewSkipped = !entryReviewEnabled && flowCurrent > FLOW_STEP_ENTRY_REVIEW;
+  const flowStepItems = [
+    { title: '排队' },
+    { title: '拉取代码' },
+    { title: '静态解析' },
+    { title: '切片' },
+    {
+      title: '入口复核',
+      description: entryReviewEnabled ? undefined : (entryReviewSkipped ? '已跳过' : '未启用'),
+      status: (entryReviewSkipped ? 'finish' : !entryReviewEnabled ? 'wait' : undefined) as 'finish' | 'wait' | undefined,
+    },
+    { title: 'AI 分析' },
+    { title: '模块层级复核' },
+    { title: '生成文档' },
+    { title: '复核' },
+  ];
 
   return (
     <div className="ci-page ci-task-detail-page">
@@ -278,7 +300,7 @@ const timelineItem = (s: PipelineStageStat) => {
                 type="primary"
                 icon={<PlayCircleOutlined />}
                 loading={actionLoading}
-                onClick={() => runAction(() => startTask(task.id), '任务已启动')}
+                onClick={() => runAction(() => startTask(task.id), '任务已启动', true)}
               >
                 启动
               </Button>
@@ -298,7 +320,7 @@ const timelineItem = (s: PipelineStageStat) => {
                 type="primary"
                 icon={<ReloadOutlined />}
                 loading={actionLoading}
-                onClick={() => runAction(() => retryTask(task.id), '任务已重新启动')}
+                onClick={() => runAction(() => retryTask(task.id), '任务已重新启动', true)}
               >
                 重试
               </Button>
@@ -319,20 +341,27 @@ const timelineItem = (s: PipelineStageStat) => {
       <Card title="执行流程状态">
         <Steps
           size="small"
-          current={meta.step}
+          current={flowCurrent}
           status={task.status === 'FAILED' ? 'error' : 'process'}
-          items={[
-            { title: '排队' },
-            { title: '拉取代码' },
-            { title: '静态解析' },
-            { title: '切片' },
-            { title: 'AI 分析' },
-            { title: '模块层级复核' },
-            { title: '生成文档' },
-            { title: '复核' },
-          ]}
+          items={flowStepItems}
         />
       </Card>
+
+      {/* 入口复核提示：跳转到入口复核详情页 */}
+      {task.status === 'ENTRYPOINT_REVIEW' && (
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message="知识入口需要人工复核"
+          description="代码切片与入口识别已完成，需要您确认入口类与方法清单。请点击下方按钮前往「入口复核」页面处理。"
+          action={
+            <Button type="primary" icon={<SwapOutlined />} onClick={() => navigate(`/tasks/entrypoint-review/${task.id}`)}>
+              前往入口复核
+            </Button>
+          }
+        />
+      )}
 
       {/* 模块层级复核提示：统一跳转到「模块层级复核」专用页面处理 */}
       {task.status === 'MODULE_HIERARCHY_REVIEW' && (
@@ -366,7 +395,7 @@ const timelineItem = (s: PipelineStageStat) => {
       )}
 
       {/* 任务失败错误提示框 */}
-      {task.errorReason && (
+      {task.status === 'FAILED' && task.errorReason && (
         <Alert
           type="error"
           showIcon
@@ -513,8 +542,9 @@ const timelineItem = (s: PipelineStageStat) => {
             {/* 4. 阶段 Timeline */}
             {summary?.pipeline && summary.pipeline.length > 0 && (
               <Timeline
+                key={`pipeline-${summary.pipeline.length}`}
                 style={{ marginTop: 12 }}
-                items={summary.pipeline.map((s) => timelineItem(s))}
+                items={summary.pipeline.map((s) => ({ key: s.key, ...timelineItem(s) }))}
               />
             )}
           </Card>
@@ -598,7 +628,7 @@ const timelineItem = (s: PipelineStageStat) => {
               borderRadius: 4,
             }}
           >
-            {execLogContent || cardLogContent || '(暂无日志)'}
+            {execLogContent || '(暂无日志)'}
           </pre>
         )}
       </Modal>

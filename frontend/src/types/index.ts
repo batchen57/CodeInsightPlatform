@@ -16,9 +16,9 @@ export interface System {
   /** 状态机：DRAFT / REPO_CONFIGURED / SCAN_CONFIGURED / PROMPT_CONFIGURED / ACTIVE / DISABLED */
   state?: SystemState;
   /** 系统级模块提取提示词 ID（FK → ci_prompt.id） */
-  modularizePromptId?: number | null;
+  /** @deprecated 提示词绑定已迁移到仓库级 ci_repository.modularize_prompt_id */ modularizePromptId?: number | null;
   /** 系统级文档生成提示词 ID（FK → ci_prompt.id） */
-  documentPromptId?: number | null;
+  /** @deprecated 提示词绑定已迁移到仓库级 ci_repository.document_prompt_id */ documentPromptId?: number | null;
   createdAt: string;
   updatedAt: string;
   // 以下字段由 /systems 聚合接口返回，list 才有
@@ -41,6 +41,10 @@ export interface Repository {
   lastDecompileAt?: string;
   /** 仓库级入口扫描配置，新建任务时默认带出，任务可单独覆盖 */
   entryScanConfig?: EntryScanConfig;
+  /** 仓库级模块提取提示词 ID（FK → ci_prompt.id） */
+  modularizePromptId?: number | null;
+  /** 仓库级文档生成提示词 ID（FK → ci_prompt.id） */
+  documentPromptId?: number | null;
   createdAt: string;
   updatedAt: string;
 }

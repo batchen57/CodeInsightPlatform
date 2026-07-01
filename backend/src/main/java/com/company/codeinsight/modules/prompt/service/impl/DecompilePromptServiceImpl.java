@@ -11,6 +11,8 @@ import com.company.codeinsight.modules.prompt.dto.PromptTestStreamEventDto;
 import com.company.codeinsight.modules.prompt.entity.DecompilePrompt;
 import com.company.codeinsight.modules.prompt.mapper.DecompilePromptMapper;
 import com.company.codeinsight.modules.prompt.service.DecompilePromptService;
+import com.company.codeinsight.modules.repository.entity.CodeRepository;
+import com.company.codeinsight.modules.repository.mapper.CodeRepositoryMapper;
 import com.company.codeinsight.modules.system.mapper.SystemApplicationMapper;
 import com.company.codeinsight.modules.model.mapper.AiModelMapper;
 import com.company.codeinsight.modules.token.service.TokenAuditService;
@@ -69,6 +71,8 @@ public class DecompilePromptServiceImpl extends ServiceImpl<DecompilePromptMappe
 
     @Autowired
     private SystemApplicationMapper systemMapper;
+    @Autowired
+    private CodeRepositoryMapper codeRepositoryMapper;
 
     private final HttpClient httpClient = HttpClient.newBuilder().build();
 
@@ -248,6 +252,18 @@ public class DecompilePromptServiceImpl extends ServiceImpl<DecompilePromptMappe
             throw new BusinessException("系统不存在");
         }
         validatePromptPair(system.getModularizePromptId(), system.getDocumentPromptId(), "系统");
+    }
+
+    @Override
+    public void validateRepositoryPromptBinding(Long repositoryId) {
+        if (repositoryId == null) {
+            throw new BusinessException("代码库不存在");
+        }
+        CodeRepository repo = codeRepositoryMapper.selectById(repositoryId);
+        if (repo == null) {
+            throw new BusinessException("代码库不存在");
+        }
+        validatePromptPair(repo.getModularizePromptId(), repo.getDocumentPromptId(), "仓库");
     }
 
     @Override

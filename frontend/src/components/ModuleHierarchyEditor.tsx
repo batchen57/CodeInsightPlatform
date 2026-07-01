@@ -58,6 +58,26 @@ interface EditorDataNode extends DataNode {
 // Helpers
 // ---------------------------------------------------------------------------
 
+/** 递归把 hierarchy 中的 confirmed 从 "Y"/"N" 字符串 → boolean */
+function yonHierarchyFromDisplay(obj: unknown): any {
+  if (obj == null) return obj;
+  if (Array.isArray(obj)) return (obj as unknown[]).map(yonHierarchyFromDisplay);
+  if (typeof obj === 'object') {
+    const result: Record<string, unknown> = {};
+    for (const key of Object.keys(obj as Record<string, unknown>)) {
+      const val = (obj as Record<string, unknown>)[key];
+      if (key === 'confirmed') {
+        if (val === 'Y' || val === 'y' || val === true || val === 'true') { result[key] = true; }
+        else { result[key] = false; }
+      } else {
+        result[key] = yonHierarchyFromDisplay(val);
+      }
+    }
+    return result;
+  }
+  return obj;
+}
+
 /** 收集 hierarchy 中所有节点 id（用于新增时避让） */
 function collectAllNodeIds(h: ModuleHierarchy): string[] {
   const ids: string[] = [];
@@ -139,7 +159,9 @@ const ModuleHierarchyEditor: React.FC<ModuleHierarchyEditorProps> = ({
     getModuleHierarchy(taskId)
       .then((data) => {
         if (cancelled) return;
-        setHierarchy(data ?? { taskId, modules: {} });
+        // 把后端返回的 "Y"/"N" 字符串统一转成 boolean，使树形 Checkbox 正确显示
+        const normalized = yonHierarchyFromDisplay(data ?? { taskId, modules: {} });
+        setHierarchy(normalized);
       })
       .catch(() => {
         // request.ts 拦截器已统一弹错

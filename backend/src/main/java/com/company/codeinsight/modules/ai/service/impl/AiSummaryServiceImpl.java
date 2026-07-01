@@ -165,6 +165,10 @@ public class AiSummaryServiceImpl implements AiSummaryService {
     @Value("${code-insight.token.system-monthly-limit:1000000}")
     private int systemMonthlyTokenLimit;
 
+    /** 文档生成粒度：function=按功能(默认) / module=按模块 */
+    @Value("${code-insight.doc-generation.granularity:function}")
+    private String docGenerationGranularity;
+
     // JSON 数据映射工具
     private final ObjectMapper objectMapper = new ObjectMapper();
     // HTTP 调用客户端，连接超时设为 15 秒
@@ -697,31 +701,34 @@ public class AiSummaryServiceImpl implements AiSummaryService {
             log.info("增量草稿生成 — taskId={} 变更文件映射到 FQ 类名 {} 个", taskId, changedFqSet.size());
         }
 
-        // 6. 遍历每个 ModuleDto → 整模块喂 AI → 落库
-        int moduleIndex = 0;
-        int moduleTotal = hierarchy.getModules().size();
-        int regenerated = 0;
-        int skipped = 0;
-        for (com.company.codeinsight.modules.hierarchy.model.ModuleDto moduleDto : hierarchy.getModules().values()) {
-            moduleIndex++;
-            // 增量模式：模块的 function.classPaths 全部不在变更集中 → 跳过，旧草稿保留
-            if (changedFqSet != null && !moduleTouchedByChange(moduleDto, changedFqSet)) {
-                skipped++;
-                execLog.log(taskId, "  [module " + moduleIndex + "/" + moduleTotal + "] " + moduleDto.getModuleName() + " — 未受本次变更影响，跳过");
-                continue;
+        // 6. 根据 granularity 分发到整模块或按功能粒度
+        if ("function".equalsIgnoreCase(docGenerationGranularity)) {
+            generateDraftDocumentByFunction(task, ws, hierarchy, projectDir, effective, changedFqSet);
+        } else {
+            // --- 按模块（默认，现有行为）---
+            int moduleIndex = 0;
+            int moduleTotal = hierarchy.getModules().size();
+            int regenerated = 0;
+            int skipped = 0;
+            for (com.company.codeinsight.modules.hierarchy.model.ModuleDto moduleDto : hierarchy.getModules().values()) {
+                moduleIndex++;
+                if (changedFqSet != null && !moduleTouchedByChange(moduleDto, changedFqSet)) {
+                    skipped++;
+                    execLog.log(taskId, "  [module " + moduleIndex + "/" + moduleTotal + "] " + moduleDto.getModuleName() + " — 未受本次变更影响，跳过");
+                    continue;
+                }
+                execLog.log(taskId, "  [module " + moduleIndex + "/" + moduleTotal + "] " + moduleDto.getModuleName());
+                try {
+                    generateModuleDraft(task, ws, moduleDto, hierarchy, projectDir);
+                    regenerated++;
+                } catch (Exception e) {
+                    log.error("generateModuleDraft failed for module {}: {}",
+                            moduleDto.getModuleName(), e.getMessage(), e);
+                }
             }
-            execLog.log(taskId, "  [module " + moduleIndex + "/" + moduleTotal + "] " + moduleDto.getModuleName());
-            try {
-                generateModuleDraft(task, ws, moduleDto, hierarchy, projectDir);
-                regenerated++;
-            } catch (Exception e) {
-                log.error("generateModuleDraft failed for module {}: {}",
-                        moduleDto.getModuleName(), e.getMessage(), e);
-            }
+            log.info("generateDraftDocument done (module). taskId={} modules={} regenerated={} skipped={}",
+                    taskId, moduleTotal, regenerated, skipped);
         }
-
-        log.info("generateDraftDocument done. taskId={} modules={} regenerated={} skipped={} ctx={}",
-                taskId, hierarchy.getModules().size(), regenerated, skipped, effective);
     }
 
     /**
@@ -750,6 +757,237 @@ public class AiSummaryServiceImpl implements AiSummaryService {
     /**
      * 项 3 新增：整模块喂 AI 生成 md 的核心流程
      */
+    /**
+     * 按功能（Function）粒度生成文档：每个 FunctionDto 一次 AI 调用。
+     * <p>草稿命名：{moduleName}/{subModuleName}/{functionName}.md</p>
+     * <p>下线时删除本方法 + {@code docGenerationGranularity} 配置即可恢复单一 module 模式。</p>
+     */
+    private void generateDraftDocumentByFunction(DecompileTask task, DraftWorkspace ws,
+                                                  com.company.codeinsight.modules.hierarchy.model.ModuleHierarchy hierarchy,
+                                                  File projectDir,
+                                                  com.company.codeinsight.modules.scanner.model.IncrementalContext effective,
+                                                  java.util.Set<String> changedFqSet) {
+        Long taskId = task.getId();
+        int fnTotal = countFunctionsInHierarchy(hierarchy);
+        int fnIndex = 0;
+        int regenerated = 0;
+        int skipped = 0;
+
+        for (com.company.codeinsight.modules.hierarchy.model.ModuleDto m : hierarchy.getModules().values()) {
+            for (com.company.codeinsight.modules.hierarchy.model.SubModuleDto sm : m.getSubModules().values()) {
+                for (com.company.codeinsight.modules.hierarchy.model.FunctionDto fn : sm.getFunctions().values()) {
+                    fnIndex++;
+                    // 增量：function.classPaths 全不在变更集 → 跳过
+                    if (changedFqSet != null) {
+                        boolean touched = false;
+                        if (fn.getClassPaths() != null) {
+                            for (String cp : fn.getClassPaths()) {
+                                if (changedFqSet.contains(cp)) { touched = true; break; }
+                            }
+                        }
+                        if (!touched) { skipped++; continue; }
+                    }
+                    String label = m.getModuleName() + " / " + sm.getSubModuleName() + " / " + fn.getFunctionName();
+                    execLog.log(taskId, "  [fn " + fnIndex + "/" + fnTotal + "] " + label);
+                    try {
+                        generateFunctionDraft(task, ws, m, sm, fn, hierarchy, projectDir);
+                        regenerated++;
+                    } catch (Exception e) {
+                        log.error("generateFunctionDraft failed for function {}: {}", label, e.getMessage(), e);
+                    }
+                }
+            }
+        }
+        log.info("generateDraftDocument done (function). taskId={} total={} regenerated={} skipped={}",
+                taskId, fnTotal, regenerated, skipped);
+    }
+
+    /** 按功能粒度生成单条草稿 */
+    private void generateFunctionDraft(DecompileTask task, DraftWorkspace ws,
+                                        com.company.codeinsight.modules.hierarchy.model.ModuleDto moduleDto,
+                                        com.company.codeinsight.modules.hierarchy.model.SubModuleDto subModuleDto,
+                                        com.company.codeinsight.modules.hierarchy.model.FunctionDto functionDto,
+                                        com.company.codeinsight.modules.hierarchy.model.ModuleHierarchy hierarchy,
+                                        File projectDir) {
+        Long taskId = task.getId();
+        String funcName = functionDto.getFunctionName();
+
+        // 1. 收集该 Function 的源码
+        String source = collectFunctionSourceCode(taskId, functionDto, projectDir);
+        if (!StringUtils.hasText(source)) {
+            log.warn("Function {} BFS 无可达源码，跳过", funcName);
+            return;
+        }
+
+        // 2. 渲染 prompt
+        String promptTemplate = decompilePromptService.requireTaskPromptContent(task,
+                com.company.codeinsight.modules.prompt.entity.DecompilePrompt.TYPE_DOCUMENT_GENERATION);
+        String scopedJson = buildScopedHierarchyJson(moduleDto, subModuleDto, functionDto);
+        String label = moduleDto.getModuleName() + " / " + subModuleDto.getSubModuleName() + " / " + funcName;
+        String promptInput = promptTemplateLoader.renderModuleDoc(promptTemplate, label, scopedJson, source);
+        if (promptTemplateLoader.hasUnresolvedModuleDocPlaceholders(promptInput)) {
+            log.warn("Function {} prompt 有未替换占位符，回退占位文档", funcName);
+            upsertFunctionDraft(task, ws, moduleDto, subModuleDto, functionDto,
+                    buildPlaceholderDoc(moduleDto), "PENDING_REVIEW");
+            return;
+        }
+
+        // 3. 调 AI
+        AiSummaryService.AiCallMeta callMeta = new AiSummaryService.AiCallMeta();
+        callMeta.setCallStage("FUNCTION_DOC");
+        callMeta.setClassPath(functionDto.getId());
+        String aiMarkdown = summarizeWithPrompt(taskId, promptInput, task.getModelName(), callMeta);
+
+        String finalMarkdown, initialStatus;
+        if (!StringUtils.hasText(aiMarkdown) || "{}".equals(aiMarkdown.trim())) {
+            log.warn("Function {} AI 响应为空", funcName);
+            finalMarkdown = buildPlaceholderDoc(moduleDto);
+            initialStatus = "PENDING_REVIEW";
+        } else {
+            String validationMsg = validateModuleDocStructure(aiMarkdown);
+            if (validationMsg != null) {
+                log.warn("Function {} AI 结构不完整: {}", funcName, validationMsg);
+                finalMarkdown = aiMarkdown;
+                initialStatus = "PENDING_REVIEW";
+            } else {
+                finalMarkdown = aiMarkdown;
+                initialStatus = "AI_GENERATED";
+            }
+        }
+        upsertFunctionDraft(task, ws, moduleDto, subModuleDto, functionDto, finalMarkdown, initialStatus);
+    }
+
+    /** 收集单个 Function 的可达源码（从 methodSignatures BFS） */
+    private String collectFunctionSourceCode(Long taskId,
+                                              com.company.codeinsight.modules.hierarchy.model.FunctionDto fn,
+                                              File projectDir) {
+        Set<String> rootSignatures = new LinkedHashSet<>();
+        if (fn.getMethodSignatures() != null) {
+            for (String sig : fn.getMethodSignatures()) {
+                String rootSig = buildFullMethodSignature(fn, sig);
+                if (StringUtils.hasText(rootSig)) rootSignatures.add(rootSig);
+            }
+        }
+        if (rootSignatures.isEmpty()) {
+            // fallback：按 classPaths（兼容旧数据）
+            if (fn.getClassPaths() != null && !fn.getClassPaths().isEmpty()) {
+                StringBuilder sb = new StringBuilder();
+                for (String cp : fn.getClassPaths()) {
+                    String classFilePath = lookupClassFilePath(taskId, cp);
+                    if (classFilePath == null) continue;
+                    File f = new File(projectDir, classFilePath);
+                    if (!f.exists()) continue;
+                    try {
+                        String content = Files.readString(f.toPath());
+                        sb.append("// === Class: ").append(cp).append(" ===\n").append(content).append("\n\n");
+                    } catch (IOException ignored) {}
+                }
+                return sb.toString();
+            }
+            return "";
+        }
+        Set<String> reachableMethods = methodCallGraphService.resolveReachableMethods(taskId, rootSignatures);
+        Map<String, Set<String>> classToMethodSigs = groupByClass(reachableMethods);
+        StringBuilder sb = new StringBuilder();
+        for (Map.Entry<String, Set<String>> entry : classToMethodSigs.entrySet()) {
+            String className = entry.getKey();
+            Set<String> methodSigs = entry.getValue();
+            String classFilePath = lookupClassFilePath(taskId, className);
+            if (classFilePath == null) continue;
+            File classFile = new File(projectDir, classFilePath);
+            if (!classFile.exists()) continue;
+            String filteredContent = filterClassToMethods(classFile, methodSigs);
+            if (!StringUtils.hasText(filteredContent)) continue;
+            sb.append("// === Class: ").append(className).append(" ===\n");
+            sb.append(filteredContent).append("\n\n");
+        }
+        return sb.toString();
+    }
+
+    /** 构建 Function-scoped hierarchy JSON（仅保留该 Function 所在路径） */
+    private String buildScopedHierarchyJson(
+            com.company.codeinsight.modules.hierarchy.model.ModuleDto m,
+            com.company.codeinsight.modules.hierarchy.model.SubModuleDto sm,
+            com.company.codeinsight.modules.hierarchy.model.FunctionDto fn) {
+        try {
+            Map<String, Object> scoped = new LinkedHashMap<>();
+            Map<String, Object> modMap = new LinkedHashMap<>();
+            modMap.put("id", m.getId());
+            modMap.put("moduleName", m.getModuleName());
+            modMap.put("keywords", m.getKeywords() != null ? m.getKeywords() : Collections.emptyList());
+            Map<String, Object> subMap = new LinkedHashMap<>();
+            subMap.put("id", sm.getId());
+            subMap.put("subModuleName", sm.getSubModuleName());
+            subMap.put("keywords", sm.getKeywords() != null ? sm.getKeywords() : Collections.emptyList());
+            Map<String, Object> fnMap = new LinkedHashMap<>();
+            fnMap.put("id", fn.getId());
+            fnMap.put("functionName", fn.getFunctionName());
+            subMap.put("functions", Collections.singletonList(fnMap));
+            modMap.put("subModules", Collections.singletonList(subMap));
+            scoped.put("modules", Collections.singletonList(modMap));
+            return objectMapper.writeValueAsString(scoped);
+        } catch (Exception e) {
+            return "{}";
+        }
+    }
+
+    /** 按功能粒度写草稿：路径 = {moduleName}/{subModuleName}/{functionName}.md */
+    private void upsertFunctionDraft(DecompileTask task, DraftWorkspace ws,
+                                      com.company.codeinsight.modules.hierarchy.model.ModuleDto m,
+                                      com.company.codeinsight.modules.hierarchy.model.SubModuleDto sm,
+                                      com.company.codeinsight.modules.hierarchy.model.FunctionDto fn,
+                                      String markdown, String initialStatus) {
+        Long taskId = task.getId();
+        String safeModule = m.getModuleName().replaceAll("[\\s/\\(\\)]", "_");
+        String safeSub = sm.getSubModuleName().replaceAll("[\\s/\\(\\)]", "_");
+        String safeFn = fn.getFunctionName().replaceAll("[\\s/\\(\\)]", "_");
+        String relativeDocPath = "task_" + taskId + "/" + safeModule + "/" + safeSub + "/" + safeFn + ".md";
+        Path storePath = Paths.get(localStoragePath, "drafts", relativeDocPath);
+        try {
+            Files.createDirectories(storePath.getParent());
+            Files.writeString(storePath, markdown);
+        } catch (IOException e) {
+            log.error("保存 Function 知识草稿文件失败", e);
+        }
+        String hash = DigestUtils.md5DigestAsHex(markdown.getBytes());
+        KnowledgeDraft draft = knowledgeDraftMapper.selectOne(
+                new LambdaQueryWrapper<KnowledgeDraft>()
+                        .eq(KnowledgeDraft::getWorkspaceId, ws.getId())
+                        .eq(KnowledgeDraft::getFilePath, relativeDocPath));
+        if (draft == null) {
+            draft = new KnowledgeDraft();
+            draft.setWorkspaceId(ws.getId());
+            draft.setFilePath(relativeDocPath);
+            draft.setModuleName(m.getModuleName() + " / " + sm.getSubModuleName() + " / " + fn.getFunctionName());
+            draft.setContentUri(storePath.toAbsolutePath().toUri().toString());
+            draft.setStatus(initialStatus);
+            draft.setHash(hash);
+            draft.setCreatedAt(LocalDateTime.now());
+            draft.setUpdatedAt(LocalDateTime.now());
+            knowledgeDraftMapper.insert(draft);
+        } else {
+            String oldStatus = draft.getStatus();
+            draft.setContentUri(storePath.toAbsolutePath().toUri().toString());
+            draft.setHash(hash);
+            if (oldStatus == null || oldStatus.equals("AI_GENERATED") || oldStatus.equals("PENDING_REVIEW")) {
+                draft.setStatus(initialStatus);
+            }
+            draft.setUpdatedAt(LocalDateTime.now());
+            knowledgeDraftMapper.updateById(draft);
+        }
+        log.info("Function draft: {} → {}", relativeDocPath, initialStatus);
+    }
+
+    /** 统计 hierarchy 中所有 FunctionDto 总数 */
+    private int countFunctionsInHierarchy(com.company.codeinsight.modules.hierarchy.model.ModuleHierarchy hierarchy) {
+        int n = 0;
+        if (hierarchy == null || hierarchy.getModules() == null) return 0;
+        for (com.company.codeinsight.modules.hierarchy.model.ModuleDto m : hierarchy.getModules().values()) {
+            n += countFunctions(m);
+        }
+        return n;
+    }
+
     private void generateModuleDraft(DecompileTask task, DraftWorkspace ws,
                                     com.company.codeinsight.modules.hierarchy.model.ModuleDto moduleDto,
                                     com.company.codeinsight.modules.hierarchy.model.ModuleHierarchy hierarchy,

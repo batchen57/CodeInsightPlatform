@@ -12,7 +12,9 @@ import com.company.codeinsight.modules.scanner.mapper.CodeFileSnapshotMapper;
 import com.company.codeinsight.modules.task.dto.PipelineStageStatDto;
 import com.company.codeinsight.modules.task.dto.TaskLogSummaryDto;
 import com.company.codeinsight.modules.task.entity.DecompileTask;
+import com.company.codeinsight.modules.task.enums.TaskStatus;
 import com.company.codeinsight.modules.task.mapper.DecompileTaskMapper;
+import com.company.codeinsight.modules.task.service.TaskExecutionLogger;
 import com.company.codeinsight.modules.task.service.TaskLogSummaryService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -96,6 +98,9 @@ public class TaskLogSummaryServiceImpl implements TaskLogSummaryService {
 
     @Autowired
     private ModuleHierarchyNodeMapper moduleHierarchyNodeMapper;
+
+    @Autowired
+    private TaskExecutionLogger taskExecutionLogger;
 
     @Value("${code-insight.storage.local-path:./storage}")
     private String storageBase;
@@ -226,14 +231,13 @@ public class TaskLogSummaryServiceImpl implements TaskLogSummaryService {
         current.setModuleIndex(-1);
         dto.setCurrent(current);
 
-        // 6. 解析 pipeline.log：阶段列表 + current.chunkIndex + lastError
-        File logFile = new File(storageBase, "task_" + taskId + "/pipeline.log");
-        if (logFile.exists() && logFile.isFile()) {
+        // 6. 解析 pipeline.log（仅最近一次流水线运行）
+        String logContent = taskExecutionLogger.readLastRunContent(taskId);
+        if (logContent != null && !logContent.isBlank()) {
             try {
-                String content = Files.readString(logFile.toPath());
-                PipelineParseResult parsed = parsePipelineLog(content, STAGE_LABEL);
+                PipelineParseResult parsed = parsePipelineLog(logContent, STAGE_LABEL);
                 dto.setPipeline(parsed.stages);
-                if (parsed.lastError != null) {
+                if (parsed.lastError != null && TaskStatus.FAILED.name().equals(task.getStatus())) {
                     dto.setLastError(truncate(parsed.lastError, 200));
                 }
                 if (parsed.chunkIndex >= 0) {
@@ -243,7 +247,7 @@ public class TaskLogSummaryServiceImpl implements TaskLogSummaryService {
                     current.setModuleIndex(parsed.moduleIndex);
                 }
             } catch (Exception e) {
-                log.warn("读取 pipeline.log 失败 taskId={}: {}", taskId, e.getMessage());
+                log.warn("解析 pipeline.log 失败 taskId={}: {}", taskId, e.getMessage());
                 dto.setPipeline(emptyPipeline());
             }
         } else {

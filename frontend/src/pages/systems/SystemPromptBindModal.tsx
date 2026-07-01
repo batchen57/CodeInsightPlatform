@@ -12,8 +12,8 @@ import {
 } from 'antd';
 import { PlayCircleOutlined, PlusOutlined } from '@ant-design/icons';
 import { listPrompts, getPrompt, deletePrompt } from '../../api/prompt';
-import { updateSystem } from '../../api/system';
-import type { Prompt, System } from '../../types';
+import { updateRepository } from '../../api/system';
+import type { Prompt, Repository } from '../../types';
 import SystemPromptEditorModal from './SystemPromptEditorModal';
 import SystemPromptTrialModal from './SystemPromptTrialModal';
 
@@ -28,7 +28,7 @@ const TYPE_LABEL: Record<'MODULARIZE' | 'DOCUMENT_GENERATION', string> = TYPE_NA
 
 interface Props {
   open: boolean;
-  system: System | null;
+  repository: Repository | null;
   onClose: () => void;
   /** 父组件的 list 重新拉取回调(创建/绑定后) */
   onSaved?: () => void;
@@ -42,7 +42,7 @@ interface Props {
  * - 「自定义」按钮打开编辑器;编辑器内置「从默认提示词加载」+ 试跑
  * - 创建成功后,新 prompt 自动绑定到系统,并刷新本地提示词列表
  */
-const SystemPromptBindModal: React.FC<Props> = ({ open, system, onClose, onSaved }) => {
+const SystemPromptBindModal: React.FC<Props> = ({ open, repository, onClose, onSaved }) => {
   const [prompts, setPrompts] = useState<Prompt[]>([]);
   const [promptsLoading, setPromptsLoading] = useState(false);
 
@@ -85,8 +85,8 @@ const SystemPromptBindModal: React.FC<Props> = ({ open, system, onClose, onSaved
         }
       }
       // DRAFT 的也补进来
-      if (system) {
-        const boundIds = [system.modularizePromptId, system.documentPromptId].filter(
+      if (repository) {
+        const boundIds = [repository.modularizePromptId, repository.documentPromptId].filter(
           Boolean,
         ) as number[];
         for (const id of boundIds) {
@@ -112,12 +112,12 @@ const SystemPromptBindModal: React.FC<Props> = ({ open, system, onClose, onSaved
 
   // 找到当前已绑定的 prompt(可能为 null)
   const selectedModularize = useMemo(
-    () => prompts.find((p) => p.id === system?.modularizePromptId) ?? null,
-    [prompts, system?.modularizePromptId],
+    () => prompts.find((p) => p.id === repository?.modularizePromptId) ?? null,
+    [prompts, repository?.modularizePromptId],
   );
   const selectedDocument = useMemo(
-    () => prompts.find((p) => p.id === system?.documentPromptId) ?? null,
-    [prompts, system?.documentPromptId],
+    () => prompts.find((p) => p.id === repository?.documentPromptId) ?? null,
+    [prompts, repository?.documentPromptId],
   );
 
   // 全局默认(同类型 is_default=1)
@@ -155,8 +155,8 @@ const SystemPromptBindModal: React.FC<Props> = ({ open, system, onClose, onSaved
   /** 清理孤立的 USER 提示词(旧绑定是 USER + 同 scopeId + 不再被任何系统引用) */
   const cleanupOrphanedUserPrompt = async (_promptType: 'MODULARIZE' | 'DOCUMENT_GENERATION', oldPrompt: Prompt | null) => {
     if (!oldPrompt || oldPrompt.category !== 'USER') return;
-    if (!system) return;
-    if (oldPrompt.scopeId !== system.id) return;
+    if (!repository) return;
+    if (oldPrompt.scopeId !== repository.id) return;
     try {
       await deletePrompt(oldPrompt.id);
     } catch {
@@ -169,14 +169,14 @@ const SystemPromptBindModal: React.FC<Props> = ({ open, system, onClose, onSaved
     promptType: 'MODULARIZE' | 'DOCUMENT_GENERATION',
     id: number,
   ) => {
-    if (!system) return;
+    if (!repository) return;
     const oldPrompt = promptType === 'MODULARIZE' ? selectedModularize : selectedDocument;
     const payload: Partial<System> =
       promptType === 'MODULARIZE'
         ? { modularizePromptId: id }
         : { documentPromptId: id };
     try {
-      await updateSystem(system.id, payload);
+      await updateRepository(repository.id, payload);
       message.success('提示词绑定已更新');
       onSaved?.();
     } catch {
@@ -197,13 +197,13 @@ const SystemPromptBindModal: React.FC<Props> = ({ open, system, onClose, onSaved
 
   /** 自定义创建成功 → 调用后端 updateSystem 绑定到对应字段 */
   const handlePromptCreated = async (p: Prompt) => {
-    if (!system) return;
+    if (!repository) return;
     const oldPrompt = p.promptType === 'MODULARIZE' ? selectedModularize : selectedDocument;
     const fieldName = p.promptType === 'MODULARIZE' ? 'modularizePromptId' : 'documentPromptId';
     setSubmitting(true);
     try {
-      await updateSystem(system.id, {
-        ...(system.modularizePromptId ? {} : {}),
+      await updateRepository(repository.id, {
+        ...(repository.modularizePromptId ? {} : {}),
         [fieldName]: p.id,
       } as Partial<System>);
       // 把新 prompt 合并到本地列表
@@ -289,7 +289,7 @@ const SystemPromptBindModal: React.FC<Props> = ({ open, system, onClose, onSaved
         title={
           <Space>
             提示词 · {system?.name ?? ''}
-            {system?.nameCn && <Text type="secondary">({system.nameCn})</Text>}
+            {system?.nameCn && <Text type="secondary">({repository.gitUrlCn})</Text>}
           </Space>
         }
         open={open}

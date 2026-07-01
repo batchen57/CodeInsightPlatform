@@ -116,6 +116,7 @@ const Systems: React.FC = () => {
 
   // ===== Drawer（开/关 + 选中系统）=====
   const [selectedSystem, setSelectedSystem] = useState<System | null>(null);
+  const [selectedRepo, setSelectedRepo] = useState<Repository | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const repoHook = useRepositories(drawerOpen ? selectedSystem?.id ?? null : null);
 
@@ -368,6 +369,7 @@ const Systems: React.FC = () => {
         onClose={() => setDrawerOpen(false)}
         onAddRepo={openAddRepo}
         onEditRepo={openEditRepo}
+        onBindPrompts={(repo) => { setSelectedRepo(repo); setPromptBindOpen(true); }}
         onDeleteRepo={handleDeleteRepository}
         onScan={handleScan}
         onScanConfig={openScanConfig}
@@ -402,6 +404,8 @@ const Systems: React.FC = () => {
       <RepositoryScanConfigModal
         open={scanModalOpen}
         form={scanForm}
+        repoId={scanConfigRepo?.id}
+        systemId={selectedSystem?.id}
         submitting={scanSubmitting}
         onCancel={() => {
           setScanModalOpen(false);

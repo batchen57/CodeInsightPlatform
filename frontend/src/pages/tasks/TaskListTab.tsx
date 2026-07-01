@@ -17,8 +17,10 @@ import {
   message,
 } from 'antd';
 import {
+  EditOutlined,
   CheckCircleOutlined,
   CloseCircleOutlined,
+  ApartmentOutlined,
   EyeOutlined,
   LoadingOutlined,
   PlayCircleOutlined,
@@ -49,8 +51,11 @@ const runningStatuses = [
   'PULLING_CODE',
   'PARSING_CODE',
   'SPLITTING_TASK',
+  'ENTRYPOINT_REVIEW',
   'AI_ANALYZING',
   'MODULE_HIERARCHY_REVIEW',
+  'PENDING_REVIEW',
+  'REVIEWING',
   'GENERATING_DOC',
   'PUSHING',
 ];
@@ -63,6 +68,7 @@ const statusMeta: Record<string, { color: string; label: string; loading?: boole
   SPLITTING_TASK: { color: 'purple', label: '任务切片', loading: true },
   AI_ANALYZING: { color: 'orange', label: 'AI 分析中', loading: true },
   MODULE_HIERARCHY: { color: 'gold', label: '模块层级提炼' },
+  ENTRYPOINT_REVIEW: { color: 'cyan', label: '入口复核' },
   MODULE_HIERARCHY_REVIEW: { color: 'geekblue', label: '模块层级调试' },
   GENERATING_DOC: { color: 'gold', label: '生成文档', loading: true },
   PENDING_REVIEW: { color: 'magenta', label: '待复核' },
@@ -78,7 +84,7 @@ type GroupKey = 'ALL' | 'RUNNING' | 'PENDING_REVIEW' | 'CONFIRMED' | 'CLOSED';
 
 const GROUP_STATUSES: Record<GroupKey, string[] | null> = {
   ALL: null,
-  RUNNING: ['PENDING', 'PULLING_CODE', 'PARSING_CODE', 'SPLITTING_TASK', 'AI_ANALYZING', 'GENERATING_DOC', 'PUSHING'],
+  RUNNING: ['PENDING', 'PULLING_CODE', 'PARSING_CODE', 'SPLITTING_TASK', 'ENTRYPOINT_REVIEW', 'AI_ANALYZING', 'GENERATING_DOC', 'PUSHING'],
   PENDING_REVIEW: ['PENDING_REVIEW', 'REVIEWING'],
   CONFIRMED: ['CONFIRMED', 'PUSHED'],
   CLOSED: ['FAILED', 'CANCELLED', 'ARCHIVED', 'DRAFT'],
@@ -394,7 +400,18 @@ const TaskListTab: React.FC = () => {
               启动
             </Button>
           )}
+          {record.status === 'ENTRYPOINT_REVIEW' && (
+            <Button
+              size="small"
+              type="primary"
+              icon={<ApartmentOutlined />}
+              onClick={() => navigate('/tasks/entrypoint-review')}
+            >
+              入口复核
+            </Button>
+          )}
           {record.status === 'MODULE_HIERARCHY_REVIEW' && (
+
             <Button
               size="small"
               type="primary"
@@ -404,7 +421,18 @@ const TaskListTab: React.FC = () => {
               开始调试
             </Button>
           )}
+          {(['PENDING_REVIEW', 'REVIEWING'].includes(record.status)) && (
+            <Button
+              size="small"
+              type="primary"
+              icon={<EditOutlined />}
+              onClick={() => navigate('/drafts')}
+            >
+              知识复核
+            </Button>
+          )}
           {runningStatuses.includes(record.status) && (
+
             <Button size="small" danger icon={<CloseCircleOutlined />} onClick={() => handleTerminate(record.id)}>
               终止
             </Button>

@@ -68,12 +68,20 @@ public class TaskStateMachineServiceImpl implements TaskStateMachineService {
         task.setStatus(targetStatus.name());
         task.setUpdatedAt(LocalDateTime.now());
 
-        // 任务开始执行时记录启动时间，并清空历史错误原因
+        // 任务开始执行时记录启动时间
         if (targetStatus == TaskStatus.PENDING || targetStatus == TaskStatus.PULLING_CODE) {
-            if (task.getStartedAt() == null) {
+            if (task.getStartedAt() == null
+                    || currentStatus == TaskStatus.FAILED
+                    || currentStatus == TaskStatus.CANCELLED) {
                 task.setStartedAt(LocalDateTime.now());
             }
-            task.setErrorReason(null);
+        }
+
+        // 从失败/取消重入队列时清空结束时间与耗时
+        if (targetStatus == TaskStatus.PENDING
+                && (currentStatus == TaskStatus.FAILED || currentStatus == TaskStatus.CANCELLED)) {
+            task.setEndedAt(null);
+            task.setDurationMs(null);
         }
 
         // 任务进入终态时记录结束时间，并计算运行耗时（毫秒）
@@ -85,9 +93,13 @@ public class TaskStateMachineServiceImpl implements TaskStateMachineService {
             }
         }
 
-        // 如果是失败状态，则记录具体失败原因
+        // 失败/取消原因写入；其余流转一律清空，避免重试后仍展示旧错误
         if (targetStatus == TaskStatus.FAILED && errorReason != null) {
             task.setErrorReason(errorReason);
+        } else if (targetStatus == TaskStatus.CANCELLED && errorReason != null) {
+            task.setErrorReason(errorReason);
+        } else {
+            task.setErrorReason(null);
         }
 
         // 根据所处阶段，自动分配标准进度百分比，供前端进度条进行直观展示

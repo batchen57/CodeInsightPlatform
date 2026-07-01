@@ -112,6 +112,12 @@ public class CodeRepository extends BaseEntity {
     /**
      * 逻辑删除时间。NULL=未删除，非空=已删除时间。
      */
+    /** 仓库级模块提取提示词 ID（FK → ci_prompt.id） */
+    private Long modularizePromptId;
+
+    /** 仓库级文档生成提示词 ID（FK → ci_prompt.id） */
+    private Long documentPromptId;
+
     @TableLogic(value = "null", delval = "now()")
     private LocalDateTime deletedAt;
 }

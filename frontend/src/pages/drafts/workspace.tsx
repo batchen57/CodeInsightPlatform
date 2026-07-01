@@ -156,6 +156,25 @@ export interface DraftReviewWorkspaceProps {
   taskId: number;
 }
 
+/** 把 DraftSourceReference[] 按文件路径分组为 antd Tree 的 DataNode[] */
+function buildRefTree(refs: DraftSourceReference[]): import('antd/es/tree').DataNode[] {
+  const groups: Record<string, DraftSourceReference[]> = {};
+  refs.forEach((r) => {
+    const path = r.filePath || '(unknown)';
+    if (!groups[path]) groups[path] = [];
+    groups[path].push(r);
+  });
+  return Object.entries(groups).map(([path, items]) => ({
+    key: path,
+    title: <span style={{ fontSize: 13 }}><FileTextOutlined style={{ marginRight: 6 }} />{path} · {items.length} 条</span>,
+    children: items.map((r, i) => ({
+      key: `${path}-${i}`,
+      isLeaf: true,
+      title: <span style={{ fontSize: 12, color: '#667085' }}>L{r.startLine} — L{r.endLine}</span>,
+    })),
+  }));
+}
+
 const DraftReviewWorkspace: React.FC<DraftReviewWorkspaceProps> = ({ taskId }) => {
   const navigate = useNavigate();
   const selectedTaskId = taskId;
@@ -191,6 +210,7 @@ const DraftReviewWorkspace: React.FC<DraftReviewWorkspaceProps> = ({ taskId }) =
   // 当前选中草稿的复核意见（保留：单文件级查阅场景）
   const [comments, setComments] = useState<DraftReviewComment[]>([]);
   const [references, setReferences] = useState<DraftSourceReference[]>([]);
+  const [sourceViewMode, setSourceViewMode] = useState<'flat' | 'tree'>('flat');
   const [infoLoading, setInfoLoading] = useState(false);
 
   // ============ 任务级复核意见（task-level comments） ============
@@ -1030,37 +1050,56 @@ const DraftReviewWorkspace: React.FC<DraftReviewWorkspaceProps> = ({ taskId }) =
     );
 
     switch (infoModalType) {
-      case 'source':
+      case 'source': {
         if (references.length === 0) return renderEmpty('暂无代码来源', '当前模块未关联到具体的源码位置。');
+        const refTreeData = buildRefTree(references);
         return (
           <div className="ci-info-modal-body">
-            <div className="ci-info-timeline">
-              {references.map((ref) => (
-                <div key={`${ref.filePath}-${ref.startLine}`} className="ci-info-timeline-item">
-                  <div className="ci-info-timeline-rail">
-                    <div className="ci-info-timeline-dot is-source">
-                      <FileTextOutlined />
+            <Segmented
+              size="small"
+              options={[{ value: 'flat', label: '列表' }, { value: 'tree', label: '树形' }]}
+              value={sourceViewMode}
+              onChange={(v) => setSourceViewMode(v as 'flat' | 'tree')}
+              style={{ marginBottom: 12 }}
+            />
+            {sourceViewMode === 'tree' ? (
+              <Tree
+                treeData={refTreeData}
+                defaultExpandAll
+                showLine={{ showLeafIcon: false }}
+                blockNode
+                style={{ fontSize: 13 }}
+              />
+            ) : (
+              <div className="ci-info-timeline">
+                {references.map((ref) => (
+                  <div key={`${ref.filePath}-${ref.startLine}`} className="ci-info-timeline-item">
+                    <div className="ci-info-timeline-rail">
+                      <div className="ci-info-timeline-dot is-source">
+                        <FileTextOutlined />
+                      </div>
+                    </div>
+                    <div className="ci-info-timeline-body">
+                      <div className="ci-info-timeline-title" title={ref.filePath}>
+                        {ref.filePath}
+                      </div>
+                      <div className="ci-info-timeline-meta">
+                        <FileTextOutlined />
+                        <span>源码引用</span>
+                        <span className="ci-info-timeline-meta-sep">·</span>
+                        <span>命中行区间</span>
+                      </div>
+                      <div className="ci-info-timeline-line">
+                        L{ref.startLine} — L{ref.endLine}
+                      </div>
                     </div>
                   </div>
-                  <div className="ci-info-timeline-body">
-                    <div className="ci-info-timeline-title" title={ref.filePath}>
-                      {ref.filePath}
-                    </div>
-                    <div className="ci-info-timeline-meta">
-                      <FileTextOutlined />
-                      <span>源码引用</span>
-                      <span className="ci-info-timeline-meta-sep">·</span>
-                      <span>命中行区间</span>
-                    </div>
-                    <div className="ci-info-timeline-line">
-                      L{ref.startLine} — L{ref.endLine}
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            )}
           </div>
         );
+      }
       case 'revision':
         if (revisions.length === 0) return renderEmpty('暂无保存记录', '当前模块还未产生任何保存/修订历史。');
         return (

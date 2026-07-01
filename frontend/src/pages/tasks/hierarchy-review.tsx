@@ -4,6 +4,7 @@ import {
   Button,
   Card,
   Empty,
+  Select,
   Space,
   Table,
   Tag,
@@ -47,21 +48,20 @@ const HierarchyReview: React.FC = () => {
   const [systems, setSystems] = useState<System[]>([]);
   const [loading, setLoading] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
+  const [systemId, setSystemId] = useState<number | undefined>(undefined);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [currentTaskId, setCurrentTaskId] = useState<number | null>(null);
 
   const fetchDebugTasks = useCallback(async () => {
     setLoading(true);
     try {
-      // 默认仅看处于 MODULE_HIERARCHY_REVIEW 的任务；展开历史时同时看刚完成 / 失败的相关任务
-      const inProgress = await listTasks({ current: 1, size: 200, status: 'MODULE_HIERARCHY_REVIEW' });
+      const inProgress = await listTasks({ current: 1, size: 200, status: 'MODULE_HIERARCHY_REVIEW', systemId });
       let records: Task[] = inProgress.records;
       if (showHistory) {
         const [generating, finished] = await Promise.all([
-          listTasks({ current: 1, size: 50, status: 'MODULE_HIERARCHY' }),
-          listTasks({ current: 1, size: 50, status: 'PENDING_REVIEW' }),
+          listTasks({ current: 1, size: 50, status: 'MODULE_HIERARCHY', systemId }),
+          listTasks({ current: 1, size: 50, status: 'PENDING_REVIEW', systemId }),
         ]);
-        // 去重 + 按 id 降序
         const map = new Map<number, Task>();
         [...records, ...generating.records, ...finished.records].forEach((t) => map.set(t.id, t));
         records = Array.from(map.values()).sort((a, b) => b.id - a.id);
@@ -70,7 +70,7 @@ const HierarchyReview: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [showHistory]);
+  }, [showHistory, systemId]);
 
   useEffect(() => {
     fetchDebugTasks();
@@ -183,6 +183,14 @@ const HierarchyReview: React.FC = () => {
         }
         extra={
           <Space>
+            <Select
+              allowClear
+              placeholder="按系统筛选"
+              style={{ width: 180 }}
+              value={systemId}
+              onChange={(v) => setSystemId(v)}
+              options={systems.map((s) => ({ value: s.id, label: s.name }))}
+            />
             <Button
               icon={<ReloadOutlined />}
               loading={loading}

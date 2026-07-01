@@ -47,6 +47,8 @@ public class DecompilePromptController {
 
     @Autowired
     private com.company.codeinsight.modules.system.mapper.SystemApplicationMapper systemMapper;
+    @Autowired
+    private com.company.codeinsight.modules.repository.mapper.CodeRepositoryMapper repoMapper;
 
     @Autowired
     private ObjectMapper objectMapper;
@@ -200,13 +202,13 @@ public class DecompilePromptController {
         if (prompt.getIsDefault() != null && prompt.getIsDefault() == 1) {
             throw new BusinessException("默认提示词模板不能删除，请先将其他模板设为默认");
         }
-        // 检查是否仍有系统引用此提示词
-        long refCount = systemMapper.selectCount(
-                new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<com.company.codeinsight.modules.system.entity.SystemApplication>()
-                        .and(w -> w.eq(com.company.codeinsight.modules.system.entity.SystemApplication::getModularizePromptId, id)
-                                .or().eq(com.company.codeinsight.modules.system.entity.SystemApplication::getDocumentPromptId, id)));
+        // 检查是否仍有仓库引用此提示词
+        long refCount = repoMapper.selectCount(
+                new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<com.company.codeinsight.modules.repository.entity.CodeRepository>()
+                        .and(w -> w.eq(com.company.codeinsight.modules.repository.entity.CodeRepository::getModularizePromptId, id)
+                                .or().eq(com.company.codeinsight.modules.repository.entity.CodeRepository::getDocumentPromptId, id)));
         if (refCount > 0) {
-            throw new BusinessException("该提示词仍被 " + refCount + " 个系统引用，无法删除");
+            throw new BusinessException("该提示词仍被 " + refCount + " 个仓库引用，无法删除");
         }
         decompilePromptService.removeById(id);
         operationLogService.logOperation(null, null, "DELETE_PROMPT", "删除提示词模板: " + prompt.getName(), null, true);

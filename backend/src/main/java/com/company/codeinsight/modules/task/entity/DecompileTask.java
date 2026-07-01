@@ -1,5 +1,6 @@
 package com.company.codeinsight.modules.task.entity;
 
+import com.baomidou.mybatisplus.annotation.FieldStrategy;
 import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
@@ -70,7 +71,9 @@ public class DecompileTask extends BaseEntity {
 
     /**
      * 任务执行异常失败的具体错误日志原因
+     * <p>重试时需显式置 null 落库，故 updateStrategy=ALWAYS。</p>
      */
+    @TableField(value = "error_reason", updateStrategy = FieldStrategy.ALWAYS)
     private String errorReason;
 
     /**

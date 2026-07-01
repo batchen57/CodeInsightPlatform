@@ -36,8 +36,8 @@ COMMENT ON COLUMN ci_system.state IS '系统状态：DRAFT/REPO_CONFIGURED/SCAN_
 -- 1.1.2 系统级提示词绑定（任务下发时继承此处；未设置时回退到默认提示词 is_default=1）
 ALTER TABLE ci_system ADD COLUMN IF NOT EXISTS modularize_prompt_id BIGINT;
 ALTER TABLE ci_system ADD COLUMN IF NOT EXISTS document_prompt_id BIGINT;
-COMMENT ON COLUMN ci_system.modularize_prompt_id IS '模块提取提示词 ID（FK → ci_prompt.id，运行时未设置则回退到 is_default=1）';
-COMMENT ON COLUMN ci_system.document_prompt_id IS '文档生成提示词 ID（FK → ci_prompt.id，运行时未设置则回退到 is_default=1）';
+COMMENT ON COLUMN ci_system.modularize_prompt_id IS '模块提取提示词 ID（FK → ci_prompt.id，运行时未设置则回退到 is_default=1（已废弃，请使用 ci_repository 同名列））';
+COMMENT ON COLUMN ci_system.document_prompt_id IS '文档生成提示词 ID（FK → ci_prompt.id，运行时未设置则回退到 is_default=1（已废弃，请使用 ci_repository 同名列））';
 
 -- 1.1.3 任务队列：系统级并发上限（每系统同时在跑任务数）
 ALTER TABLE ci_system ADD COLUMN IF NOT EXISTS max_concurrent_tasks INT DEFAULT 1 NOT NULL;
@@ -100,6 +100,15 @@ COMMENT ON COLUMN ci_repository.push_username IS '推送 Git 凭证用户名';
 COMMENT ON COLUMN ci_repository.push_password IS '推送 Git 凭证密码/Token';
 COMMENT ON COLUMN ci_repository.push_target_folder IS '文档在仓库中的目标文件夹路径';
 
+-- 2.2 仓库级提示词绑定（任务下发时继承此处；未设置时回退到默认提示词 is_default=1）
+ALTER TABLE ci_repository ADD COLUMN IF NOT EXISTS modularize_prompt_id BIGINT;
+ALTER TABLE ci_repository ADD COLUMN IF NOT EXISTS document_prompt_id BIGINT;
+COMMENT ON COLUMN ci_repository.modularize_prompt_id IS '模块提取提示词 ID（FK → ci_prompt.id，运行时未设置则回退到 is_default=1（已废弃，请使用 ci_repository 同名列））';
+COMMENT ON COLUMN ci_repository.document_prompt_id IS '文档生成提示词 ID（FK → ci_prompt.id，运行时未设置则回退到 is_default=1（已废弃，请使用 ci_repository 同名列））';
+-- 数据迁移：把现有系统绑定的提示词 ID 同步到其所有仓库
+UPDATE ci_repository r SET modularize_prompt_id = s.modularize_prompt_id, document_prompt_id = s.document_prompt_id FROM ci_system s WHERE r.system_id = s.id AND r.deleted_at IS NULL AND s.deleted_at IS NULL;
+
+
 -- 3. 提示词模板表
 CREATE TABLE IF NOT EXISTS ci_prompt (
     id BIGSERIAL PRIMARY KEY,
@@ -147,6 +156,27 @@ CREATE UNIQUE INDEX IF NOT EXISTS uk_ci_prompt_type_default_active
 
 -- 3.4.1 数据迁移:把已有提示词的 category 设为 DEFAULT(兼容旧数据)
 UPDATE ci_prompt SET category = 'DEFAULT' WHERE category IS NULL;
+
+-- 3.5 入口扫描试跑记录表：保存"试跑"产生的历史结果（不入库真实任务）
+CREATE TABLE IF NOT EXISTS ci_entry_scan_trial (
+    id BIGSERIAL PRIMARY KEY,
+    system_id BIGINT NOT NULL,
+    repository_id BIGINT NOT NULL,
+    user_id VARCHAR(50),
+    status VARCHAR(16) NOT NULL,
+    config_snapshot TEXT,
+    result_json TEXT,
+    error_message TEXT,
+    started_at TIMESTAMP NOT NULL,
+    finished_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_trial_repo ON ci_entry_scan_trial (repository_id);
+CREATE INDEX IF NOT EXISTS idx_trial_status ON ci_entry_scan_trial (status, finished_at);
+COMMENT ON TABLE ci_entry_scan_trial IS '入口扫描试跑记录：用户在仓库配置中点击"试跑"产生的入口识别结果（不入库真实任务，每次独立执行）';
+COMMENT ON COLUMN ci_entry_scan_trial.config_snapshot IS '本次试跑用的 entryScanConfig（JSON 字符串）';
+COMMENT ON COLUMN ci_entry_scan_trial.result_json IS '试跑结果：入口类 + 方法列表 JSON 字符串';
+COMMENT ON COLUMN ci_entry_scan_trial.status IS '试跑状态：PENDING/RUNNING/SUCCESS/FAILED/CANCELLED';
 
 -- 4. 知识构建任务表
 CREATE TABLE IF NOT EXISTS ci_task (

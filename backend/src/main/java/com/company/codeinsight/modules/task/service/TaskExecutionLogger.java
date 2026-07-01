@@ -22,8 +22,67 @@ public class TaskExecutionLogger {
 
     private static final DateTimeFormatter TS_FMT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS");
 
+    /** 新一轮流水线启动标记，用于从 log 文件中截取「最近一次运行」片段 */
+    public static final String PIPELINE_START_MARKER = "══════ 流水线启动";
+
     @Value("${code-insight.storage.local-path:./storage}")
     private String storageBase;
+
+    /**
+     * 清空 pipeline.log（重试 / 新一轮 runPipeline 开始前调用）。
+     */
+    public void truncate(Long taskId) {
+        if (taskId == null) {
+            return;
+        }
+        try {
+            File dir = new File(storageBase, "task_" + taskId);
+            if (!dir.exists()) {
+                dir.mkdirs();
+            }
+            File logFile = new File(dir, "pipeline.log");
+            java.nio.file.Files.writeString(
+                    logFile.toPath(),
+                    "",
+                    java.nio.file.StandardOpenOption.CREATE,
+                    java.nio.file.StandardOpenOption.TRUNCATE_EXISTING);
+        } catch (IOException e) {
+            log.warn("清空 pipeline.log 失败 taskId={}: {}", taskId, e.getMessage());
+        }
+    }
+
+    /**
+     * 读取 pipeline.log 中<strong>最近一次</strong>流水线运行的内容（按启动标记截取）。
+     */
+    public String readLastRunContent(Long taskId) {
+        if (taskId == null) {
+            return "";
+        }
+        File logFile = new File(storageBase, "task_" + taskId + "/pipeline.log");
+        if (!logFile.isFile()) {
+            return "";
+        }
+        try {
+            return extractLastRunSegment(java.nio.file.Files.readString(logFile.toPath()));
+        } catch (IOException e) {
+            log.warn("读取 pipeline.log 失败 taskId={}: {}", taskId, e.getMessage());
+            return "";
+        }
+    }
+
+    /**
+     * 从完整 log 文本中截取最后一次 {@link #PIPELINE_START_MARKER} 之后的片段。
+     */
+    public static String extractLastRunSegment(String fullContent) {
+        if (fullContent == null || fullContent.isBlank()) {
+            return "";
+        }
+        int idx = fullContent.lastIndexOf(PIPELINE_START_MARKER);
+        if (idx < 0) {
+            return fullContent;
+        }
+        return fullContent.substring(idx);
+    }
 
     /**
      * 追加一条带时间戳的日志行

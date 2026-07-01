@@ -4,6 +4,7 @@ import {
   Button,
   Card,
   Empty,
+  Select,
   Space,
   Table,
   Tag,
@@ -43,29 +44,30 @@ const EntrypointReview: React.FC = () => {
   const [systems, setSystems] = useState<System[]>([]);
   const [loading, setLoading] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
+  const [systemId, setSystemId] = useState<number | undefined>(undefined);
 
   const fetchReviewTasks = useCallback(async () => {
     setLoading(true);
     try {
-      const inProgress = await listTasks({ current: 1, size: 200, status: 'ENTRYPOINT_REVIEW' });
+      const inProgress = await listTasks({ current: 1, size: 200, status: 'ENTRYPOINT_REVIEW', systemId });
       let records: Task[] = inProgress.records;
       if (showHistory) {
-        const [generating, finished, cancelled] = await Promise.all([
-          listTasks({ current: 1, size: 50, status: 'AI_ANALYZING' }),
-          listTasks({ current: 1, size: 50, status: 'PENDING_REVIEW' }),
-          listTasks({ current: 1, size: 50, status: 'CANCELLED' }),
-        ]);
+        const extraStatuses: string[] = systemId
+          ? [] // 按系统筛选时不拉历史(避免跨系统干扰)
+          : ['AI_ANALYZING', 'PENDING_REVIEW', 'CANCELLED'];
+        const fetches = extraStatuses.map((s) => listTasks({ current: 1, size: 50, status: s, systemId }));
+        const results = await Promise.all(fetches);
+        results.forEach((r) => records.push(...r.records));
         // 去重 + 按 id 降序
         const map = new Map<number, Task>();
-        [...records, ...generating.records, ...finished.records, ...cancelled.records]
-          .forEach((t) => map.set(t.id, t));
+        records.forEach((t) => map.set(t.id, t));
         records = Array.from(map.values()).sort((a, b) => b.id - a.id);
       }
       setTasks(records);
     } finally {
       setLoading(false);
     }
-  }, [showHistory]);
+  }, [showHistory, systemId]);
 
   useEffect(() => {
     fetchReviewTasks();
@@ -182,6 +184,14 @@ const EntrypointReview: React.FC = () => {
         }
         extra={
           <Space>
+            <Select
+              allowClear
+              placeholder="按系统筛选"
+              style={{ width: 180 }}
+              value={systemId}
+              onChange={(v) => setSystemId(v)}
+              options={systems.map((s) => ({ value: s.id, label: s.name }))}
+            />
             <Button icon={<ReloadOutlined />} loading={loading} onClick={fetchReviewTasks}>
               刷新
             </Button>

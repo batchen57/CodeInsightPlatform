@@ -24,6 +24,7 @@ interface Props {
   onDeleteRepo: (repo: Repository) => void;
   onScan: (repo: Repository) => void;
   onScanConfig?: (repo: Repository) => void;
+  onBindPrompts?: (repo: Repository) => void;
 }
 
 /**

@@ -13,6 +13,7 @@ import com.company.codeinsight.modules.log.service.OperationLogService;
 import com.company.codeinsight.modules.task.dto.TaskLogSummaryDto;
 import com.company.codeinsight.modules.task.entity.DecompileTask;
 import com.company.codeinsight.modules.task.service.DecompileTaskService;
+import com.company.codeinsight.modules.task.service.TaskExecutionLogger;
 import com.company.codeinsight.modules.task.service.TaskLogSummaryService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -50,8 +51,8 @@ public class DecompileTaskController {
     @Autowired
     private TaskLogSummaryService taskLogSummaryService;
 
-    @org.springframework.beans.factory.annotation.Value("${code-insight.storage.local-path:./storage}")
-    private String storageBase;
+    @Autowired
+    private TaskExecutionLogger taskExecutionLogger;
 
     /**
      * 创建全量解析分析任务（扫描整个分支所有代码文件并重新进行 AI 归纳）
@@ -206,15 +207,7 @@ public class DecompileTaskController {
     @Operation(summary = "读取任务执行日志")
     @GetMapping("/{id}/log")
     public ApiResponse<String> getExecutionLog(@PathVariable Long id) {
-        java.io.File logFile = new java.io.File(storageBase, "task_" + id + "/pipeline.log");
-        if (!logFile.exists()) {
-            return ApiResponse.success("");
-        }
-        try {
-            return ApiResponse.success(java.nio.file.Files.readString(logFile.toPath()));
-        } catch (Exception e) {
-            return ApiResponse.error("读取日志失败: " + e.getMessage());
-        }
+        return ApiResponse.success(taskExecutionLogger.readLastRunContent(id));
     }
 
     /**

@@ -5,6 +5,7 @@ import {
   Card,
   Col,
   Form,
+  Modal,
   Row,
   Select,
   Space,
@@ -106,6 +107,7 @@ const TaskDispatchPage: React.FC = () => {
 
   // 选中的系统对象（用于只读展示绑定的提示词）
   const selectedSystem: System | undefined = systems.find((s) => s.id === selectedSystemId);
+  const selectedRepository: Repository | undefined = repositories.find((r) => r.id === selectedRepositoryId);
 
   /** 把 system.modularizePromptId / documentPromptId 转成名称展示 */
   const resolveBoundName = (
@@ -137,11 +139,11 @@ const TaskDispatchPage: React.FC = () => {
 
   // 选系统变化时，按需懒加载系统绑定的提示词
   useEffect(() => {
-    if (!selectedSystemId) return;
-    const system = systems.find((s) => s.id === selectedSystemId);
-    if (!system) return;
-    const needModularize = system.modularizePromptId;
-    const needDocument = system.documentPromptId;
+    if (!selectedRepositoryId) return;
+    const repo = repositories.find((r) => r.id === selectedRepositoryId);
+    if (!repo) return;
+    const needModularize = repo.modularizePromptId;
+    const needDocument = repo.documentPromptId;
     const fetchOne = async (type: 'MODULARIZE' | 'DOCUMENT_GENERATION', id?: number | null) => {
       if (id == null) return null;
       const all = await listPrompts({ current: 1, size: 200, lifecycle: 'RELEASED', promptType: type });
@@ -314,10 +316,10 @@ const TaskDispatchPage: React.FC = () => {
   const summaryRequireHierarchy = form.getFieldValue('requireHierarchyReview');
 
   const modularizeDisplay = selectedSystem
-    ? resolveBoundName(selectedSystem.modularizePromptId, modularizeById)
+    ? resolveBoundName(selectedRepository?.modularizePromptId ?? undefined, modularizeById)
     : { name: '请先选择系统', isBound: false };
   const documentDisplay = selectedSystem
-    ? resolveBoundName(selectedSystem.documentPromptId, documentById)
+    ? resolveBoundName(selectedRepository?.documentPromptId ?? undefined, documentById)
     : { name: '请先选择系统', isBound: false };
   const promptsBlocking = !modularizeDisplay.isBound || !documentDisplay.isBound;
 
@@ -668,33 +670,23 @@ const TaskDispatchPage: React.FC = () => {
       </Card>
 
       {/* 就绪度拦截弹窗 */}
-      {readinessModalOpen && (
-        <div
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(0,0,0,0.45)',
-            zIndex: 1500,
-            display: 'flex',
-            alignItems: 'flex-end',
-            justifyContent: 'center',
-          }}
-          onClick={() => setReadinessModalOpen(false)}
-        >
-          <Card
-            style={{ width: 720, height: 'calc(100vh - 24px)', margin: '24px auto 0' }}
-            title={
-              <Space>
-                <CloseCircleOutlined style={{ color: '#c4485d' }} />
-                <span>
-                  {readiness?.promptsConfigured === false
-                    ? '无法新建任务：系统未绑定提示词'
-                    : '无法新建任务：尚有未确认的草稿'}
-                </span>
-              </Space>
-            }
-            extra={
-              <Space>
+      <Modal
+        title={
+          <Space>
+            <CloseCircleOutlined style={{ color: '#ff4d4f' }} />
+            <span>
+              {readiness?.promptsConfigured === false
+                ? '无法新建任务：系统未绑定提示词'
+                : '无法新建任务：尚有未确认的草稿'}
+            </span>
+          </Space>
+        }
+        open={readinessModalOpen}
+        onCancel={() => setReadinessModalOpen(false)}
+        width={720}
+        destroyOnClose
+        footer={
+          <Space>
                 <Button onClick={() => setReadinessModalOpen(false)}>关闭</Button>
                 {readiness?.promptsConfigured === false && (
                   <Button
@@ -724,10 +716,9 @@ const TaskDispatchPage: React.FC = () => {
                   </Button>
                 )}
               </Space>
-            }
-            onClick={(e) => e.stopPropagation()}
-          >
-            {readiness?.promptsConfigured === false && (
+        }
+      >
+        {readiness?.promptsConfigured === false && (
               <Alert
                 type="error"
                 showIcon
@@ -799,9 +790,7 @@ const TaskDispatchPage: React.FC = () => {
                 />
               </>
             )}
-          </Card>
-        </div>
-      )}
+      </Modal>
 
       <Alert
         type="info"

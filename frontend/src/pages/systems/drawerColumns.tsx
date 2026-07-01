@@ -10,6 +10,7 @@ import {
 } from 'antd';
 import {
   DeleteOutlined,
+  FileTextOutlined,
   GlobalOutlined,
   ScanOutlined,
   SettingOutlined,
@@ -25,6 +26,7 @@ export interface RepositoryColumnHandlers {
   onDelete: (repo: Repository) => void;
   onScan: (repo: Repository) => void;
   onScanConfig?: (repo: Repository) => void;
+  onBindPrompts?: (repo: Repository) => void;
 }
 
 /**
@@ -92,6 +94,15 @@ export function getRepositoryColumns(handlers: RepositoryColumnHandlers) {
           >
             扫描
           </Button>
+          {handlers.onBindPrompts && (
+            <Button
+              size="small"
+              icon={<FileTextOutlined />}
+              onClick={() => handlers.onBindPrompts!(repo)}
+            >
+              提示词
+            </Button>
+          )}
           <Button size="small" onClick={() => handlers.onEdit(repo)}>
             编辑
           </Button>

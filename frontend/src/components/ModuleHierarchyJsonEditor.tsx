@@ -30,6 +30,48 @@ export interface ModuleHierarchyJsonEditorProps {
  * 本地校验仅校验结构（节点 ID 前缀 + 长度 + 名称非空 + 父子关系合法），
  * 不校验 confirmed 取值——后端反序列化器会给出清晰错误。
  */
+/** 递归把 confirmed 从 boolean → "Y"/"N" 字符串(用于 JSON 展示) */
+function yonToDisplay(obj: unknown): unknown {
+  if (obj == null) return obj;
+  if (Array.isArray(obj)) return (obj as unknown[]).map(yonToDisplay);
+  if (typeof obj === 'object') {
+    const result: Record<string, unknown> = {};
+    for (const key of Object.keys(obj as Record<string, unknown>)) {
+      const val = (obj as Record<string, unknown>)[key];
+      if (key === 'confirmed') {
+        if (typeof val === 'boolean') { result[key] = val ? 'Y' : 'N'; }
+        else if (val == null) { result[key] = 'N'; }
+        else { result[key] = yonToDisplay(val); }
+      } else {
+        result[key] = yonToDisplay(val);
+      }
+    }
+    return result;
+  }
+  return obj;
+}
+
+/** 递归把 confirmed 从 "Y"/"N"/boolean 字符串 → boolean(用于树形编辑) */
+function yonFromDisplay(obj: unknown): unknown {
+  if (obj == null) return obj;
+  if (Array.isArray(obj)) return (obj as unknown[]).map(yonFromDisplay);
+  if (typeof obj === 'object') {
+    const result: Record<string, unknown> = {};
+    for (const key of Object.keys(obj as Record<string, unknown>)) {
+      const val = (obj as Record<string, unknown>)[key];
+      if (key === 'confirmed') {
+        if (val === 'Y' || val === 'y' || val === true || val === 'true') { result[key] = true; }
+        else if (val === 'N' || val === 'n' || val === false || val === 'false' || val == null) { result[key] = false; }
+        else { result[key] = !!val; }
+      } else {
+        result[key] = yonFromDisplay(val);
+      }
+    }
+    return result;
+  }
+  return obj;
+}
+
 const ModuleHierarchyJsonEditor: React.FC<ModuleHierarchyJsonEditorProps> = ({
   value,
   onChange,
@@ -38,7 +80,8 @@ const ModuleHierarchyJsonEditor: React.FC<ModuleHierarchyJsonEditorProps> = ({
   const [text, setText] = useState<string>('');
 
   // 把 value 序列化成 pretty-printed JSON 字符串作为初始 / 重置来源
-  const snapshotJson = useMemo(() => JSON.stringify(value ?? {}, null, 2), [value]);
+  // value 来自 hierarchy state (树形编辑),confirmed 是 boolean → 序列化为 "Y"/"N" 展示
+  const snapshotJson = useMemo(() => JSON.stringify(yonToDisplay(value ?? {}), null, 2), [value]);
 
   // 当父组件 value 变化时（如首次加载、JSON tab 切换、抽屉重开），同步文本
   useEffect(() => {
@@ -49,7 +92,7 @@ const ModuleHierarchyJsonEditor: React.FC<ModuleHierarchyJsonEditorProps> = ({
   const handleApply = () => {
     let parsed: unknown;
     try {
-      parsed = JSON.parse(text);
+      parsed = yonFromDisplay(JSON.parse(text));
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       message.error('JSON 解析失败：' + msg);
@@ -66,8 +109,8 @@ const ModuleHierarchyJsonEditor: React.FC<ModuleHierarchyJsonEditorProps> = ({
 
   const handleFormat = () => {
     try {
-      const parsed = JSON.parse(text);
-      setText(JSON.stringify(parsed, null, 2));
+      const parsed = yonFromDisplay(JSON.parse(text));
+      setText(JSON.stringify(yonToDisplay(parsed), null, 2));
       message.success('已格式化');
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);

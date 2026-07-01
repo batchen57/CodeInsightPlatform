@@ -88,6 +88,7 @@ public interface DecompilePromptService extends IService<DecompilePrompt> {
      * 校验系统已绑定模块提取 + 文档生成提示词（均为 RELEASED 且类型匹配）。
      */
     void validateSystemPromptBinding(Long systemId);
+    void validateRepositoryPromptBinding(Long repositoryId);
 
     /**
      * 校验任务快照的两类提示词 ID 可用。

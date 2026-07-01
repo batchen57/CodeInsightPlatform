@@ -8,7 +8,6 @@ import {
   BarChartOutlined,
   BellOutlined,
   BranchesOutlined,
-  ClockCircleOutlined,
   CloudUploadOutlined,
   CodeOutlined,
   DashboardOutlined,
@@ -25,7 +24,6 @@ import {
   SettingOutlined,
   SwapOutlined,
   ThunderboltOutlined,
-  UnorderedListOutlined,
   UserOutlined,
 } from '@ant-design/icons';
 import { useAuthStore } from '../stores/auth';
@@ -49,7 +47,7 @@ interface NavItem {
  * - 仪表盘 / 看板大类 {@link dashboardNav}：运营层视图与全局统计
  *   任务概览 / AI 模型用量 / 流水线分析 / 系统覆盖报表 / Token 审计 / 操作日志
  *
- * - 知识生成大类 {@link knowledgeNav}：端到端知识生产流水线
+ * - 知识构建大类 {@link knowledgeNav}：端到端知识生产流水线
  *   系统与仓库 → 知识构建任务 → 入口复核 / 模块层级复核 → 知识查看 / 复核 → 知识推送
  *
  * - 基础配置大类 {@link basicNav}：后台管理类页面（模型、提示词、权限、流量）
@@ -106,9 +104,16 @@ const dashboardNav: NavItem[] = [
 ];
 
 /**
- * 知识生成 大类：端到端知识生产流水线（生产侧）
+ * 知识管理 大类：端到端知识生产流水线（生产侧 / 消费侧）
  *
- * 知识构建任务下 4 个子页（任务查询 / 任务队列 / JOB配置 / 手动下发）均通过侧栏独立入口访问。
+ * 1 级：知识管理
+ *   2.1 系统与仓库（独立）
+ *   2.2 知识任务构建
+ *       2.2.1 扫描入口复核（原入口复核）
+ *       2.2.2 知识模块复核（原模块层级复核）
+ *       2.2.3 生成知识复核（原知识复核）
+ *       2.2.4 知识推送
+ *   2.3 知识查询
  */
 const knowledgeNav: NavItem[] = [
   {
@@ -119,72 +124,47 @@ const knowledgeNav: NavItem[] = [
     description: '维护业务系统、负责人、Git 仓库、扫描范围和排除规则。',
   },
   {
-    key: '/tasks/query',
-    icon: <UnorderedListOutlined />,
-    label: <TabLink to="/tasks/query">任务查询</TabLink>,
-    title: '任务查询',
-    description: '按系统 / 状态 / 类型多维查询知识构建任务实例，支持启动 / 终止 / 重试 / 进入复核。',
-  },
-  {
-    key: '/tasks/queue',
-    icon: <HourglassOutlined />,
-    label: <TabLink to="/tasks/queue">任务队列</TabLink>,
-    title: '任务队列',
-    description: '查看排队中的 PENDING 任务，调整优先级或取消排队。',
-  },
-  {
-    key: '/tasks/jobs',
-    icon: <ClockCircleOutlined />,
-    label: <TabLink to="/tasks/jobs">JOB配置</TabLink>,
-    title: 'JOB配置',
-    description: '配置 cron 表达式，按指定周期自动创建并执行知识构建任务；支持跳过 / 排队 / 并行三种冲突策略。',
-  },
-  {
-    key: '/tasks/dispatch',
+    key: 'tasks-build',
     icon: <PlayCircleOutlined />,
-    label: <TabLink to="/tasks/dispatch">手动下发</TabLink>,
-    title: '手动下发',
-    description: '手动选择系统与仓库，配置入口扫描与提示词后下发知识构建任务。',
+    label: '知识任务构建',
+    title: '知识任务构建',
+    description: '扫描入口复核 / 知识模块复核 / 生成知识复核 / 知识推送。',
+    children: [
+      {
+        key: '/tasks/entrypoint-review',
+        icon: <ApartmentOutlined />,
+        label: <TabLink to="/tasks/entrypoint-review">扫描入口复核</TabLink>,
+        title: '扫描入口复核',
+        description: '集中处理处于入口复核断点的任务，确认入口类清单后由 AI 继续提炼模块层级。',
+      },
+      {
+        key: '/tasks/hierarchy-review',
+        icon: <SwapOutlined />,
+        label: <TabLink to="/tasks/hierarchy-review">知识模块复核</TabLink>,
+        title: '知识模块复核',
+        description: '集中处理处于模块层级调试断点的任务，对 AI 提炼的模块 / 子模块 / 功能树进行增删改。',
+      },
+      {
+        key: '/drafts',
+        icon: <EditOutlined />,
+        label: <TabLink to="/drafts">生成知识复核</TabLink>,
+        title: '生成知识复核',
+        description: '结合代码来源、复核意见和修订记录，复核 AI 生成的 Markdown 草稿。',
+      },
+      {
+        key: '/push',
+        icon: <CloudUploadOutlined />,
+        label: <TabLink to="/push">知识推送</TabLink>,
+        title: '知识推送',
+        description: '创建确认版本、执行推送校验、导出 ZIP 包并推送到 Git。',
+      },
+    ],
   },
-  {
-    key: '/tasks/entrypoint-review',
-    icon: <ApartmentOutlined />,
-    label: <TabLink to="/tasks/entrypoint-review">入口复核</TabLink>,
-    title: '入口复核',
-    description: '集中处理处于入口复核断点的任务，确认入口类清单后由 AI 继续提炼模块层级。',
-  },
-  {
-    key: '/tasks/hierarchy-review',
-    icon: <SwapOutlined />,
-    label: <TabLink to="/tasks/hierarchy-review">模块层级复核</TabLink>,
-    title: '模块层级复核',
-    description: '集中处理处于模块层级调试断点的任务，对 AI 提炼的模块 / 子模块 / 功能树进行增删改。',
-  },
-  {
-    key: '/drafts',
-    icon: <EditOutlined />,
-    label: <TabLink to="/drafts">知识复核</TabLink>,
-    title: '知识复核工作区',
-    description: '结合代码来源、复核意见和修订记录，复核 AI 生成的 Markdown 草稿。',
-  },
-  {
-    key: '/push',
-    icon: <CloudUploadOutlined />,
-    label: <TabLink to="/push">知识推送</TabLink>,
-    title: '知识推送中心',
-    description: '创建确认版本、执行推送校验、导出 ZIP 包并推送到 Git。',
-  },
-];
-
-/**
- * 知识查看 大类：消费侧 / 只读浏览入口
- */
-const knowledgeBrowseNav: NavItem[] = [
   {
     key: '/knowledge/browse',
     icon: <FileSearchOutlined />,
-    label: <TabLink to="/knowledge/browse">知识查看</TabLink>,
-    title: '知识查看',
+    label: <TabLink to="/knowledge/browse">知识查询</TabLink>,
+    title: '知识查询',
     description: '按系统聚合浏览知识文档、索引文件与清单文件（只读，不修改任何资产）。',
   },
 ];
@@ -221,6 +201,13 @@ const basicNav: NavItem[] = [
     title: '流量管控',
     description: '全局限流配置、用户级 Token 额度、AI 调用并发控制。',
   },
+  {
+    key: '/tasks/queue',
+    icon: <HourglassOutlined />,
+    label: <TabLink to="/tasks/queue">任务队列</TabLink>,
+    title: '任务队列',
+    description: '查看排队中的 PENDING 任务，调整优先级或取消排队。',
+  },
 ];
 
 /**
@@ -243,28 +230,25 @@ const buildMenuItems = (items: NavItem[]): { menuItems: any[]; flatMap: Map<stri
   return { menuItems, flatMap };
 };
 
-// 四大类导航 → 拍平为 AntD Menu items + 统一 flatMap（key → NavItem）
+// 三大类导航 → 拍平为 AntD Menu items + 统一 flatMap（key → NavItem）
 const { menuItems: basicMenuItems, flatMap: basicFlat } = buildMenuItems(basicNav);
 const { menuItems: knowledgeMenuItems, flatMap: knowledgeFlat } = buildMenuItems(knowledgeNav);
-const { menuItems: knowledgeBrowseMenuItems, flatMap: knowledgeBrowseFlat } = buildMenuItems(knowledgeBrowseNav);
 const { menuItems: dashboardMenuItems, flatMap: dashboardFlat } = buildMenuItems(dashboardNav);
 
 // 合并 flatMap：currentPage 查找可命中四大类任意 key
 const navFlatMap = new Map<string, NavItem>([
   ...basicFlat,
   ...knowledgeFlat,
-  ...knowledgeBrowseFlat,
   ...dashboardFlat,
 ]);
 
 // 兜底 currentPage：取基础配置第一项（保证页面顶部 kicker / title 一定有值）
 const fallbackCurrentPage = basicNav[0];
 
-/** 四大类导航分组的展示名（顺序与侧边栏渲染顺序一致） */
+/** 三大类导航分组的展示名（顺序与侧边栏渲染顺序一致） */
 const NAV_GROUPS: ReadonlyArray<{ key: string; label: string; items: NavItem[] }> = [
   { key: 'basic', label: '基础配置', items: basicNav },
-  { key: 'knowledge', label: '知识生成', items: knowledgeNav },
-  { key: 'knowledge-browse', label: '知识查看', items: knowledgeBrowseNav },
+  { key: 'knowledge', label: '知识管理', items: knowledgeNav },
   { key: 'dashboard', label: '仪表盘 / 看板', items: dashboardNav },
 ];
 
@@ -321,9 +305,6 @@ const computeMenuState = (pathname: string) => {
     visit(item, []);
   }
   for (const item of knowledgeNav) {
-    visit(item, []);
-  }
-  for (const item of knowledgeBrowseNav) {
     visit(item, []);
   }
   for (const item of dashboardNav) {
@@ -437,9 +418,9 @@ const BasicLayout: React.FC = () => {
             className="ci-menu"
           />
         </div>
-        {/* 第 2 段：知识生成 */}
+        {/* 第 2 段：知识构建 */}
         <div className="ci-sider-section">
-          {!collapsed && <span className="ci-sider-label">知识生成</span>}
+          {!collapsed && <span className="ci-sider-label">知识构建</span>}
           <Menu
             mode="inline"
             selectedKeys={selectedKeys}
@@ -454,22 +435,7 @@ const BasicLayout: React.FC = () => {
             className="ci-menu"
           />
         </div>
-        {/* 第 3 段：知识查看 */}
-        <div className="ci-sider-section">
-          {!collapsed && <span className="ci-sider-label">知识查看</span>}
-          <Menu
-            mode="inline"
-            selectedKeys={selectedKeys}
-            openKeys={openKeys}
-            onOpenChange={handleOpenChange}
-            onClick={() => {
-              if (isMobile) setCollapsed(true);
-            }}
-            items={knowledgeBrowseMenuItems}
-            className="ci-menu"
-          />
-        </div>
-        {/* 第 4 段：仪表盘 / 看板 */}
+        {/* 第 3 段：仪表盘 / 看板 */}
         <div className="ci-sider-section ci-sider-section-last">
           {!collapsed && <span className="ci-sider-label">仪表盘 / 看板</span>}
           <Menu
