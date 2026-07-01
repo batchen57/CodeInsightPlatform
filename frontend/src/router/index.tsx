@@ -11,15 +11,10 @@ import Tasks from '../pages/tasks';
 import TaskListTab from '../pages/tasks/TaskListTab';
 import TaskQueuePage from '../pages/tasks/queue';
 import TaskDispatchPage from '../pages/tasks/dispatch';
-import JobsList from '../pages/tasks/jobs';
-import JobDetail from '../pages/tasks/jobs/detail';
-import ScheduleFormPage from '../pages/tasks/jobs/ScheduleFormPage';
 import TaskDetail from '../pages/tasks/detail';
 import HierarchyReview from '../pages/tasks/hierarchy-review';
 import EntrypointReview from '../pages/tasks/entrypoint-review';
 import EntrypointReviewDetail from '../pages/tasks/entrypoint-review-detail';
-import SchedulesRedirect from '../pages/schedules';
-import ScheduleDetailRedirect from '../pages/schedules/detail';
 import KnowledgeBrowse from '../pages/knowledge';
 import Drafts from '../pages/drafts';
 import DraftReviewDetail from '../pages/drafts/detail';
@@ -101,11 +96,6 @@ export const router = createHashRouter([
           { path: 'query', element: <TaskListTab /> },
           { path: 'queue', element: <TaskQueuePage /> },
           { path: 'dispatch', element: <TaskDispatchPage /> },
-          // JOB 配置（原 schedules）— 一组嵌套子路由
-          { path: 'jobs', element: <JobsList /> },
-          { path: 'jobs/new', element: <ScheduleFormPage /> },
-          { path: 'jobs/:id/edit', element: <ScheduleFormPage /> },
-          { path: 'jobs/:id', element: <JobDetail /> },
         ],
       },
       {
@@ -128,9 +118,6 @@ export const router = createHashRouter([
         path: 'knowledge/browse', // 知识查看（按系统聚合浏览文档 / 索引 / 清单）
         element: <KnowledgeBrowse />,
       },
-      // 旧 /schedules 入口已迁移到 /tasks/jobs；保留重定向避免外部链接 404
-      { path: 'schedules', element: <SchedulesRedirect /> },
-      { path: 'schedules/:id', element: <ScheduleDetailRedirect /> },
       // 旧 /models / /prompts 入口已迁移到 /basic/models / /basic/prompts
       { path: 'models', element: <Navigate to="/basic/models" replace /> },
       { path: 'prompts', element: <Navigate to="/basic/prompts" replace /> },

@@ -1257,8 +1257,23 @@ button, input, textarea, select { font: inherit; }
 .ci-module-drawer-tree-wrap {
   flex: 1;
   min-height: 0;
-  overflow: auto;
-  padding-right: 4px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 10px;
+}
+.ci-module-drawer-card .ci-module-drawer-spin.ant-spin-nested-loading {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.ci-module-drawer-card .ci-module-drawer-spin > .ant-spin-container {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 .ci-module-drawer-head.is-draggable {
   cursor: grab;
@@ -1267,17 +1282,47 @@ button, input, textarea, select { font: inherit; }
 .ci-module-drawer-head.is-draggable:active {
   cursor: grabbing;
 }
+.ci-module-drawer-resize-edge-right {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 8px;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: ew-resize;
+  z-index: 3;
+}
+.ci-module-drawer-resize-edge-right:hover {
+  background: linear-gradient(90deg, transparent, rgba(82, 88, 232, 0.12));
+}
+.ci-module-drawer-resize-edge-bottom {
+  position: absolute;
+  left: 0;
+  right: 8px;
+  bottom: 0;
+  height: 8px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: ns-resize;
+  z-index: 3;
+}
+.ci-module-drawer-resize-edge-bottom:hover {
+  background: linear-gradient(180deg, transparent, rgba(82, 88, 232, 0.12));
+}
 .ci-module-drawer-resize-handle {
   position: absolute;
-  right: 4px;
-  bottom: 4px;
+  right: 0;
+  bottom: 0;
   width: 14px;
   height: 14px;
   padding: 0;
   border: 0;
   background: transparent;
   cursor: nwse-resize;
-  z-index: 2;
+  z-index: 4;
 }
 .ci-module-drawer-resize-handle::before {
   position: absolute;

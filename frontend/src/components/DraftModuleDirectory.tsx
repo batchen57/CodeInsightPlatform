@@ -1,9 +1,10 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Button, Card, Space, Spin, Tooltip, Tree, Typography } from 'antd';
 import type { DataNode } from 'antd/es/tree';
 import {
   FolderOpenOutlined,
-  ImportOutlined,
+  NodeCollapseOutlined,
+  NodeExpandOutlined,
   PushpinFilled,
   PushpinOutlined,
 } from '@ant-design/icons';
@@ -32,6 +33,20 @@ export interface DraftModuleDirectoryProps {
   fullscreen?: boolean;
 }
 
+function collectExpandableKeys(nodes: DataNode[]): string[] {
+  const keys: string[] = [];
+  const walk = (list: DataNode[]) => {
+    for (const n of list) {
+      if (n.children?.length) {
+        if (n.key != null) keys.push(String(n.key));
+        walk(n.children);
+      }
+    }
+  };
+  walk(nodes);
+  return keys;
+}
+
 const DraftModuleDirectory: React.FC<DraftModuleDirectoryProps> = ({
   visible,
   pinned,
@@ -47,11 +62,25 @@ const DraftModuleDirectory: React.FC<DraftModuleDirectoryProps> = ({
   fullscreen = false,
 }) => {
   const panelRef = useRef<HTMLDivElement>(null);
+  const treeScrollRef = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ width: DEFAULT_WIDTH, height: fullscreen ? 520 : 480 });
   const [position, setPosition] = useState({ x: 0, y: DEFAULT_MIN_TOP });
   const [floating, setFloating] = useState(false);
   const dragRef = useRef<{ startX: number; startY: number; originX: number; originY: number } | null>(null);
-  const resizeRef = useRef<{ startX: number; startY: number; originW: number; originH: number } | null>(null);
+  const resizeRef = useRef<{
+    axis: 'width' | 'height' | 'both';
+    startX: number;
+    startY: number;
+    originW: number;
+    originH: number;
+  } | null>(null);
+
+  const allExpandableKeys = useMemo(() => collectExpandableKeys(treeData), [treeData]);
+  const [expandedKeys, setExpandedKeys] = useState<string[]>(allExpandableKeys);
+
+  useEffect(() => {
+    setExpandedKeys(allExpandableKeys);
+  }, [allExpandableKeys]);
 
   useEffect(() => {
     if (!pinned) {
@@ -59,20 +88,20 @@ const DraftModuleDirectory: React.FC<DraftModuleDirectoryProps> = ({
     }
   }, [pinned]);
 
-  const handleTogglePin = () => {
-    const next = !pinned;
-    onPinnedChange(next);
-    if (!next) {
-      setFloating(false);
-      setPosition({ x: 0, y: DEFAULT_MIN_TOP });
-    }
-  };
-
-  const handleResetDock = () => {
+  const resetDockLayout = useCallback(() => {
     setFloating(false);
     setPosition({ x: 0, y: DEFAULT_MIN_TOP });
     setSize({ width: DEFAULT_WIDTH, height: fullscreen ? 520 : 480 });
-    onResetDock();
+  }, [fullscreen]);
+
+  const handleTogglePin = () => {
+    if (pinned) {
+      resetDockLayout();
+      onPinnedChange(false);
+      onResetDock();
+      return;
+    }
+    onPinnedChange(true);
   };
 
   const onHeaderMouseDown = useCallback(
@@ -115,10 +144,11 @@ const DraftModuleDirectory: React.FC<DraftModuleDirectoryProps> = ({
   );
 
   const onResizeMouseDown = useCallback(
-    (event: React.MouseEvent) => {
+    (event: React.MouseEvent, axis: 'width' | 'height' | 'both') => {
       event.preventDefault();
       event.stopPropagation();
       resizeRef.current = {
+        axis,
         startX: event.clientX,
         startY: event.clientY,
         originW: size.width,
@@ -129,10 +159,14 @@ const DraftModuleDirectory: React.FC<DraftModuleDirectoryProps> = ({
         if (!resizeRef.current) return;
         const dw = ev.clientX - resizeRef.current.startX;
         const dh = ev.clientY - resizeRef.current.startY;
-        setSize({
-          width: Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, resizeRef.current.originW + dw)),
-          height: Math.min(MAX_HEIGHT, Math.max(MIN_HEIGHT, resizeRef.current.originH + dh)),
-        });
+        const next = { width: resizeRef.current.originW, height: resizeRef.current.originH };
+        if (resizeRef.current.axis === 'width' || resizeRef.current.axis === 'both') {
+          next.width = Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, resizeRef.current.originW + dw));
+        }
+        if (resizeRef.current.axis === 'height' || resizeRef.current.axis === 'both') {
+          next.height = Math.min(MAX_HEIGHT, Math.max(MIN_HEIGHT, resizeRef.current.originH + dh));
+        }
+        setSize(next);
       };
       const onUp = () => {
         resizeRef.current = null;
@@ -144,6 +178,19 @@ const DraftModuleDirectory: React.FC<DraftModuleDirectoryProps> = ({
     },
     [size.height, size.width],
   );
+
+  const onTreeWheel = useCallback((event: React.WheelEvent<HTMLDivElement>) => {
+    const el = treeScrollRef.current;
+    if (!el) return;
+    const { scrollTop, scrollHeight, clientHeight } = el;
+    if (scrollHeight <= clientHeight) return;
+    const delta = event.deltaY;
+    const atTop = scrollTop <= 0;
+    const atBottom = scrollTop + clientHeight >= scrollHeight - 1;
+    if ((delta < 0 && !atTop) || (delta > 0 && !atBottom)) {
+      event.stopPropagation();
+    }
+  }, []);
 
   const selectedKeys = useMemoSelectedKeys(treeData, selectedDraftId);
 
@@ -199,10 +246,25 @@ const DraftModuleDirectory: React.FC<DraftModuleDirectoryProps> = ({
         }
         extra={
           <Space size={2}>
-            <Tooltip title="放回左侧并收起">
-              <Button size="small" type="text" icon={<ImportOutlined />} onClick={handleResetDock} />
+            <Tooltip title="全部展开">
+              <Button
+                size="small"
+                type="text"
+                icon={<NodeExpandOutlined />}
+                disabled={treeData.length === 0}
+                onClick={() => setExpandedKeys(allExpandableKeys)}
+              />
             </Tooltip>
-            <Tooltip title={pinned ? '取消固定（结束拖拽）' : '固定后可拖拽到任意位置'}>
+            <Tooltip title="全部折叠">
+              <Button
+                size="small"
+                type="text"
+                icon={<NodeCollapseOutlined />}
+                disabled={treeData.length === 0}
+                onClick={() => setExpandedKeys([])}
+              />
+            </Tooltip>
+            <Tooltip title={pinned ? '取消固定并放回左侧' : '固定后可拖拽到任意位置'}>
               <Button
                 size="small"
                 type="text"
@@ -213,14 +275,19 @@ const DraftModuleDirectory: React.FC<DraftModuleDirectoryProps> = ({
           </Space>
         }
       >
-        <Spin spinning={loading} size="small">
-          <div className="ci-module-drawer-tree-wrap">
+        <Spin spinning={loading} size="small" wrapperClassName="ci-module-drawer-spin">
+          <div
+            ref={treeScrollRef}
+            className="ci-module-drawer-tree-wrap"
+            onWheel={onTreeWheel}
+          >
             {treeData.length > 0 ? (
               <Tree
                 showLine={{ showLeafIcon: false }}
                 blockNode
-                defaultExpandAll
                 treeData={treeData}
+                expandedKeys={expandedKeys}
+                onExpand={(keys) => setExpandedKeys(keys.map(String))}
                 selectedKeys={selectedKeys}
                 onSelect={(_keys, info) => {
                   const draftId = (info.node as DataNode & { draftId?: number }).draftId;
@@ -241,9 +308,21 @@ const DraftModuleDirectory: React.FC<DraftModuleDirectoryProps> = ({
         </Spin>
         <button
           type="button"
+          className="ci-module-drawer-resize-edge-right"
+          aria-label="调整模块目录宽度"
+          onMouseDown={(e) => onResizeMouseDown(e, 'width')}
+        />
+        <button
+          type="button"
+          className="ci-module-drawer-resize-edge-bottom"
+          aria-label="调整模块目录高度"
+          onMouseDown={(e) => onResizeMouseDown(e, 'height')}
+        />
+        <button
+          type="button"
           className="ci-module-drawer-resize-handle"
           aria-label="调整模块目录大小"
-          onMouseDown={onResizeMouseDown}
+          onMouseDown={(e) => onResizeMouseDown(e, 'both')}
         />
       </Card>
     </div>
