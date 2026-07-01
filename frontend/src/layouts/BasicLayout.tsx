@@ -124,32 +124,32 @@ const knowledgeNav: NavItem[] = [
     description: '维护业务系统、负责人、Git 仓库、扫描范围和排除规则。',
   },
   {
-    key: 'tasks-build',
+    key: '/tasks/query',
     icon: <PlayCircleOutlined />,
-    label: '知识任务构建',
+    label: <TabLink to="/tasks/query">知识任务构建</TabLink>,
     title: '知识任务构建',
-    description: '扫描入口复核 / 知识模块复核 / 生成知识复核 / 知识推送。',
+    description: '任务查询 / 任务队列 / JOB配置 / 手动下发及复核断点。',
     children: [
       {
         key: '/tasks/entrypoint-review',
         icon: <ApartmentOutlined />,
         label: <TabLink to="/tasks/entrypoint-review">扫描入口复核</TabLink>,
         title: '扫描入口复核',
-        description: '集中处理处于入口复核断点的任务，确认入口类清单后由 AI 继续提炼模块层级。',
+        description: '集中处理处于入口复核断点的任务。',
       },
       {
         key: '/tasks/hierarchy-review',
         icon: <SwapOutlined />,
         label: <TabLink to="/tasks/hierarchy-review">知识模块复核</TabLink>,
         title: '知识模块复核',
-        description: '集中处理处于模块层级调试断点的任务，对 AI 提炼的模块 / 子模块 / 功能树进行增删改。',
+        description: '集中处理处于模块层级调试断点的任务。',
       },
       {
         key: '/drafts',
         icon: <EditOutlined />,
         label: <TabLink to="/drafts">生成知识复核</TabLink>,
         title: '生成知识复核',
-        description: '结合代码来源、复核意见和修订记录，复核 AI 生成的 Markdown 草稿。',
+        description: '复核 AI 生成的 Markdown 草稿。',
       },
       {
         key: '/push',
@@ -231,25 +231,28 @@ const buildMenuItems = (items: NavItem[]): { menuItems: any[]; flatMap: Map<stri
 };
 
 // 三大类导航 → 拍平为 AntD Menu items + 统一 flatMap（key → NavItem）
-const { menuItems: basicMenuItems, flatMap: basicFlat } = buildMenuItems(basicNav);
-const { menuItems: knowledgeMenuItems, flatMap: knowledgeFlat } = buildMenuItems(knowledgeNav);
-const { menuItems: dashboardMenuItems, flatMap: dashboardFlat } = buildMenuItems(dashboardNav);
 
 // 合并 flatMap：currentPage 查找可命中四大类任意 key
 const navFlatMap = new Map<string, NavItem>([
-  ...basicFlat,
-  ...knowledgeFlat,
-  ...dashboardFlat,
+  ...Array.from(buildMenuItems(basicNav).flatMap),
+  ...Array.from(buildMenuItems(knowledgeNav).flatMap),
+  ...Array.from(buildMenuItems(dashboardNav).flatMap),
 ]);
 
 // 兜底 currentPage：取基础配置第一项（保证页面顶部 kicker / title 一定有值）
 const fallbackCurrentPage = basicNav[0];
 
+/**
+ * 把 NAV_GROUPS 渲染为统一的可折叠 SubMenu（一级分组）。
+ * 带 children 的 NavItem（如 知识任务构建）平铺为 Menu.Item + 缩进子项，不用二级 SubMenu。
+ */
+
+
 /** 三大类导航分组的展示名（顺序与侧边栏渲染顺序一致） */
 const NAV_GROUPS: ReadonlyArray<{ key: string; label: string; items: NavItem[] }> = [
-  { key: 'basic', label: '基础配置', items: basicNav },
-  { key: 'knowledge', label: '知识管理', items: knowledgeNav },
-  { key: 'dashboard', label: '仪表盘 / 看板', items: dashboardNav },
+  { key: "basic", label: "基础配置", items: basicNav },
+  { key: "knowledge", label: "知识管理", items: knowledgeNav },
+  { key: "dashboard", label: "仪表盘 / 看板", items: dashboardNav },
 ];
 
 /** 在四大类中查找指定 key 所属的分组（含子项）；找不到返回 null。 */
@@ -266,15 +269,12 @@ function findGroupForKey(key: string): { group: typeof NAV_GROUPS[number]; paren
 /**
  * 计算 selectedKey 与 openKeys：
  * - selectedKey 取最深匹配的菜单 key（子菜单优先于父菜单）
- * - selectedKeys 额外包含所有祖先父菜单 key，让父菜单在子项被选中时也高亮
- * - openKeys 取所有祖先父菜单 key
+ * - selectedKeys 仅含 selectedKey（平铺子项时不连带高亮父项）
+ * - openKeys 取一级分组 SubMenu 的祖先 key
  */
 const computeMenuState = (pathname: string) => {
-  // 关键修复:不要把 default key 预先塞进 selectedKeys。
-  // 否则访问其他页面时,选中的菜单项始终包含 basicNav[0] = "/basic/models",造成"多选"假象。
   let selectedKey: string | null = null;
   let bestDepth = -1;
-  const selectedKeys = new Set<string>();
   const openKeys = new Set<string>();
 
   const visit = (item: NavItem, ancestors: string[]) => {
@@ -288,11 +288,7 @@ const computeMenuState = (pathname: string) => {
         bestDepth = depth;
         selectedKey = item.key;
       }
-      selectedKeys.add(item.key);
-      ancestors.forEach((a) => {
-        selectedKeys.add(a);
-        openKeys.add(a);
-      });
+      ancestors.forEach((a) => openKeys.add(a));
     }
     if (item.children) {
       for (const child of item.children) {
@@ -313,7 +309,8 @@ const computeMenuState = (pathname: string) => {
 
   return {
     selectedKey,
-    selectedKeys: Array.from(selectedKeys),
+    // 仅高亮最深匹配项；平铺子项时不连带高亮父项（如 知识任务构建）
+    selectedKeys: selectedKey ? [selectedKey] : [],
     openKeys: Array.from(openKeys),
   };
 };
@@ -403,9 +400,6 @@ const BasicLayout: React.FC = () => {
 
         {/* 侧边栏菜单区:仅此区独立纵向滚动,brand + footer 保持固定不动 */}
         <div className="ci-sider-body">
-        {/* 第 1 段：基础配置 */}
-        <div className="ci-sider-section">
-          {!collapsed && <span className="ci-sider-label">基础配置</span>}
           <Menu
             mode="inline"
             selectedKeys={selectedKeys}
@@ -414,42 +408,33 @@ const BasicLayout: React.FC = () => {
             onClick={() => {
               if (isMobile) setCollapsed(true);
             }}
-            items={basicMenuItems}
             className="ci-menu"
-          />
-        </div>
-        {/* 第 2 段：知识构建 */}
-        <div className="ci-sider-section">
-          {!collapsed && <span className="ci-sider-label">知识构建</span>}
-          <Menu
-            mode="inline"
-            selectedKeys={selectedKeys}
-            openKeys={openKeys}
-            onOpenChange={handleOpenChange}
-            onClick={() => {
-              if (isMobile) setCollapsed(true);
-              // 父菜单（带 children 的项）点击不跳转——只通过 onOpenChange 展开/折叠。
-              // 必须用户点击某个具体子菜单项才路由跳转。
-            }}
-            items={knowledgeMenuItems}
-            className="ci-menu"
-          />
-        </div>
-        {/* 第 3 段：仪表盘 / 看板 */}
-        <div className="ci-sider-section ci-sider-section-last">
-          {!collapsed && <span className="ci-sider-label">仪表盘 / 看板</span>}
-          <Menu
-            mode="inline"
-            selectedKeys={selectedKeys}
-            openKeys={openKeys}
-            onOpenChange={handleOpenChange}
-            onClick={() => {
-              if (isMobile) setCollapsed(true);
-            }}
-            items={dashboardMenuItems}
-            className="ci-menu"
-          />
-        </div>
+          >
+            {NAV_GROUPS.map((group) => (
+              <Menu.SubMenu key={group.key} title={group.label} icon={null}>
+                {group.items.map((item) =>
+                  item.children && item.children.length > 0 ? (
+                    <React.Fragment key={item.key}>
+                      <Menu.Item key={item.key} icon={item.icon}>
+                        {item.label}
+                      </Menu.Item>
+                      <Menu.ItemGroup key={`${item.key}-nested`} className="ci-menu-nested-group">
+                        {item.children.map((c) => (
+                          <Menu.Item key={c.key} className="ci-menu-item-nested">
+                            {c.label}
+                          </Menu.Item>
+                        ))}
+                      </Menu.ItemGroup>
+                    </React.Fragment>
+                  ) : (
+                    <Menu.Item key={item.key} icon={item.icon}>
+                      {item.label}
+                    </Menu.Item>
+                  )
+                )}
+              </Menu.SubMenu>
+            ))}
+          </Menu>
         </div>{/* end ci-sider-body */}
 
         {/* 侧边栏底部:用户信息 + 登出 */}

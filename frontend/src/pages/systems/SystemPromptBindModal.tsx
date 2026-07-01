@@ -12,8 +12,8 @@ import {
 } from 'antd';
 import { PlayCircleOutlined, PlusOutlined } from '@ant-design/icons';
 import { listPrompts, getPrompt, deletePrompt } from '../../api/prompt';
-import { updateRepository } from '../../api/system';
-import type { Prompt, Repository } from '../../types';
+import { updateRepository } from '../../api/repository';
+import type { Prompt, Repository, System } from '../../types';
 import SystemPromptEditorModal from './SystemPromptEditorModal';
 import SystemPromptTrialModal from './SystemPromptTrialModal';
 
@@ -59,7 +59,7 @@ const SystemPromptBindModal: React.FC<Props> = ({ open, repository, onClose, onS
     setPromptsLoading(true);
     try {
       const all: Prompt[] = [];
-      const sysId = system?.id;
+      const sysId = repository?.id;
       for (const t of Object.keys(TYPE_NAME) as ('MODULARIZE' | 'DOCUMENT_GENERATION')[]) {
         // 拉 DEFAULT 类别的
         const defRes = await listPrompts({
@@ -108,7 +108,7 @@ const SystemPromptBindModal: React.FC<Props> = ({ open, repository, onClose, onS
 
   useEffect(() => {
     if (open) fetchAll();
-  }, [open, system?.id]);
+  }, [open, repository?.id]);
 
   // 找到当前已绑定的 prompt(可能为 null)
   const selectedModularize = useMemo(
@@ -276,7 +276,7 @@ const SystemPromptBindModal: React.FC<Props> = ({ open, repository, onClose, onS
           </Text>
         ) : (
           <Text type="secondary">
-            当前未绑定。点「自定义」创建一个(将基于默认提示词 {defaultP?.name ?? '无'} 复制修改,自动以「{system?.name ?? '系统'} - {TYPE_LABEL[promptType]} - 时间戳」命名)。
+            当前未绑定。点「自定义」创建一个(将基于默认提示词 {defaultP?.name ?? '无'} 复制修改,自动以「{repository?.gitUrl ?? '系统'} - {TYPE_LABEL[promptType]} - 时间戳」命名)。
           </Text>
         )}
       </Card>
@@ -288,8 +288,8 @@ const SystemPromptBindModal: React.FC<Props> = ({ open, repository, onClose, onS
       <Modal
         title={
           <Space>
-            提示词 · {system?.name ?? ''}
-            {system?.nameCn && <Text type="secondary">({repository.gitUrlCn})</Text>}
+            提示词 · {repository?.gitUrl ?? ''}
+            {repository?.gitUrl && <Text type="secondary">({repository?.gitUrl})</Text>}
           </Space>
         }
         open={open}
@@ -310,7 +310,7 @@ const SystemPromptBindModal: React.FC<Props> = ({ open, repository, onClose, onS
             <Space direction="vertical" size={4}>
               <Text>系统绑定 1 个模块提取提示词 + 1 个文档生成提示词,初始默认绑定到「全局默认提示词」。</Text>
               <Text type="secondary">
-                点「自定义」可基于全局默认提示词复制修改,自动以「{system?.name ?? '系统'} - 类型 - 时间戳」命名。
+                点「自定义」可基于全局默认提示词复制修改,自动以「{repository?.gitUrl ?? '系统'} - 类型 - 时间戳」命名。
               </Text>
             </Space>
           }
@@ -333,8 +333,8 @@ const SystemPromptBindModal: React.FC<Props> = ({ open, repository, onClose, onS
           defaultPrompt={
             editorState.promptType === 'MODULARIZE' ? defaultModularize : defaultDocument
           }
-          systemName={system?.name}
-          scopeId={system?.id}
+          systemName={repository?.gitUrl}
+          scopeId={repository?.id}
           promptType={editorState.promptType}
           promptTypeLabel={TYPE_LABEL[editorState.promptType]}
           onClose={() => setEditorState(null)}

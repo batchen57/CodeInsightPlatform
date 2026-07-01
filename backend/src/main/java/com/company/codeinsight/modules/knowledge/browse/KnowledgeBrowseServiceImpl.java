@@ -2,6 +2,7 @@ package com.company.codeinsight.modules.knowledge.browse;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.company.codeinsight.common.exception.BusinessException;
+import com.company.codeinsight.common.response.PageResult;
 import com.company.codeinsight.common.util.DraftFileUtil;
 import com.company.codeinsight.modules.draft.entity.DraftWorkspace;
 import com.company.codeinsight.modules.draft.entity.KnowledgeDraft;
@@ -11,8 +12,14 @@ import com.company.codeinsight.modules.draft.service.DraftService;
 import com.company.codeinsight.modules.knowledge.browse.dto.KnowledgeBrowseContentRequest;
 import com.company.codeinsight.modules.knowledge.browse.dto.KnowledgeBrowseItem;
 import com.company.codeinsight.modules.knowledge.browse.dto.KnowledgeBrowseQuery;
+import com.company.codeinsight.modules.knowledge.browse.dto.KnowledgeBrowseTreeQuery;
+import com.company.codeinsight.modules.knowledge.browse.dto.KnowledgeBrowseTreeResult;
 import com.company.codeinsight.modules.knowledge.entity.KnowledgeVersion;
 import com.company.codeinsight.modules.knowledge.mapper.KnowledgeVersionMapper;
+import com.company.codeinsight.modules.repository.entity.CodeRepository;
+import com.company.codeinsight.modules.repository.mapper.CodeRepositoryMapper;
+import com.company.codeinsight.modules.system.entity.SystemApplication;
+import com.company.codeinsight.modules.system.mapper.SystemApplicationMapper;
 import com.company.codeinsight.modules.task.entity.DecompileTask;
 import com.company.codeinsight.modules.task.mapper.DecompileTaskMapper;
 import lombok.extern.slf4j.Slf4j;
@@ -79,50 +86,67 @@ public class KnowledgeBrowseServiceImpl implements KnowledgeBrowseService {
     @Value("${code-insight.browse.source:temp-repos}")
     private String sourceType;
 
-    @Value("${code-insight.storage.local-path:./storage}")
-    private String storageLocalPath;
+    @Autowired
+    private com.company.codeinsight.common.storage.StorageProperties storageProperties;
+
+    @Autowired
+    private SystemApplicationMapper systemMapper;
+
+    @Autowired
+    private CodeRepositoryMapper repositoryMapper;
+
+    @Autowired
+    private KnowledgeBrowseTreeService treeService;
 
     private static final DateTimeFormatter ISO_FORMATTER = DateTimeFormatter.ISO_LOCAL_DATE_TIME;
 
     @Override
-    public List<KnowledgeBrowseItem> list(KnowledgeBrowseQuery query) {
-        if (query == null || query.getSystemId() == null) {
-            throw new BusinessException("systemId 不能为空");
+    public PageResult<KnowledgeBrowseItem> listPage(KnowledgeBrowseQuery query) {
+        if (query == null) {
+            query = new KnowledgeBrowseQuery();
         }
-        Long systemId = query.getSystemId();
+        long current = query.getCurrent() == null || query.getCurrent() < 1 ? 1L : query.getCurrent();
+        long size = query.getSize() == null || query.getSize() < 1 ? 20L : Math.min(query.getSize(), 200L);
+
         String type = StringUtils.hasText(query.getType()) ? query.getType().toUpperCase(Locale.ROOT) : TYPE_ALL;
-        String keyword = StringUtils.hasText(query.getKeyword()) ? query.getKeyword().trim() : null;
 
-        // 1. 查 systemId 下所有 taskId
-        List<Long> taskIds = collectTaskIds(systemId);
-        if (taskIds.isEmpty()) {
-            return Collections.emptyList();
+        List<DecompileTask> tasks = collectTasks(query);
+        if (tasks.isEmpty()) {
+            return new PageResult<>(0, size, current, Collections.emptyList());
         }
+        List<Long> taskIds = tasks.stream().map(DecompileTask::getId).collect(Collectors.toList());
+        Map<Long, DecompileTask> taskById = tasks.stream()
+                .collect(Collectors.toMap(DecompileTask::getId, t -> t, (a, b) -> a));
 
-        // 2. 草稿条目（按 query.taskId 进一步过滤）
         List<KnowledgeBrowseItem> items = new ArrayList<>();
         if (TYPE_ALL.equals(type) || TYPE_DRAFT.equals(type)) {
-            items.addAll(loadDraftItems(taskIds, query));
+            items.addAll(loadDraftItems(taskIds, query, taskById));
         }
-
-        // 3. 索引 / 清单条目
         if (TYPE_ALL.equals(type) || TYPE_INDEX.equals(type) || TYPE_MANIFEST.equals(type)) {
-            items.addAll(loadIndexItems(taskIds, query, type));
+            items.addAll(loadIndexItems(taskIds, query, type, taskById));
         }
 
-        // 4. 关键字 / 状态 / 时间 / 任务 / 版本 过滤（在前端过滤 + 后端过滤组合；后端统一再做一次保证数据正确）
+        enrichItemsWithContext(items, taskById);
         items = applyClientSideFilters(items, query);
-
-        // 5. 排序：updatedAt DESC（null 排到最后）
         items.sort((a, b) -> {
             String ua = a.getUpdatedAt() == null ? "" : a.getUpdatedAt();
             String ub = b.getUpdatedAt() == null ? "" : b.getUpdatedAt();
             return ub.compareTo(ua);
         });
 
-        log.debug("KnowledgeBrowseService.list systemId={} type={} keyword={} → items={}",
-                systemId, type, keyword, items.size());
-        return items;
+        long total = items.size();
+        int from = (int) Math.min((current - 1) * size, total);
+        int to = (int) Math.min(from + size, total);
+        List<KnowledgeBrowseItem> page = from >= to ? Collections.emptyList() : items.subList(from, to);
+
+        log.debug("KnowledgeBrowseService.listPage systemId={} repositoryId={} type={} total={} page={}/{}",
+                query.getSystemId(), query.getRepositoryId(), type, total, current, size);
+        return new PageResult<>(total, size, current, page);
+    }
+
+    @Override
+    public KnowledgeBrowseTreeResult buildTree(KnowledgeBrowseTreeQuery query) {
+        return treeService.buildTree(query);
     }
 
     @Override
@@ -145,19 +169,58 @@ public class KnowledgeBrowseServiceImpl implements KnowledgeBrowseService {
     // ============================ private helpers ============================
 
     /**
-     * 收集 systemId 下的 taskId 列表。
+     * 按 query 条件收集任务（systemId / repositoryId 均可选）。
      */
-    private List<Long> collectTaskIds(Long systemId) {
+    private List<DecompileTask> collectTasks(KnowledgeBrowseQuery query) {
         LambdaQueryWrapper<DecompileTask> qw = new LambdaQueryWrapper<>();
-        qw.eq(DecompileTask::getSystemId, systemId).select(DecompileTask::getId);
-        return taskMapper.selectList(qw).stream().map(DecompileTask::getId).collect(Collectors.toList());
+        if (query.getSystemId() != null) {
+            qw.eq(DecompileTask::getSystemId, query.getSystemId());
+        }
+        if (query.getRepositoryId() != null) {
+            qw.eq(DecompileTask::getRepositoryId, query.getRepositoryId());
+        }
+        qw.select(DecompileTask::getId, DecompileTask::getSystemId, DecompileTask::getRepositoryId);
+        return taskMapper.selectList(qw);
+    }
+
+    private void enrichItemsWithContext(List<KnowledgeBrowseItem> items, Map<Long, DecompileTask> taskById) {
+        if (items.isEmpty()) {
+            return;
+        }
+        Map<Long, SystemApplication> systemCache = new HashMap<>();
+        Map<Long, CodeRepository> repoCache = new HashMap<>();
+        for (KnowledgeBrowseItem item : items) {
+            if (item.getTaskId() == null) {
+                continue;
+            }
+            DecompileTask task = taskById.get(item.getTaskId());
+            if (task == null) {
+                task = taskMapper.selectById(item.getTaskId());
+                if (task != null) {
+                    taskById.put(task.getId(), task);
+                }
+            }
+            if (task == null) {
+                continue;
+            }
+            item.setSystemId(task.getSystemId());
+            item.setRepositoryId(task.getRepositoryId());
+            if (task.getSystemId() != null) {
+                SystemApplication sys = systemCache.computeIfAbsent(task.getSystemId(), id -> systemMapper.selectById(id));
+                item.setSystemName(KnowledgeBrowseTreeService.formatSystemName(sys));
+            }
+            if (task.getRepositoryId() != null) {
+                CodeRepository repo = repoCache.computeIfAbsent(task.getRepositoryId(), id -> repositoryMapper.selectById(id));
+                item.setRepositoryName(KnowledgeBrowseTreeService.formatRepositoryName(repo));
+            }
+        }
     }
 
     /**
-     * 加载 systemId 下所有 task 的草稿条目，转成 KnowledgeBrowseItem。
-     * <p>join path：ci_knowledge_draft → ci_draft_workspace (task_id) → ci_task (system_id)。</p>
+     * 加载 task 的草稿条目，转成 KnowledgeBrowseItem。
      */
-    private List<KnowledgeBrowseItem> loadDraftItems(List<Long> taskIds, KnowledgeBrowseQuery query) {
+    private List<KnowledgeBrowseItem> loadDraftItems(List<Long> taskIds, KnowledgeBrowseQuery query,
+                                                     Map<Long, DecompileTask> taskById) {
         // 1. workspace.taskId IN (...) → workspaceId list
         List<DraftWorkspace> workspaces = workspaceMapper.selectList(
                 new LambdaQueryWrapper<DraftWorkspace>().in(DraftWorkspace::getTaskId, taskIds));
@@ -209,7 +272,8 @@ public class KnowledgeBrowseServiceImpl implements KnowledgeBrowseService {
     /**
      * 加载 systemId 下每个 task 的索引/清单条目，转成 KnowledgeBrowseItem。
      */
-    private List<KnowledgeBrowseItem> loadIndexItems(List<Long> taskIds, KnowledgeBrowseQuery query, String typeFilter) {
+    private List<KnowledgeBrowseItem> loadIndexItems(List<Long> taskIds, KnowledgeBrowseQuery query, String typeFilter,
+                                                     Map<Long, DecompileTask> taskById) {
         List<Long> scopedTaskIds = query.getTaskId() != null
                 ? taskIds.stream().filter(t -> t.equals(query.getTaskId())).collect(Collectors.toList())
                 : taskIds;
@@ -285,7 +349,10 @@ public class KnowledgeBrowseServiceImpl implements KnowledgeBrowseService {
             if (keyword != null) {
                 String name = it.getName() == null ? "" : it.getName().toLowerCase(Locale.ROOT);
                 String path = it.getFilePath() == null ? "" : it.getFilePath().toLowerCase(Locale.ROOT);
-                if (!name.contains(keyword) && !path.contains(keyword)) {
+                String sys = it.getSystemName() == null ? "" : it.getSystemName().toLowerCase(Locale.ROOT);
+                String repo = it.getRepositoryName() == null ? "" : it.getRepositoryName().toLowerCase(Locale.ROOT);
+                if (!name.contains(keyword) && !path.contains(keyword)
+                        && !sys.contains(keyword) && !repo.contains(keyword)) {
                     return false;
                 }
             }
@@ -341,7 +408,7 @@ public class KnowledgeBrowseServiceImpl implements KnowledgeBrowseService {
     private Long safeFileSize(String contentUri) {
         if (!StringUtils.hasText(contentUri)) return null;
         try {
-            Path p = DraftFileUtil.resolveDraftPath(contentUri, storageLocalPath);
+            Path p = DraftFileUtil.resolve(contentUri, storageProperties);
             File f = p.toFile();
             return f.exists() ? Files.size(p) : 0L;
         } catch (Exception e) {

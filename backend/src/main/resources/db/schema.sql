@@ -157,6 +157,25 @@ CREATE UNIQUE INDEX IF NOT EXISTS uk_ci_prompt_type_default_active
 -- 3.4.1 数据迁移:把已有提示词的 category 设为 DEFAULT(兼容旧数据)
 UPDATE ci_prompt SET category = 'DEFAULT' WHERE category IS NULL;
 
+-- 3.6 仓库执行时间窗口（定时扫描任务专用）：每个仓库一行，按 weekday 位掩码 + hour/minute 命中即触发
+CREATE TABLE IF NOT EXISTS ci_scan_window (
+    id BIGSERIAL PRIMARY KEY,
+    repository_id BIGINT NOT NULL,
+    week_days SMALLINT NOT NULL DEFAULT 127,
+    hour SMALLINT NOT NULL DEFAULT 2,
+    minute SMALLINT NOT NULL DEFAULT 0,
+    enabled BOOLEAN DEFAULT TRUE NOT NULL,
+    last_fired_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uk_scan_window_repo ON ci_scan_window (repository_id);
+COMMENT ON TABLE ci_scan_window IS '仓库执行时间窗口：定时扫描任务以此为准触发任务下发（week_days 位掩码：1=周一 2=周二 4=周三 8=周四 16=周五 32=周六 64=周日，127=每天）';
+COMMENT ON COLUMN ci_scan_window.week_days IS '周几位掩码，bit0..bit6 对应周一到周日';
+COMMENT ON COLUMN ci_scan_window.hour IS '小时 0-23';
+COMMENT ON COLUMN ci_scan_window.minute IS '分钟 0-59';
+COMMENT ON COLUMN ci_scan_window.last_fired_at IS '最近一次实际触发时间，用于幂等（同分钟窗口不重复触发）';
+
 -- 3.5 入口扫描试跑记录表：保存"试跑"产生的历史结果（不入库真实任务）
 CREATE TABLE IF NOT EXISTS ci_entry_scan_trial (
     id BIGSERIAL PRIMARY KEY,

@@ -959,7 +959,9 @@ public class AiSummaryServiceImpl implements AiSummaryService {
             draft.setWorkspaceId(ws.getId());
             draft.setFilePath(relativeDocPath);
             draft.setModuleName(m.getModuleName() + " / " + sm.getSubModuleName() + " / " + fn.getFunctionName());
-            draft.setContentUri(storePath.toAbsolutePath().toUri().toString());
+            String contentUri = com.company.codeinsight.common.util.DraftFileUtil.buildDraftUri(
+                    task.getSystemId(), task.getRepositoryId(), taskId, relativeDocPath);
+            draft.setContentUri(contentUri);
             draft.setStatus(initialStatus);
             draft.setHash(hash);
             draft.setCreatedAt(LocalDateTime.now());
@@ -967,7 +969,9 @@ public class AiSummaryServiceImpl implements AiSummaryService {
             knowledgeDraftMapper.insert(draft);
         } else {
             String oldStatus = draft.getStatus();
-            draft.setContentUri(storePath.toAbsolutePath().toUri().toString());
+            String contentUri = com.company.codeinsight.common.util.DraftFileUtil.buildDraftUri(
+                    task.getSystemId(), task.getRepositoryId(), taskId, relativeDocPath);
+            draft.setContentUri(contentUri);
             draft.setHash(hash);
             if (oldStatus == null || oldStatus.equals("AI_GENERATED") || oldStatus.equals("PENDING_REVIEW")) {
                 draft.setStatus(initialStatus);

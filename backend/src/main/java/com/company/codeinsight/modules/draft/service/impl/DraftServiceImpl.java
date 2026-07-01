@@ -90,12 +90,8 @@ public class DraftServiceImpl implements DraftService {
     @Autowired(required = false)
     private StringRedisTemplate redisTemplate;
 
-    /**
-     * 草稿正文存储的根目录（与 ci_knowledge_draft.content_uri 的相对路径拼接）。
-     * 配置项：{@code code-insight.storage.local-path}，默认 {@code ./storage}。
-     */
-    @Value("${code-insight.storage.local-path:./storage}")
-    private String storageLocalPath;
+    @Autowired
+    private com.company.codeinsight.common.storage.StorageProperties storageProperties;
 
     /**
      * 查询指定评审工作区下的所有草稿
@@ -199,7 +195,7 @@ public class DraftServiceImpl implements DraftService {
 
         // 3. 若无自动保存痕迹，从原始 URI 地址读取磁盘上的正式草稿文件
         try {
-            Path path = DraftFileUtil.resolveDraftPath(draft.getContentUri(), storageLocalPath);
+            Path path = DraftFileUtil.resolve(draft.getContentUri(), storageProperties);
             File file = path.toFile();
             if (file.exists()) {
                 return Files.readString(path);
@@ -234,7 +230,7 @@ public class DraftServiceImpl implements DraftService {
 
         try {
             // 读取原有的物理正文以对比差异
-            Path draftPath = DraftFileUtil.resolveDraftPath(draft.getContentUri(), storageLocalPath);
+            Path draftPath = DraftFileUtil.resolve(draft.getContentUri(), storageProperties);
             File file = draftPath.toFile();
             String originalContent = "";
             if (file.exists()) {

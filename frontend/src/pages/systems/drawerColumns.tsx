@@ -9,6 +9,7 @@ import {
   message,
 } from 'antd';
 import {
+  ClockCircleOutlined,
   DeleteOutlined,
   FileTextOutlined,
   GlobalOutlined,
@@ -27,6 +28,7 @@ export interface RepositoryColumnHandlers {
   onScan: (repo: Repository) => void;
   onScanConfig?: (repo: Repository) => void;
   onBindPrompts?: (repo: Repository) => void;
+  onScanWindow?: (repo: Repository) => void;
 }
 
 /**
@@ -109,6 +111,11 @@ export function getRepositoryColumns(handlers: RepositoryColumnHandlers) {
           {handlers.onScanConfig && (
             <Button size="small" icon={<SettingOutlined />} onClick={() => handlers.onScanConfig!(repo)}>
               扫描规则
+            </Button>
+          )}
+          {handlers.onScanWindow && (
+            <Button size="small" icon={<ClockCircleOutlined />} onClick={() => handlers.onScanWindow!(repo)}>
+              时间窗口
             </Button>
           )}
           <Button

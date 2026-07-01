@@ -44,4 +44,16 @@ public class KnowledgeBrowseItem {
 
     /** 数据源标识：DB（draft 行）/ TEMP_REPOS（index/manifest 文件） */
     private String source;
+
+    /** 所属系统 ID（列表跨系统展示） */
+    private Long systemId;
+
+    /** 所属系统名称 */
+    private String systemName;
+
+    /** 所属仓库 ID */
+    private Long repositoryId;
+
+    /** 所属仓库展示名（gitUrl 末段 + 分支） */
+    private String repositoryName;
 }

@@ -22,6 +22,7 @@ import SystemStatusTag from '../../components/SystemStatusTag';
 import RepositoryDrawer from './RepositoryDrawer';
 import RepositoryFormModal, { type RepositoryFormValues } from './RepositoryFormModal';
 import RepositoryScanConfigModal, { type ScanConfigFormValues } from './RepositoryScanConfigModal';
+import ScanWindowModal from './ScanWindowModal';
 import { parseRepoEntryScanConfig } from './repositoryUtils';
 import { useRepositories, useSystemsList } from './hooks';
 
@@ -247,6 +248,8 @@ const Systems: React.FC = () => {
   // ===== 代码库入口扫描规则 =====
   const [scanModalOpen, setScanModalOpen] = useState(false);
   const [scanConfigRepo, setScanConfigRepo] = useState<Repository | null>(null);
+  const [scanWindowOpen, setScanWindowOpen] = useState(false);
+  const [scanWindowRepo, setScanWindowRepo] = useState<Repository | null>(null);
   const [scanSubmitting, setScanSubmitting] = useState(false);
   const [scanForm] = Form.useForm<ScanConfigFormValues>();
 
@@ -373,11 +376,12 @@ const Systems: React.FC = () => {
         onDeleteRepo={handleDeleteRepository}
         onScan={handleScan}
         onScanConfig={openScanConfig}
+        onScanWindow={(repo) => { setScanWindowRepo(repo); setScanWindowOpen(true); }}
       />
 
       <SystemPromptBindModal
         open={promptBindOpen}
-        system={selectedSystem}
+        repository={selectedRepo}
         onClose={() => {
           setPromptBindOpen(false);
           setSelectedSystem(null);
@@ -413,6 +417,14 @@ const Systems: React.FC = () => {
         }}
         onSubmit={handleScanConfigSubmit}
       />
+
+      {scanWindowRepo && (
+        <ScanWindowModal
+          open={scanWindowOpen}
+          repositoryId={scanWindowRepo.id}
+          onClose={() => { setScanWindowOpen(false); setScanWindowRepo(null); }}
+        />
+      )}
     </div>
   );
 };

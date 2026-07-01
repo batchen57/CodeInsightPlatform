@@ -87,8 +87,8 @@ public class PushServiceImpl implements PushService {
     @Autowired(required = false)
     private StringRedisTemplate redisTemplate;
 
-    @Value("${code-insight.storage.local-path:./storage}")
-    private String storageLocalPath;
+    @Autowired
+    private com.company.codeinsight.common.storage.StorageProperties storageProperties;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -190,7 +190,7 @@ public class PushServiceImpl implements PushService {
 
         // 校验草稿内容中不能残留 `- [ ]` 待确认标记
         for (KnowledgeDraft draft : drafts) {
-            File draftFile = DraftFileUtil.resolveDraftPath(draft.getContentUri(), storageLocalPath).toFile();
+            File draftFile = DraftFileUtil.resolve(draft.getContentUri(), storageProperties).toFile();
             if (draftFile.exists()) {
                 try {
                     String content = Files.readString(draftFile.toPath());

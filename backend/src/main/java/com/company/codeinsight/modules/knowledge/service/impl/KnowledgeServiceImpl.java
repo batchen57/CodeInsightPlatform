@@ -84,8 +84,8 @@ public class KnowledgeServiceImpl implements KnowledgeService {
      * 草稿正文存储根目录，与 ci_knowledge_draft.content_uri 的相对路径拼接。
      * 配置项：{@code code-insight.storage.local-path}，默认 {@code ./storage}。
      */
-    @Value("${code-insight.storage.local-path:./storage}")
-    private String storageLocalPath;
+    @Autowired
+    private com.company.codeinsight.common.storage.StorageProperties storageProperties;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -159,7 +159,7 @@ public class KnowledgeServiceImpl implements KnowledgeService {
 
             // 拷贝各个草稿的物理 Markdown 到发布目录下
             for (KnowledgeDraft draft : drafts) {
-                File draftFile = DraftFileUtil.resolveDraftPath(draft.getContentUri(), storageLocalPath).toFile();
+                File draftFile = DraftFileUtil.resolve(draft.getContentUri(), storageProperties).toFile();
                 String content = draftFile.exists() ? Files.readString(draftFile.toPath()) : "# " + draft.getModuleName();
 
                 String cleanFileName = draft.getModuleName().replaceAll("[\\s/\\(\\)]", "_") + ".md";
@@ -306,7 +306,7 @@ public class KnowledgeServiceImpl implements KnowledgeService {
             pcBuilder.append("# 待确认事项汇总清单\n\n");
             boolean hasPc = false;
             for (KnowledgeDraft draft : drafts) {
-                File draftFile = DraftFileUtil.resolveDraftPath(draft.getContentUri(), storageLocalPath).toFile();
+                File draftFile = DraftFileUtil.resolve(draft.getContentUri(), storageProperties).toFile();
                 if (draftFile.exists()) {
                     List<String> lines = Files.readAllLines(draftFile.toPath());
                     for (String line : lines) {

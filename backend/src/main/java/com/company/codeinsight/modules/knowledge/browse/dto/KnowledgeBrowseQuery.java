@@ -9,8 +9,17 @@ import lombok.Data;
 @Data
 public class KnowledgeBrowseQuery {
 
-    /** 必填：按系统聚合 */
+    /** 可选：按系统聚合；为空表示跨全部系统（列表模式） */
     private Long systemId;
+
+    /** 可选：按仓库过滤 */
+    private Long repositoryId;
+
+    /** 分页页码，从 1 开始，默认 1 */
+    private Long current = 1L;
+
+    /** 分页大小，默认 20 */
+    private Long size = 20L;
 
     /** 文件类型过滤：DRAFT / INDEX / MANIFEST / ALL（默认 ALL） */
     private String type;

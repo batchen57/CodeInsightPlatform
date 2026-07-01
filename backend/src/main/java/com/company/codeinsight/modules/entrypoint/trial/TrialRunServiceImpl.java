@@ -151,6 +151,17 @@ public class TrialRunServiceImpl implements TrialRunService {
         updateStatus(trialId, EntryScanTrialEntity.STATUS_CANCELLED, LocalDateTime.now(), null,
                 "用户(" + (operator == null ? "?" : operator) + ")取消");
         safeUnlock(LOCK_KEY_PREFIX + trial.getRepositoryId(), null);
+        // 清理 workspace
+        try {
+            File ws = taskWorkspacePaths.taskProjectDir(trialId);
+            if (ws.exists()) {
+                java.io.File[] children = ws.listFiles();
+                if (children != null) for (java.io.File f : children) f.delete();
+                ws.delete();
+            }
+        } catch (Exception e) {
+            log.warn("trial cancel cleanup failed trialId={}: {}", trialId, e.getMessage());
+        }
         return true;
     }
 

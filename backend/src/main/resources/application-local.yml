@@ -42,8 +42,14 @@ code-insight:
     task-limit: ${TOKEN_TASK_LIMIT:100000}
     system-monthly-limit: ${TOKEN_SYSTEM_MONTHLY_LIMIT:1000000}
   storage:
+    mode: ${STORAGE_MODE:local}
     local-path: ${STORAGE_LOCAL_PATH:./storage}
+    base-path: ${STORAGE_BASE_PATH:./storage}
+    drafts-root: ${STORAGE_DRAFTS_ROOT:drafts}
+    releases-root: ${STORAGE_RELEASES_ROOT:releases}
     workspace-root: ${STORAGE_WORKSPACE_ROOT:./temp_repos}
+  doc-generation:
+    granularity: ${DOC_GENERATION_GRANULARITY:function}
   cluster:
     enabled: ${CLUSTER_ENABLED:false}
   push:

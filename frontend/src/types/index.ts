@@ -271,11 +271,16 @@ export interface KnowledgeBrowseItem {
   updatedAt: string;
   /** 数据源标识：DB（draft 行）/ TEMP_REPOS（index/manifest 文件） */
   source: 'DB' | 'TEMP_REPOS';
+  systemId?: number;
+  systemName?: string;
+  repositoryId?: number;
+  repositoryName?: string;
 }
 
 /** 知识查看 - 列表查询入参 */
 export interface KnowledgeBrowseQuery {
-  systemId: number;
+  systemId?: number;
+  repositoryId?: number;
   type?: KnowledgeBrowseFileType;
   keyword?: string;
   taskId?: number;
@@ -283,6 +288,32 @@ export interface KnowledgeBrowseQuery {
   status?: string;
   createdAtStart?: string;
   createdAtEnd?: string;
+  current?: number;
+  size?: number;
+}
+
+/** 知识查看 - 树形节点 */
+export interface KnowledgeBrowseTreeNode {
+  key: string;
+  nodeType: 'MODULE' | 'SUB_MODULE' | 'FUNCTION';
+  title: string;
+  draftId?: number;
+  hasDocument?: boolean;
+  draftStatus?: string;
+  documentGranularity?: 'module' | 'function';
+  children?: KnowledgeBrowseTreeNode[];
+}
+
+/** 知识查看 - 树形模式响应 */
+export interface KnowledgeBrowseTreeResult {
+  systemId: number;
+  systemName?: string;
+  repositoryId: number;
+  repositoryName?: string;
+  taskId: number;
+  taskAutoResolved?: boolean;
+  documentGranularity?: 'module' | 'function';
+  nodes: KnowledgeBrowseTreeNode[];
 }
 
 export interface KnowledgeDraft {
@@ -325,6 +356,19 @@ export interface OperationLog {
   exceptionMsg?: string;
   isSuccess: number;
   createdAt: string;
+}
+
+/** 仓库扫描时间窗口 */
+export interface ScanWindow {
+  id?: number;
+  repositoryId: number;
+  weekDays: number;
+  hour: number;
+  minute: number;
+  enabled: boolean;
+  lastFiredAt?: string;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface PageResult<T> {

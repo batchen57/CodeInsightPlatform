@@ -25,6 +25,7 @@ interface Props {
   onScan: (repo: Repository) => void;
   onScanConfig?: (repo: Repository) => void;
   onBindPrompts?: (repo: Repository) => void;
+  onScanWindow?: (repo: Repository) => void;
 }
 
 /**
@@ -45,12 +46,14 @@ const RepositoryDrawer: React.FC<Props> = ({
   onDeleteRepo,
   onScan,
   onScanConfig,
+  onScanWindow,
 }) => {
   const columns = useRepositoryColumns({
     onEdit: onEditRepo,
     onDelete: onDeleteRepo,
     onScan,
     onScanConfig,
+    onScanWindow,
   });
 
   return (

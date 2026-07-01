@@ -36,7 +36,7 @@ import java.util.List;
 @Slf4j
 @Component
 @RequiredArgsConstructor
-@ConditionalOnProperty(name = "code-insight.browse.source", havingValue = "temp-repos", matchIfMissing = true)
+@ConditionalOnProperty(name = "code-insight.storage.mode", havingValue = "local", matchIfMissing = true)
 public class TempReposKnowledgeBrowseSource implements KnowledgeBrowseSource {
 
     private final TaskWorkspacePaths taskWorkspacePaths;

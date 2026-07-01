@@ -15,22 +15,29 @@ import {
   Table,
   Tag,
   Tooltip,
+  Tree,
   Typography,
   message,
 } from 'antd';
+import type { DataNode } from 'antd/es/tree';
 import {
+  ApartmentOutlined,
   ClearOutlined,
   CopyOutlined,
   DownloadOutlined,
+  EyeOutlined,
   FilterOutlined,
   ReloadOutlined,
   SearchOutlined,
+  UnorderedListOutlined,
 } from '@ant-design/icons';
 import { Dayjs } from 'dayjs';
 import { listSystems } from '../../api/system';
+import { listRepositories } from '../../api/repository';
 import { listTasks } from '../../api/task';
 import {
   getKnowledgeBrowseContent,
+  getKnowledgeBrowseTree,
   listKnowledgeBrowse,
 } from '../../api/knowledge-browse';
 import MarkdownView from '../../components/MarkdownView';
@@ -38,12 +45,19 @@ import type {
   KnowledgeBrowseFileType,
   KnowledgeBrowseItem,
   KnowledgeBrowseQuery,
+  KnowledgeBrowseTreeNode,
+  KnowledgeBrowseTreeResult,
+  Repository,
   System,
   Task,
 } from '../../types';
 
 const { Text, Paragraph } = Typography;
 const { RangePicker } = DatePicker;
+
+const VIEW_MODE_KEY = 'ci-knowledge-view-mode';
+
+type ViewMode = 'tree' | 'list';
 
 const TYPE_OPTIONS: { value: KnowledgeBrowseFileType | 'ALL'; label: string }[] = [
   { value: 'ALL', label: '全部' },
@@ -67,54 +81,119 @@ const STATUS_OPTIONS = [
   { value: 'ARCHIVED', label: 'ARCHIVED' },
 ];
 
-/** Markdown / YAML / JSON 文件 → 用 MarkdownView 渲染；其它纯文本走 <pre> */
+const NODE_TYPE_TAG: Record<string, { color: string; label: string }> = {
+  MODULE: { color: 'geekblue', label: '模块' },
+  SUB_MODULE: { color: 'cyan', label: '子模块' },
+  FUNCTION: { color: 'green', label: '功能' },
+};
+
+function readStoredViewMode(): ViewMode {
+  try {
+    const v = localStorage.getItem(VIEW_MODE_KEY);
+    return v === 'list' ? 'list' : 'tree';
+  } catch {
+    return 'tree';
+  }
+}
+
 function PreviewContent({ text, type }: { text: string; type: KnowledgeBrowseFileType }) {
   const lowerName = (text || '').toLowerCase();
   if (type === 'DRAFT' || type === 'INDEX') {
     return <MarkdownView content={text} />;
   }
-  // MANIFEST：可能是 yaml 或 json；尝试用 markdown（代码块降级）
   if (lowerName.trimStart().startsWith('{') || lowerName.trimStart().startsWith('[')) {
     return <MarkdownView content={'```json\n' + text + '\n```'} />;
   }
-  // YAML 走代码块
   return <MarkdownView content={'```yaml\n' + text + '\n```'} />;
 }
 
-const KnowledgeBrowse: React.FC = () => {
-  // ────────── 上下文 ──────────
-  const [systems, setSystems] = useState<System[]>([]);
-  const [systemId, setSystemId] = useState<number | undefined>(undefined);
-  const [type, setType] = useState<KnowledgeBrowseFileType | 'ALL'>('ALL');
-  const [keyword, setKeyword] = useState<string>('');
+function formatBytes(n?: number) {
+  if (n == null) return '-';
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / 1024 / 1024).toFixed(2)} MB`;
+}
 
-  // ────────── 高级筛选 ──────────
+/** 树内关键字过滤：保留命中节点及其祖先 */
+function filterTreeNodes(nodes: KnowledgeBrowseTreeNode[], keyword: string): KnowledgeBrowseTreeNode[] {
+  const kw = keyword.trim().toLowerCase();
+  if (!kw) return nodes;
+
+  const walk = (node: KnowledgeBrowseTreeNode): KnowledgeBrowseTreeNode | null => {
+    const titleHit = node.title.toLowerCase().includes(kw);
+    const childResults = (node.children ?? [])
+      .map(walk)
+      .filter((n): n is KnowledgeBrowseTreeNode => n != null);
+    if (titleHit || childResults.length > 0) {
+      return { ...node, children: childResults.length > 0 ? childResults : node.children };
+    }
+    return null;
+  };
+
+  return nodes.map(walk).filter((n): n is KnowledgeBrowseTreeNode => n != null);
+}
+
+function countFunctionLeaves(nodes: KnowledgeBrowseTreeNode[]): number {
+  let n = 0;
+  for (const node of nodes) {
+    if (node.nodeType === 'FUNCTION') {
+      n += 1;
+    } else if (node.children?.length) {
+      n += countFunctionLeaves(node.children);
+    }
+  }
+  return n;
+}
+
+const KnowledgeBrowse: React.FC = () => {
+  const [viewMode, setViewMode] = useState<ViewMode>(readStoredViewMode);
+
+  const [systems, setSystems] = useState<System[]>([]);
+  const [repositories, setRepositories] = useState<Repository[]>([]);
+  const [systemId, setSystemId] = useState<number | undefined>(undefined);
+  const [repositoryId, setRepositoryId] = useState<number | undefined>(undefined);
+
+  const [type, setType] = useState<KnowledgeBrowseFileType | 'ALL'>('ALL');
+  const [keyword, setKeyword] = useState('');
+  const [treeKeyword, setTreeKeyword] = useState('');
+
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [status, setStatus] = useState<string | undefined>(undefined);
   const [taskId, setTaskId] = useState<number | undefined>(undefined);
   const [dateRange, setDateRange] = useState<[Dayjs | null, Dayjs | null] | null>(null);
-
-  // ────────── 任务列表（按 system 过滤，给高级筛选用） ──────────
   const [tasks, setTasks] = useState<Task[]>([]);
 
-  // ────────── 主列表 ──────────
   const [items, setItems] = useState<KnowledgeBrowseItem[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [listLoading, setListLoading] = useState(false);
+  const [listTotal, setListTotal] = useState(0);
+  const [listPage, setListPage] = useState(1);
+  const [listPageSize, setListPageSize] = useState(20);
 
-  // ────────── 内容预览 ──────────
+  const [treeResult, setTreeResult] = useState<KnowledgeBrowseTreeResult | null>(null);
+  const [treeLoading, setTreeLoading] = useState(false);
+
   const [previewOpen, setPreviewOpen] = useState(false);
   const [previewLoading, setPreviewLoading] = useState(false);
-  const [previewText, setPreviewText] = useState<string>('');
+  const [previewText, setPreviewText] = useState('');
   const [previewItem, setPreviewItem] = useState<KnowledgeBrowseItem | null>(null);
 
-  // ────────── 副作用：拉系统列表 ──────────
   useEffect(() => {
     listSystems({ current: 1, size: 200 })
       .then((data) => setSystems(data.records ?? []))
-      .catch(() => {/* request.ts 已统一弹错 */});
+      .catch(() => undefined);
   }, []);
 
-  // ────────── 副作用：选系统后拉任务列表 ──────────
+  useEffect(() => {
+    if (systemId == null) {
+      setRepositories([]);
+      setRepositoryId(undefined);
+      return;
+    }
+    listRepositories({ current: 1, size: 200, systemId })
+      .then((data) => setRepositories(data.records ?? []))
+      .catch(() => setRepositories([]));
+  }, [systemId]);
+
   useEffect(() => {
     if (systemId == null) {
       setTasks([]);
@@ -122,41 +201,76 @@ const KnowledgeBrowse: React.FC = () => {
     }
     listTasks({ current: 1, size: 200, systemId })
       .then((data) => setTasks(data.records ?? []))
-      .catch(() => {/* request.ts 已统一弹错 */});
+      .catch(() => undefined);
   }, [systemId]);
 
-  // ────────── 拉主列表 ──────────
-  const fetchItems = useCallback(async () => {
-    if (systemId == null) {
-      setItems([]);
-      return;
+  const handleViewModeChange = (mode: ViewMode) => {
+    setViewMode(mode);
+    try {
+      localStorage.setItem(VIEW_MODE_KEY, mode);
+    } catch {
+      /* ignore */
     }
+  };
+
+  const fetchList = useCallback(async () => {
     const query: KnowledgeBrowseQuery = {
       systemId,
+      repositoryId,
       type: type === 'ALL' ? 'ALL' : type,
       keyword: keyword.trim() || undefined,
       taskId,
       status: type === 'DRAFT' ? status : undefined,
       createdAtStart: dateRange?.[0]?.startOf('day').toISOString(),
       createdAtEnd: dateRange?.[1]?.endOf('day').toISOString(),
+      current: listPage,
+      size: listPageSize,
     };
-    setLoading(true);
+    setListLoading(true);
     try {
       const data = await listKnowledgeBrowse(query);
-      setItems(data ?? []);
-    } catch (e) {
-      // 已在拦截器弹错
+      setItems(data.records ?? []);
+      setListTotal(data.total ?? 0);
+    } catch {
+      setItems([]);
+      setListTotal(0);
     } finally {
-      setLoading(false);
+      setListLoading(false);
     }
-  }, [systemId, type, keyword, taskId, status, dateRange]);
+  }, [systemId, repositoryId, type, keyword, taskId, status, dateRange, listPage, listPageSize]);
+
+  const fetchTree = useCallback(async () => {
+    if (systemId == null || repositoryId == null) {
+      setTreeResult(null);
+      return;
+    }
+    setTreeLoading(true);
+    try {
+      const data = await getKnowledgeBrowseTree({
+        systemId,
+        repositoryId,
+        taskId,
+      });
+      setTreeResult(data);
+    } catch {
+      setTreeResult(null);
+    } finally {
+      setTreeLoading(false);
+    }
+  }, [systemId, repositoryId, taskId]);
 
   useEffect(() => {
-    // 进入页面 / 任意过滤条件变化 → 重新拉
-    fetchItems();
-  }, [fetchItems]);
+    if (viewMode === 'list') {
+      fetchList();
+    }
+  }, [viewMode, fetchList]);
 
-  // ────────── 内容预览 ──────────
+  useEffect(() => {
+    if (viewMode === 'tree') {
+      fetchTree();
+    }
+  }, [viewMode, fetchTree]);
+
   const openPreview = async (it: KnowledgeBrowseItem) => {
     setPreviewItem(it);
     setPreviewText('');
@@ -173,12 +287,38 @@ const KnowledgeBrowse: React.FC = () => {
             };
       const text = await getKnowledgeBrowseContent(params);
       setPreviewText(text ?? '');
-    } catch (e) {
+    } catch {
       setPreviewText('');
     } finally {
       setPreviewLoading(false);
     }
   };
+
+  const openPreviewFromTree = useCallback((node: KnowledgeBrowseTreeNode) => {
+    if (!node.hasDocument || node.draftId == null) return;
+    setPreviewItem({
+      id: `draft:${node.draftId}`,
+      name: node.title,
+      type: 'DRAFT',
+      taskId: treeResult?.taskId,
+      filePath: '',
+      size: 0,
+      status: node.draftStatus ?? 'DRAFT',
+      updatedAt: '',
+      source: 'DB',
+      systemId: treeResult?.systemId,
+      systemName: treeResult?.systemName,
+      repositoryId: treeResult?.repositoryId,
+      repositoryName: treeResult?.repositoryName,
+    });
+    setPreviewText('');
+    setPreviewOpen(true);
+    setPreviewLoading(true);
+    getKnowledgeBrowseContent({ type: 'DRAFT', id: node.draftId })
+      .then((text) => setPreviewText(text ?? ''))
+      .catch(() => setPreviewText(''))
+      .finally(() => setPreviewLoading(false));
+  }, [treeResult]);
 
   const closePreview = () => {
     setPreviewOpen(false);
@@ -186,7 +326,6 @@ const KnowledgeBrowse: React.FC = () => {
     setPreviewText('');
   };
 
-  // ────────── 工具 ──────────
   const copyPreview = async () => {
     try {
       await navigator.clipboard.writeText(previewText);
@@ -215,13 +354,6 @@ const KnowledgeBrowse: React.FC = () => {
     setDateRange(null);
   };
 
-  const formatBytes = (n?: number) => {
-    if (n == null) return '-';
-    if (n < 1024) return `${n} B`;
-    if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-    return `${(n / 1024 / 1024).toFixed(2)} MB`;
-  };
-
   const advancedActiveCount = useMemo(() => {
     let n = 0;
     if (status) n += 1;
@@ -230,57 +362,110 @@ const KnowledgeBrowse: React.FC = () => {
     return n;
   }, [status, taskId, dateRange]);
 
-  // ────────── 表格列 ──────────
-  const columns = [
+  const filteredTreeNodes = useMemo(
+    () => filterTreeNodes(treeResult?.nodes ?? [], treeKeyword),
+    [treeResult, treeKeyword],
+  );
+
+  const treeAntData = useMemo<DataNode[]>(() => {
+    const mapNode = (node: KnowledgeBrowseTreeNode): DataNode => {
+      const typeMeta = NODE_TYPE_TAG[node.nodeType] ?? { color: 'default', label: node.nodeType };
+      const isFunction = node.nodeType === 'FUNCTION';
+      const title = (
+        <div className="ci-knowledge-tree-node" style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <Tag color={typeMeta.color} style={{ margin: 0 }}>
+            {typeMeta.label}
+          </Tag>
+          <Text>{node.title}</Text>
+          {isFunction && node.documentGranularity === 'module' && (
+            <Tag color="gold" style={{ margin: 0 }}>
+              模块级文档
+            </Tag>
+          )}
+          {isFunction && node.hasDocument && node.draftStatus && (
+            <Tag style={{ margin: 0 }}>{node.draftStatus}</Tag>
+          )}
+          {isFunction && (
+            node.hasDocument ? (
+              <Button
+                type="link"
+                size="small"
+                icon={<EyeOutlined />}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  openPreviewFromTree(node);
+                }}
+              >
+                查看
+              </Button>
+            ) : (
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                暂无文档
+              </Text>
+            )
+          )}
+        </div>
+      );
+      return {
+        key: node.key,
+        title,
+        children: node.children?.length ? node.children.map(mapNode) : undefined,
+        selectable: isFunction && !!node.hasDocument,
+      };
+    };
+    return filteredTreeNodes.map(mapNode);
+  }, [filteredTreeNodes, openPreviewFromTree]);
+
+  const listColumns = [
     {
       title: '文件名',
       dataIndex: 'name',
       key: 'name',
-      width: 280,
+      width: 220,
       ellipsis: true,
       render: (v: string, r: KnowledgeBrowseItem) => (
         <Tooltip title={r.filePath}>
-          <Space size={4}>
-            <Text strong>{v}</Text>
-            {r.filePath && (
-              <Text type="secondary" style={{ fontSize: 12 }}>
-                {r.filePath}
-              </Text>
-            )}
-          </Space>
+          <Text strong>{v}</Text>
         </Tooltip>
       ),
+    },
+    {
+      title: '系统',
+      dataIndex: 'systemName',
+      key: 'systemName',
+      width: 140,
+      ellipsis: true,
+      render: (v: string | undefined) => v ?? '-',
+    },
+    {
+      title: '仓库',
+      dataIndex: 'repositoryName',
+      key: 'repositoryName',
+      width: 160,
+      ellipsis: true,
+      render: (v: string | undefined) => v ?? '-',
     },
     {
       title: '类型',
       dataIndex: 'type',
       key: 'type',
-      width: 110,
+      width: 100,
       render: (t: KnowledgeBrowseFileType) => (
         <Tag color={TYPE_TAG_META[t]?.color}>{TYPE_TAG_META[t]?.label ?? t}</Tag>
       ),
-      filters: TYPE_OPTIONS.map((o) => ({ text: o.label, value: o.value })),
-      onFilter: (value: any, record: KnowledgeBrowseItem) => record.type === value,
     },
     {
       title: '任务',
       dataIndex: 'taskId',
       key: 'taskId',
-      width: 100,
+      width: 90,
       render: (id?: number) => (id ? <Text code>#{id}</Text> : '-'),
-    },
-    {
-      title: '版本',
-      dataIndex: 'versionNum',
-      key: 'versionNum',
-      width: 110,
-      render: (v?: string) => (v ? <Tag>{v}</Tag> : '-'),
     },
     {
       title: '状态',
       dataIndex: 'status',
       key: 'status',
-      width: 110,
+      width: 100,
       render: (s: string | undefined, r: KnowledgeBrowseItem) => {
         if (!s) return '-';
         if (r.type === 'DRAFT') {
@@ -301,31 +486,20 @@ const KnowledgeBrowse: React.FC = () => {
       title: '大小',
       dataIndex: 'size',
       key: 'size',
-      width: 100,
-      render: (n: number) => <Text type="secondary">{formatBytes(n)}</Text>,
-    },
-    {
-      title: '来源',
-      dataIndex: 'source',
-      key: 'source',
       width: 90,
-      render: (s: string) => (
-        <Tag color={s === 'DB' ? 'blue' : 'orange'}>
-          {s === 'DB' ? '数据库' : '临时仓库'}
-        </Tag>
-      ),
+      render: (n: number) => <Text type="secondary">{formatBytes(n)}</Text>,
     },
     {
       title: '更新时间',
       dataIndex: 'updatedAt',
       key: 'updatedAt',
-      width: 170,
+      width: 160,
       render: (s?: string) => (s ? new Date(s).toLocaleString() : '-'),
     },
     {
       title: '操作',
       key: 'action',
-      width: 90,
+      width: 80,
       render: (_: unknown, r: KnowledgeBrowseItem) => (
         <Button type="link" size="small" onClick={() => openPreview(r)}>
           查看
@@ -334,76 +508,196 @@ const KnowledgeBrowse: React.FC = () => {
     },
   ];
 
+  const systemOptions = systems.map((s) => ({
+    value: s.id,
+    label: s.nameCn || s.name,
+  }));
+
+  const repoOptions = repositories.map((r) => {
+    const base = r.gitUrl?.split('/').pop()?.replace(/\.git$/, '') ?? `仓库 #${r.id}`;
+    return { value: r.id, label: `${base} (${r.branch})` };
+  });
+
   return (
     <div className="ci-page ci-knowledge-browse-page">
       <Card>
         <Space size={12} wrap style={{ width: '100%', justifyContent: 'space-between' }}>
           <Space size={12} wrap>
+            <Segmented
+              size="large"
+              value={viewMode}
+              onChange={(v) => handleViewModeChange(v as ViewMode)}
+              options={[
+                { value: 'tree', label: '树形视图', icon: <ApartmentOutlined /> },
+                { value: 'list', label: '列表视图', icon: <UnorderedListOutlined /> },
+              ]}
+            />
             <Space size={4}>
               <Text type="secondary">系统</Text>
               <Select
-                placeholder="请选择系统（必填）"
+                placeholder={viewMode === 'tree' ? '请选择系统（必填）' : '全部系统'}
                 value={systemId}
-                onChange={(v) => setSystemId(v)}
+                onChange={(v) => {
+                  setSystemId(v);
+                  setRepositoryId(undefined);
+                  setListPage(1);
+                }}
+                style={{ width: 220 }}
+                showSearch
+                optionFilterProp="label"
+                options={systemOptions}
+                allowClear={viewMode === 'list'}
+              />
+            </Space>
+            <Space size={4}>
+              <Text type="secondary">仓库</Text>
+              <Select
+                placeholder={viewMode === 'tree' ? '请选择仓库（必填）' : '全部仓库'}
+                value={repositoryId}
+                onChange={(v) => {
+                  setRepositoryId(v);
+                  setListPage(1);
+                }}
                 style={{ width: 240 }}
                 showSearch
                 optionFilterProp="label"
-                options={systems.map((s) => ({ value: s.id, label: s.name }))}
-                allowClear
+                options={repoOptions}
+                allowClear={viewMode === 'list'}
+                disabled={systemId == null}
               />
             </Space>
-            <Segmented
-              options={TYPE_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
-              value={type}
-              onChange={(v) => setType(v as KnowledgeBrowseFileType | 'ALL')}
-            />
+            {viewMode === 'list' && (
+              <Segmented
+                options={TYPE_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
+                value={type}
+                onChange={(v) => {
+                  setType(v as KnowledgeBrowseFileType | 'ALL');
+                  setListPage(1);
+                }}
+              />
+            )}
           </Space>
           <Space size={8} wrap>
             <Input
-              placeholder="按文件名搜索…"
+              placeholder={viewMode === 'tree' ? '过滤树节点…' : '搜索文件名 / 系统 / 仓库…'}
               prefix={<SearchOutlined />}
-              value={keyword}
-              onChange={(e) => setKeyword(e.target.value)}
-              onPressEnter={() => fetchItems()}
+              value={viewMode === 'tree' ? treeKeyword : keyword}
+              onChange={(e) => {
+                if (viewMode === 'tree') {
+                  setTreeKeyword(e.target.value);
+                } else {
+                  setKeyword(e.target.value);
+                }
+              }}
+              onPressEnter={() => {
+                if (viewMode === 'list') {
+                  setListPage(1);
+                  fetchList();
+                }
+              }}
               allowClear
-              style={{ width: 240 }}
+              style={{ width: 260 }}
             />
-            <Tooltip title="高级筛选">
-              <Badge count={advancedActiveCount} size="small" offset={[-4, 4]}>
-                <Button
-                  icon={<FilterOutlined />}
-                  onClick={() => setAdvancedOpen(true)}
-                >
-                  高级筛选
-                </Button>
-              </Badge>
-            </Tooltip>
+            {viewMode === 'list' && (
+              <Tooltip title="高级筛选">
+                <Badge count={advancedActiveCount} size="small" offset={[-4, 4]}>
+                  <Button icon={<FilterOutlined />} onClick={() => setAdvancedOpen(true)}>
+                    高级筛选
+                  </Button>
+                </Badge>
+              </Tooltip>
+            )}
             <Tooltip title="刷新">
               <Button
                 icon={<ReloadOutlined />}
-                loading={loading}
-                onClick={() => fetchItems()}
+                loading={viewMode === 'list' ? listLoading : treeLoading}
+                onClick={() => (viewMode === 'list' ? fetchList() : fetchTree())}
               />
             </Tooltip>
           </Space>
         </Space>
       </Card>
 
-      {systemId == null ? (
+      {viewMode === 'tree' ? (
         <Card style={{ marginTop: 16 }}>
-          <Empty description="请先选择系统" />
+          {systemId == null || repositoryId == null ? (
+            <Empty description="树形模式请先选择系统与仓库" />
+          ) : treeLoading ? (
+            <Skeleton active paragraph={{ rows: 10 }} />
+          ) : !treeResult ? (
+            <Empty description="加载失败或该仓库尚无已生成文档的任务" />
+          ) : treeResult.nodes.length === 0 ? (
+            <Empty description="该任务尚无模块层级数据" />
+          ) : (
+            <>
+              <Alert
+                type="info"
+                showIcon
+                style={{ marginBottom: 16 }}
+                message={
+                  <Space wrap>
+                    <span>
+                      基准任务 <Text code>#{treeResult.taskId}</Text>
+                      {treeResult.taskAutoResolved ? '（自动选取）' : '（手动指定）'}
+                    </span>
+                    <Tag>
+                      {countFunctionLeaves(treeResult.nodes)} 个功能
+                    </Tag>
+                    <Tag color="blue">
+                      文档粒度：{treeResult.documentGranularity === 'module' ? '模块' : '功能'}
+                    </Tag>
+                  </Space>
+                }
+              />
+              <div
+                className="ci-hierarchy-tree-panel"
+                style={{ border: '1px solid #f0f0f0', borderRadius: 6, padding: 12, background: '#fafafa' }}
+              >
+                <Tree
+                  treeData={treeAntData}
+                  defaultExpandAll
+                  showLine={{ showLeafIcon: false }}
+                  blockNode
+                  style={{ fontSize: 13 }}
+                  onSelect={(_, info) => {
+                    const key = String(info.node.key);
+                    const find = (nodes: KnowledgeBrowseTreeNode[]): KnowledgeBrowseTreeNode | null => {
+                      for (const n of nodes) {
+                        if (n.key === key) return n;
+                        if (n.children?.length) {
+                          const hit = find(n.children);
+                          if (hit) return hit;
+                        }
+                      }
+                      return null;
+                    };
+                    const node = find(filteredTreeNodes);
+                    if (node?.nodeType === 'FUNCTION' && node.hasDocument) {
+                      openPreviewFromTree(node);
+                    }
+                  }}
+                />
+              </div>
+            </>
+          )}
         </Card>
       ) : (
         <Card style={{ marginTop: 16 }} bodyStyle={{ padding: 0 }}>
           <Table<KnowledgeBrowseItem>
             dataSource={items}
-            columns={columns as any}
+            columns={listColumns as any}
             rowKey="id"
-            loading={loading}
+            loading={listLoading}
             pagination={{
-              pageSize: 20,
+              current: listPage,
+              pageSize: listPageSize,
+              total: listTotal,
               showSizeChanger: true,
               showTotal: (t) => `共 ${t} 条`,
+              onChange: (page, pageSize) => {
+                setListPage(page);
+                setListPageSize(pageSize);
+              },
             }}
             locale={{ emptyText: <Empty description="该条件下没有可浏览的文件" /> }}
             onRow={(record) => ({
@@ -414,7 +708,6 @@ const KnowledgeBrowse: React.FC = () => {
         </Card>
       )}
 
-      {/* 高级筛选 Drawer */}
       <Drawer
         title="高级筛选"
         width={360}
@@ -425,7 +718,13 @@ const KnowledgeBrowse: React.FC = () => {
             <Button icon={<ClearOutlined />} onClick={resetAdvanced}>
               清空
             </Button>
-            <Button type="primary" onClick={() => setAdvancedOpen(false)}>
+            <Button
+              type="primary"
+              onClick={() => {
+                setListPage(1);
+                setAdvancedOpen(false);
+              }}
+            >
               应用筛选
             </Button>
           </Space>
@@ -448,10 +747,10 @@ const KnowledgeBrowse: React.FC = () => {
           </div>
           <div>
             <Text type="secondary" style={{ display: 'block', marginBottom: 6 }}>
-              所属任务
+              所属任务（树形模式亦可用作指定基准任务）
             </Text>
             <Select
-              placeholder="全部任务"
+              placeholder="全部任务 / 自动选取"
               value={taskId}
               onChange={(v) => setTaskId(v)}
               allowClear
@@ -462,6 +761,7 @@ const KnowledgeBrowse: React.FC = () => {
                 value: t.id,
                 label: `#${t.id} ${t.type === 'INITIAL' ? '全量' : '增量'}`,
               }))}
+              disabled={systemId == null}
             />
           </div>
           <div>
@@ -475,22 +775,9 @@ const KnowledgeBrowse: React.FC = () => {
               allowClear
             />
           </div>
-          <Alert
-            type="info"
-            showIcon
-            message="筛选说明"
-            description={
-              <ul style={{ margin: 0, paddingLeft: 18 }}>
-                <li>「状态」仅对「知识文档」类型生效。</li>
-                <li>索引 / 清单文件读自临时仓库，文件被清理后不会出现在列表中。</li>
-                <li>修改后点「应用筛选」或刷新即可。</li>
-              </ul>
-            }
-          />
         </Space>
       </Drawer>
 
-      {/* 内容预览 Drawer */}
       <Drawer
         title={
           previewItem ? (
@@ -511,18 +798,10 @@ const KnowledgeBrowse: React.FC = () => {
         destroyOnClose
         extra={
           <Space>
-            <Button
-              icon={<CopyOutlined />}
-              onClick={copyPreview}
-              disabled={!previewText}
-            >
+            <Button icon={<CopyOutlined />} onClick={copyPreview} disabled={!previewText}>
               复制
             </Button>
-            <Button
-              icon={<DownloadOutlined />}
-              onClick={downloadPreview}
-              disabled={!previewText}
-            >
+            <Button icon={<DownloadOutlined />} onClick={downloadPreview} disabled={!previewText}>
               下载
             </Button>
           </Space>
@@ -534,13 +813,15 @@ const KnowledgeBrowse: React.FC = () => {
           <Empty description="无可显示内容（文件可能为空或读取失败）" />
         ) : (
           <>
-            <Paragraph
-              type="secondary"
-              style={{ fontSize: 12, marginBottom: 12 }}
-              copyable={{ text: previewItem.filePath }}
-            >
-              路径：{previewItem.filePath} · {formatBytes(previewItem.size)}
-            </Paragraph>
+            {previewItem.filePath && (
+              <Paragraph
+                type="secondary"
+                style={{ fontSize: 12, marginBottom: 12 }}
+                copyable={{ text: previewItem.filePath }}
+              >
+                路径：{previewItem.filePath} · {formatBytes(previewItem.size)}
+              </Paragraph>
+            )}
             <PreviewContent text={previewText} type={previewItem.type} />
           </>
         )}

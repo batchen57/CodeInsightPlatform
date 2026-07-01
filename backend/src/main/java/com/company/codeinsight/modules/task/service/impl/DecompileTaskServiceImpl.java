@@ -561,6 +561,7 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
             throw new BusinessException("任务不存在");
         }
         stateMachineService.transitTo(task, TaskStatus.CANCELLED, "用户终止了任务");
+        cleanupTaskWorkspace(id);
     }
 
     /**
@@ -580,6 +581,7 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
         if (task.getPriority() == null) {
             task.setPriority(defaultPriorityFor(task.getTriggerSource()));
         }
+        cleanupTaskWorkspace(id); // 重试前清理旧 workspace
         prepareTaskRerun(id, task);
         taskCache.put(task.getId(), task);
         // FAILED/CANCELLED → PENDING（dispatcher 在下个 tick 拉起）
@@ -915,6 +917,28 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
             throw new BusinessException("仅 PENDING 状态可取消（in-flight 请用终止）");
         }
         stateMachineService.transitTo(task, TaskStatus.CANCELLED, "用户在队列中取消");
+        cleanupTaskWorkspace(id);
+    }
+
+    /** 清理任务临时工作区（terminate/retry/cancel 后调用） */
+    private void cleanupTaskWorkspace(Long taskId) {
+        try {
+            File ws = taskWorkspacePaths.taskProjectDir(taskId);
+            if (ws.exists()) {
+                deleteRecursively(ws);
+                log.info("cleanupTaskWorkspace: taskId={} path={}", taskId, ws.getAbsolutePath());
+            }
+        } catch (Exception e) {
+            log.warn("cleanupTaskWorkspace failed taskId={}: {}", taskId, e.getMessage());
+        }
+    }
+
+    private static void deleteRecursively(File dir) {
+        File[] children = dir.listFiles();
+        if (children != null) {
+            for (File f : children) deleteRecursively(f);
+        }
+        dir.delete();
     }
 
     @Override
