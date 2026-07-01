@@ -1351,106 +1351,37 @@
 }
 
 /* ============================================
-   侧边栏 — 知识任务构建平铺子项
-   连续引导线 + 弱化样式（必须放在文件末尾以覆盖上方 menu 规则）
+   侧边栏 — 知识任务构建子项：无图标 + 缩进 + 文字前引导线
    ============================================ */
 
-.ci-menu .ci-menu-nested-group.ant-menu-item-group {
-  margin: 0 !important;
-  padding: 0 !important;
-}
-
-.ci-menu .ci-menu-nested-group .ant-menu-item-group-title {
-  display: none !important;
-}
-
-.ci-menu .ci-menu-nested-group .ant-menu-item-group-list {
-  position: relative;
-  margin: 0 0 2px 18px !important;
-  padding: 2px 0 !important;
-}
-
-/* 连续竖向引导线 */
-.ci-menu .ci-menu-nested-group .ant-menu-item-group-list::before {
-  position: absolute;
-  top: 6px;
-  bottom: 6px;
-  left: 0;
-  width: 1px;
-  background: rgba(47, 95, 173, 0.28);
-  content: "";
-  pointer-events: none;
-}
-
 .ci-menu .ant-menu-item.ci-menu-item-nested {
-  position: relative;
-  height: 30px !important;
-  margin: 1px 0 !important;
-  padding-inline: 26px 10px !important;
-  color: var(--ci-text-tertiary) !important;
-  font-size: 12px !important;
-  font-weight: 400 !important;
-  line-height: 30px !important;
-  background: transparent !important;
-  border: none !important;
-  border-radius: 6px !important;
-  box-shadow: none !important;
-}
-
-/* 横向分支线（覆盖 selected 左侧竖条 / 通用 ::before） */
-.ci-menu .ant-menu-item.ci-menu-item-nested::before {
-  position: absolute !important;
-  top: 50% !important;
-  right: auto !important;
-  bottom: auto !important;
-  left: 0 !important;
-  width: 12px !important;
-  height: 1px !important;
-  background: rgba(47, 95, 173, 0.28) !important;
-  border-radius: 0 !important;
-  transform: translateY(-50%) !important;
-  content: "" !important;
-}
-
-/* 禁用二级项的选中圆点 */
-.ci-menu .ant-menu-item.ci-menu-item-nested::after {
-  display: none !important;
+  /* 比父项文字再缩进一级，明确子项层级 */
+  padding-inline-start: 66px !important;
 }
 
 .ci-menu .ant-menu-item.ci-menu-item-nested .ant-menu-item-icon {
   display: none !important;
   width: 0 !important;
   min-width: 0 !important;
+  margin: 0 !important;
 }
 
-.ci-menu .ant-menu-item.ci-menu-item-nested:hover {
-  color: var(--ci-text-secondary) !important;
-  background: rgba(47, 95, 173, 0.05) !important;
+.ci-menu .ant-menu-item.ci-menu-item-nested .ant-menu-title-content {
+  display: inline-flex;
+  align-items: center;
 }
 
-.ci-menu .ant-menu-item.ci-menu-item-nested:hover::before {
-  background: rgba(47, 95, 173, 0.45) !important;
+.ci-menu .ant-menu-item.ci-menu-item-nested .ant-menu-title-content::before {
+  display: inline-block;
+  width: 10px;
+  height: 1px;
+  margin-right: 6px;
+  background: rgba(47, 95, 173, 0.34);
+  flex-shrink: 0;
+  content: "";
 }
 
-.ci-menu .ant-menu-item.ci-menu-item-nested.ant-menu-item-selected {
-  color: var(--ci-primary) !important;
-  font-weight: 500 !important;
-  background: rgba(47, 95, 173, 0.07) !important;
-  border: none !important;
-  box-shadow: none !important;
-}
-
-.ci-menu .ant-menu-item.ci-menu-item-nested.ant-menu-item-selected::before {
-  background: var(--ci-primary) !important;
-  opacity: 0.55;
-}
-
-.ci-menu .ci-menu-nested-group .ant-menu-item-group-list:hover::before,
-.ci-menu .ci-menu-nested-group:has(.ci-menu-item-nested.ant-menu-item-selected) .ant-menu-item-group-list::before {
-  background: rgba(47, 95, 173, 0.42);
-}
-
-.ci-menu .ci-menu-nested-group:has(.ci-menu-item-nested.ant-menu-item-selected) .ant-menu-item-group-list::before {
+.ci-menu .ant-menu-item.ci-menu-item-nested.ant-menu-item-selected .ant-menu-title-content::before {
   background: var(--ci-primary);
-  opacity: 0.35;
+  opacity: 0.55;
 }

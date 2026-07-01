@@ -123,7 +123,7 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
      */
     @Override
     public Page<DecompileTask> listTasksPage(int current, int size, Long systemId, String status, String type,
-                                             List<String> statuses, Long scheduleId, String triggerSource,
+                                             List<String> statuses, String triggerSource,
                                              String keyword, String modelName,
                                              String createdAtStart, String createdAtEnd) {
         Page<DecompileTask> page = new Page<>(current, size);
@@ -133,8 +133,6 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
                 .eq(StringUtils.hasText(status), DecompileTask::getStatus, status)
                 .in(statuses != null && !statuses.isEmpty(), DecompileTask::getStatus, statuses)
                 .eq(StringUtils.hasText(type), DecompileTask::getType, type)
-                // 按 scheduleId 过滤（用于定时任务详情页查看该 schedule 触发的所有知识构建任务）
-                .eq(scheduleId != null, DecompileTask::getScheduleId, scheduleId)
                 // 按 triggerSource 过滤（手动下发 / 定时触发视图）
                 .eq(StringUtils.hasText(triggerSource), DecompileTask::getTriggerSource, triggerSource)
                 // 精准搜索：模型名精确匹配
@@ -333,9 +331,9 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
                                            String modelName,
                                            com.company.codeinsight.modules.entrypoint.model.EntryPointConfig entryScanConfig,
                                            Boolean requireHierarchyReview,
-                                           String triggerSource, Long scheduleId) {
+                                           String triggerSource) {
         return createInitialTask(systemId, repositoryId, modularizePromptId, documentPromptId, modelName,
-                entryScanConfig, requireHierarchyReview, Boolean.TRUE, triggerSource, scheduleId);
+                entryScanConfig, requireHierarchyReview, Boolean.TRUE, triggerSource);
     }
 
     /**
@@ -349,13 +347,11 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
                                            com.company.codeinsight.modules.entrypoint.model.EntryPointConfig entryScanConfig,
                                            Boolean requireHierarchyReview,
                                            Boolean requireEntrypointReview,
-                                           String triggerSource, Long scheduleId) {
+                                           String triggerSource) {
         DecompileTask task = createInitialTask(systemId, repositoryId,
                 modularizePromptId, documentPromptId, modelName, entryScanConfig,
                 requireHierarchyReview, requireEntrypointReview);
-        applyTriggerSource(task.getId(), triggerSource, scheduleId);
-        task.setTriggerSource(normalizeTriggerSource(triggerSource));
-        task.setScheduleId(scheduleId);
+        applyTriggerSource(task.getId(), triggerSource);
         return task;
     }
 
@@ -369,9 +365,9 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
                                                String modelName,
                                                com.company.codeinsight.modules.entrypoint.model.EntryPointConfig entryScanConfig,
                                                Boolean requireHierarchyReview,
-                                               String triggerSource, Long scheduleId) {
+                                               String triggerSource) {
         return createIncrementalTask(systemId, repositoryId, modularizePromptId, documentPromptId, modelName,
-                entryScanConfig, requireHierarchyReview, Boolean.TRUE, triggerSource, scheduleId);
+                entryScanConfig, requireHierarchyReview, Boolean.TRUE, triggerSource);
     }
 
     /**
@@ -385,27 +381,19 @@ public class DecompileTaskServiceImpl extends ServiceImpl<DecompileTaskMapper, D
                                                com.company.codeinsight.modules.entrypoint.model.EntryPointConfig entryScanConfig,
                                                Boolean requireHierarchyReview,
                                                Boolean requireEntrypointReview,
-                                               String triggerSource, Long scheduleId) {
+                                               String triggerSource) {
         DecompileTask task = createIncrementalTask(systemId, repositoryId,
                 modularizePromptId, documentPromptId, modelName, entryScanConfig,
                 requireHierarchyReview, requireEntrypointReview);
-        applyTriggerSource(task.getId(), triggerSource, scheduleId);
-        task.setTriggerSource(normalizeTriggerSource(triggerSource));
-        task.setScheduleId(scheduleId);
+        applyTriggerSource(task.getId(), triggerSource);
         return task;
     }
 
-    /**
-     * 把 trigger_source / schedule_id 写回刚保存的 task 行。
-     * <p>为了避免在 {@link #createInitialTask} 内部加可选参数打断原签名，
-     * 这里用 lambdaUpdate 仅更新这两列。</p>
-     */
-    private void applyTriggerSource(Long taskId, String triggerSource, Long scheduleId) {
-        String normalized = normalizeTriggerSource(triggerSource);
+    /** 把 trigger_source 写回刚保存的 task 行 */
+    private void applyTriggerSource(Long taskId, String triggerSource) {
         this.lambdaUpdate()
                 .eq(DecompileTask::getId, taskId)
-                .set(DecompileTask::getTriggerSource, normalized)
-                .set(DecompileTask::getScheduleId, "SCHEDULED".equals(normalized) ? scheduleId : null)
+                .set(DecompileTask::getTriggerSource, normalizeTriggerSource(triggerSource))
                 .update();
     }
 

@@ -1,0 +1,66 @@
+import { Tag, Typography } from 'antd';
+import type { DataNode } from 'antd/es/tree';
+import {
+  type DraftHierarchyTreeNode,
+  NODE_TYPE_TAG,
+} from './draftHierarchyTree';
+
+const { Text } = Typography;
+
+const statusColor: Record<string, string> = {
+  DRAFT: 'magenta',
+  EDITING: 'geekblue',
+  CONFIRMED: 'green',
+  PUSHED: 'green',
+  ARCHIVED: 'default',
+};
+
+const statusLabel: Record<string, string> = {
+  DRAFT: '待处理',
+  EDITING: '已编辑',
+  CONFIRMED: '已确认',
+  PUSHED: '已推送',
+  ARCHIVED: '已归档',
+};
+
+export type HierarchyTreeDataNode = DataNode & { draftId?: number };
+
+/** 层级目录 → Ant Design Tree（样式对齐知识查看） */
+export function buildHierarchyAntTreeNodes(nodes: DraftHierarchyTreeNode[]): HierarchyTreeDataNode[] {
+  return nodes.map((n) => {
+    const isFunction = n.nodeType === 'FUNCTION';
+    const typeMeta = NODE_TYPE_TAG[n.nodeType];
+    const title = (
+      <div
+        className="ci-knowledge-tree-node"
+        style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', minWidth: 0 }}
+      >
+        <Tag color={typeMeta.color} style={{ margin: 0 }}>
+          {typeMeta.label}
+        </Tag>
+        <Text style={{ fontSize: 13 }}>{n.title}</Text>
+        {isFunction && (
+          n.hasDocument ? (
+            n.draftStatus ? (
+              <Tag color={statusColor[n.draftStatus] ?? 'default'} style={{ margin: 0 }}>
+                {statusLabel[n.draftStatus] ?? n.draftStatus}
+              </Tag>
+            ) : null
+          ) : (
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              无文档
+            </Text>
+          )
+        )}
+      </div>
+    );
+
+    return {
+      key: n.key,
+      title,
+      draftId: n.draftId,
+      selectable: isFunction && n.hasDocument,
+      children: n.children?.length ? buildHierarchyAntTreeNodes(n.children) : undefined,
+    };
+  });
+}

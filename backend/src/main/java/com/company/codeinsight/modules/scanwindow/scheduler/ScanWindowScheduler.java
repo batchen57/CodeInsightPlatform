@@ -89,7 +89,7 @@ public class ScanWindowScheduler {
                 decompileTaskService.createInitialTask(
                         repo.getSystemId(), repo.getId(),
                         null, null, null, null,
-                        true, true, "SCHEDULED", null);
+                        true, true, "SCHEDULED");
                 fired++;
 
                 // 6. 更新 last_fired_at

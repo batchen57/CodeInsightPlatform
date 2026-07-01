@@ -244,7 +244,7 @@ const fallbackCurrentPage = basicNav[0];
 
 /**
  * 把 NAV_GROUPS 渲染为统一的可折叠 SubMenu（一级分组）。
- * 带 children 的 NavItem（如 知识任务构建）平铺为 Menu.Item + 缩进子项，不用二级 SubMenu。
+ * 带 children 的 NavItem（知识任务构建）方案二：5 个 Menu.Item 平铺，子项仅加文字前引导线。
  */
 
 
@@ -418,13 +418,11 @@ const BasicLayout: React.FC = () => {
                       <Menu.Item key={item.key} icon={item.icon}>
                         {item.label}
                       </Menu.Item>
-                      <Menu.ItemGroup key={`${item.key}-nested`} className="ci-menu-nested-group">
-                        {item.children.map((c) => (
-                          <Menu.Item key={c.key} className="ci-menu-item-nested">
-                            {c.label}
-                          </Menu.Item>
-                        ))}
-                      </Menu.ItemGroup>
+                      {item.children.map((c) => (
+                        <Menu.Item key={c.key} className="ci-menu-item-nested">
+                          {c.label}
+                        </Menu.Item>
+                      ))}
                     </React.Fragment>
                   ) : (
                     <Menu.Item key={item.key} icon={item.icon}>

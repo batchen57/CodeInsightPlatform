@@ -133,6 +133,18 @@ function filterTreeNodes(nodes: KnowledgeBrowseTreeNode[], keyword: string): Kno
   return nodes.map(walk).filter((n): n is KnowledgeBrowseTreeNode => n != null);
 }
 
+/** 收集树中所有非叶节点的 key（用于展开/折叠全部） */
+function collectAllKeys(nodes: KnowledgeBrowseTreeNode[]): string[] {
+  const keys: string[] = [];
+  const walk = (list: KnowledgeBrowseTreeNode[]) => {
+    for (const n of list) {
+      if (n.children?.length) { keys.push(n.key); walk(n.children); }
+    }
+  };
+  walk(nodes);
+  return keys;
+}
+
 function countFunctionLeaves(nodes: KnowledgeBrowseTreeNode[]): number {
   let n = 0;
   for (const node of nodes) {
@@ -156,6 +168,7 @@ const KnowledgeBrowse: React.FC = () => {
   const [type, setType] = useState<KnowledgeBrowseFileType | 'ALL'>('ALL');
   const [keyword, setKeyword] = useState('');
   const [treeKeyword, setTreeKeyword] = useState('');
+  const [expandedKeys, setExpandedKeys] = useState<string[]>([]);
 
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [status, setStatus] = useState<string | undefined>(undefined);
@@ -510,7 +523,7 @@ const KnowledgeBrowse: React.FC = () => {
 
   const systemOptions = systems.map((s) => ({
     value: s.id,
-    label: s.nameCn || s.name,
+    label: s.name,
   }));
 
   const repoOptions = repositories.map((r) => {
@@ -649,13 +662,22 @@ const KnowledgeBrowse: React.FC = () => {
                   </Space>
                 }
               />
+              <Space size={4} style={{ marginBottom: 8 }}>
+                <Button size="small" onClick={() => setExpandedKeys(collectAllKeys(filteredTreeNodes))}>
+                  展开全部
+                </Button>
+                <Button size="small" onClick={() => setExpandedKeys([])}>
+                  折叠全部
+                </Button>
+              </Space>
               <div
                 className="ci-hierarchy-tree-panel"
                 style={{ border: '1px solid #f0f0f0', borderRadius: 6, padding: 12, background: '#fafafa' }}
               >
                 <Tree
                   treeData={treeAntData}
-                  defaultExpandAll
+                  expandedKeys={expandedKeys}
+                  onExpand={(keys) => setExpandedKeys(keys as string[])}
                   showLine={{ showLeafIcon: false }}
                   blockNode
                   style={{ fontSize: 13 }}

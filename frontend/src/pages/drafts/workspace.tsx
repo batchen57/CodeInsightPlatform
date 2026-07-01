@@ -29,24 +29,22 @@ import {
   ExperimentOutlined,
   FileSearchOutlined,
   FileTextOutlined,
-  FolderOpenOutlined,
   FullscreenExitOutlined,
   FullscreenOutlined,
   HistoryOutlined,
   MessageOutlined,
-  PushpinFilled,
-  PushpinOutlined,
   ReloadOutlined,
   SafetyCertificateOutlined,
   SaveOutlined,
   CloudUploadOutlined,
   BarsOutlined,
   ColumnHeightOutlined,
-  InboxOutlined,
 } from '@ant-design/icons';
 // 模块目录树节点改用 Tag 展示每个文档的状态文案，不再依赖 Badge 小圆点
 import Editor from '@monaco-editor/react';
+import DraftModuleDirectory from '../../components/DraftModuleDirectory';
 import MarkdownView from '../../components/MarkdownView';
+import { getModuleHierarchy } from '../../api/task';
 import {
   acquireDraftEditLock,
   autoSaveDraft,
@@ -71,6 +69,15 @@ import {
   type TaskCommentDto,
 } from '../../api/draft';
 import type { Task } from '../../types';
+import type { DraftHierarchyTreeNode } from '../../utils/draftHierarchyTree';
+import {
+  buildDraftHierarchyTree,
+  collectDocumentLeaves,
+  countHierarchyFunctions,
+  findFirstDraftId,
+  flattenDraftLeaves,
+} from '../../utils/draftHierarchyTree';
+import { buildHierarchyAntTreeNodes } from '../../utils/draftHierarchyTreeUi';
 import { confirmTask, getTask, retryTask } from '../../api/task';
 import { getCurrentOperator } from '../../api/auth';
 
@@ -190,6 +197,7 @@ const DraftReviewWorkspace: React.FC<DraftReviewWorkspaceProps> = ({ taskId }) =
   // ============ 工作区 & 草稿树（来自 DB） ============
   const [workspace, setWorkspace] = useState<DraftWorkspace | null>(null);
   const [treeData, setTreeData] = useState<DraftTreeNode[]>([]);
+  const [hierarchyTree, setHierarchyTree] = useState<DraftHierarchyTreeNode[]>([]);
   const [draftsLoading, setDraftsLoading] = useState(false);
   const [selectedDraftId, setSelectedDraftId] = useState<number | null>(null);
   const [selectedDraft, setSelectedDraft] = useState<KnowledgeDraft | null>(null);
@@ -272,6 +280,7 @@ const DraftReviewWorkspace: React.FC<DraftReviewWorkspaceProps> = ({ taskId }) =
     setDemoMode(next);
     setWorkspace(null);
     setTreeData([]);
+    setHierarchyTree([]);
     setSelectedDraftId(null);
     setSelectedDraft(null);
     setEditorContent('');
@@ -315,13 +324,17 @@ const DraftReviewWorkspace: React.FC<DraftReviewWorkspaceProps> = ({ taskId }) =
     [isReadOnly, isTaskLocked, editLockStatus],
   );
 
-  // 平铺叶子节点列表（深度优先），用于上一篇/下一篇导航 + 复核进度
-  const flatLeaves = useMemo(() => getFlatLeafList(treeData), [treeData]);
+  // 平铺有文档的功能叶子，用于上一篇/下一篇导航
+  const documentLeaves = useMemo(() => collectDocumentLeaves(hierarchyTree), [hierarchyTree]);
+  const flatLeaves = useMemo(
+    () => flattenDraftLeaves(treeData),
+    [treeData],
+  );
 
   // 当前选中草稿在平铺列表中的索引
   const currentLeafIndex = useMemo(
-    () => flatLeaves.findIndex((leaf) => leaf.id === selectedDraftId),
-    [flatLeaves, selectedDraftId],
+    () => documentLeaves.findIndex((leaf) => leaf.draftId === selectedDraftId),
+    [documentLeaves, selectedDraftId],
   );
 
   // 按状态统计当前任务的模块数量（用于确认通过弹窗）
@@ -334,17 +347,23 @@ const DraftReviewWorkspace: React.FC<DraftReviewWorkspaceProps> = ({ taskId }) =
   // 任务变更：拉取工作区 + DB 草稿树
   useEffect(() => {
     setDraftsLoading(true);
-    Promise.all([getWorkspaceByTask(taskId), getWorkspaceTreeForTask(taskId)])
-      .then(([wsRes, tree]) => {
+    Promise.all([
+      getWorkspaceByTask(taskId),
+      getWorkspaceTreeForTask(taskId),
+      getModuleHierarchy(taskId).catch(() => null),
+    ])
+      .then(([wsRes, tree, hierarchy]) => {
         setWorkspace(wsRes.workspace);
         setTreeData(tree);
-        const firstLeaf = findFirstLeaf(tree);
-        setSelectedDraftId(firstLeaf?.id ?? null);
+        const built = buildDraftHierarchyTree(hierarchy, tree);
+        setHierarchyTree(built);
+        const firstDraftId = findFirstDraftId(built);
+        setSelectedDraftId(firstDraftId);
       })
       .catch(() => {
-        setWorkspace(null);
-        setTreeData([]);
-        setSelectedDraftId(null);
+    setTreeData([]);
+    setHierarchyTree([]);
+    setSelectedDraftId(null);
       })
       .finally(() => setDraftsLoading(false));
   }, [taskId, demoMode]);
@@ -487,17 +506,17 @@ const DraftReviewWorkspace: React.FC<DraftReviewWorkspaceProps> = ({ taskId }) =
       // Alt+← / Alt+→：切换上一篇/下一篇模块
       if (e.altKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
         e.preventDefault();
-        if (flatLeaves.length === 0 || currentLeafIndex < 0) return;
+        if (documentLeaves.length === 0 || currentLeafIndex < 0) return;
         if (e.key === 'ArrowLeft' && currentLeafIndex > 0) {
-          setSelectedDraftId(flatLeaves[currentLeafIndex - 1].id);
-        } else if (e.key === 'ArrowRight' && currentLeafIndex < flatLeaves.length - 1) {
-          setSelectedDraftId(flatLeaves[currentLeafIndex + 1].id);
+          setSelectedDraftId(documentLeaves[currentLeafIndex - 1].draftId);
+        } else if (e.key === 'ArrowRight' && currentLeafIndex < documentLeaves.length - 1) {
+          setSelectedDraftId(documentLeaves[currentLeafIndex + 1].draftId);
         }
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedDraftId, isEditorReadOnly, editorContent, originalContent, flatLeaves, currentLeafIndex]);
+  }, [selectedDraftId, isEditorReadOnly, editorContent, originalContent, documentLeaves, currentLeafIndex]);
 
   /* ===================================================================
    *  编辑器交互
@@ -623,6 +642,8 @@ const DraftReviewWorkspace: React.FC<DraftReviewWorkspaceProps> = ({ taskId }) =
       // 重新拉取 treeData 让目录树每个节点状态从最新数据派生
       const tree = await getWorkspaceTreeForTask(selectedTaskId);
       setTreeData(tree);
+      const hierarchy = await getModuleHierarchy(selectedTaskId).catch(() => null);
+      setHierarchyTree(buildDraftHierarchyTree(hierarchy, tree));
       // 当前选中 draft 可能已被推到 CONFIRMED，重新拉评论列表保持一致
       if (selectedDraftId) {
         setComments(await getComments(selectedDraftId));
@@ -736,22 +757,27 @@ const DraftReviewWorkspace: React.FC<DraftReviewWorkspaceProps> = ({ taskId }) =
     }, 220);
   };
 
-  const togglePin = () => setModuleDirPinned((v) => {
-    const next = !v;
+  const handlePinnedChange = (next: boolean) => {
     moduleDirPinnedRef.current = next;
-    return next;
-  });
+    setModuleDirPinned(next);
+    if (next) {
+      setModuleDirOpen(true);
+    }
+  };
+
+  const handleResetModuleDir = () => {
+    moduleDirPinnedRef.current = false;
+    setModuleDirPinned(false);
+    setModuleDirOpen(false);
+  };
 
   const drawerVisible = moduleDirOpen || moduleDirPinned;
+  const hierarchyFunctionCount = useMemo(() => countHierarchyFunctions(hierarchyTree), [hierarchyTree]);
 
-  /* ===================================================================
-   *  渲染辅助
-   * =================================================================*/
-
-  // DB 树 → AntD Tree 节点
+  // 模块层级树 → AntD Tree
   const treeNodes = useMemo(
-    () => buildAntTreeNodes(treeData, selectedDraftId, (id) => setSelectedDraftId(id)),
-    [treeData, selectedDraftId],
+    () => buildHierarchyAntTreeNodes(hierarchyTree),
+    [hierarchyTree],
   );
 
   // 状态栏渲染函数：提取为独立函数，页面和全屏 Modal 复用
@@ -890,25 +916,25 @@ const DraftReviewWorkspace: React.FC<DraftReviewWorkspaceProps> = ({ taskId }) =
   // 编辑器标题栏 actions - 按"导航 / 视图 / 复核 / 信息 / 工具"五组分组
   const renderEditorActions = () => {
     // 模块导航组：上一篇 / 下一篇，包含复核进度指示
-    const totalLeaves = flatLeaves.length;
+    const totalLeaves = documentLeaves.length;
     const hasPrev = currentLeafIndex > 0;
     const hasNext = currentLeafIndex >= 0 && currentLeafIndex < totalLeaves - 1;
     const navGroup = selectedDraftId && totalLeaves > 1 ? (
       <div className="ci-action-group">
-        <Tooltip title={hasPrev ? `上一篇：${flatLeaves[currentLeafIndex - 1]?.moduleName}` : '已是第一篇'}>
+        <Tooltip title={hasPrev ? `上一篇：${documentLeaves[currentLeafIndex - 1]?.modulePath}` : '已是第一篇'}>
           <Button
             icon={<ArrowLeftOutlined />}
-            onClick={() => hasPrev && setSelectedDraftId(flatLeaves[currentLeafIndex - 1].id)}
+            onClick={() => hasPrev && setSelectedDraftId(documentLeaves[currentLeafIndex - 1].draftId)}
             disabled={!hasPrev}
           />
         </Tooltip>
         <span className="ci-nav-progress">
           {currentLeafIndex + 1}<span className="ci-nav-progress-sep">/</span>{totalLeaves}
         </span>
-        <Tooltip title={hasNext ? `下一篇：${flatLeaves[currentLeafIndex + 1]?.moduleName}` : '已是最后一篇'}>
+        <Tooltip title={hasNext ? `下一篇：${documentLeaves[currentLeafIndex + 1]?.modulePath}` : '已是最后一篇'}>
           <Button
             icon={<ArrowRightOutlined />}
-            onClick={() => hasNext && setSelectedDraftId(flatLeaves[currentLeafIndex + 1].id)}
+            onClick={() => hasNext && setSelectedDraftId(documentLeaves[currentLeafIndex + 1].draftId)}
             disabled={!hasNext}
           />
         </Tooltip>
@@ -1353,72 +1379,26 @@ const DraftReviewWorkspace: React.FC<DraftReviewWorkspaceProps> = ({ taskId }) =
           >
             <BarsOutlined />
             <span className="ci-module-drawer-handle-label">模块</span>
-            <span className="ci-module-drawer-handle-count">{countTreeLeaves(treeData)}</span>
+            <span className="ci-module-drawer-handle-count">{hierarchyFunctionCount}</span>
           </div>
         </Tooltip>
       )}
 
-      {/* 左侧模块目录 - 抽屉主体（DB tree，hover/pin 控制） */}
+      {/* 左侧模块目录 - 层级树 + 可调大小 / 固定拖拽 */}
       {workspace && (
-        <div
-          className={`ci-module-drawer ${drawerVisible ? 'is-open' : ''}`}
+        <DraftModuleDirectory
+          visible={drawerVisible}
+          pinned={moduleDirPinned}
+          loading={draftsLoading}
+          leafCount={hierarchyFunctionCount}
+          treeData={treeNodes}
+          selectedDraftId={selectedDraftId}
+          onSelectDraft={setSelectedDraftId}
+          onPinnedChange={handlePinnedChange}
+          onResetDock={handleResetModuleDir}
           onMouseEnter={openDrawer}
           onMouseLeave={scheduleCloseDrawer}
-        >
-          <Card
-            size="small"
-            className="ci-module-drawer-card"
-            title={
-              <Space size={6}>
-                <span className="ci-review-title-icon" style={{ width: 26, height: 26, fontSize: 13, borderRadius: 7 }}>
-                  <FolderOpenOutlined />
-                </span>
-                <span>模块目录</span>
-                <span className="ci-status-pill" style={{ height: 19, fontSize: 10 }}>
-                  <span className="ci-status-pill-dot" />
-                  {countTreeLeaves(treeData)} 个模块
-                </span>
-              </Space>
-            }
-            extra={
-              <Tooltip title={moduleDirPinned ? '取消固定' : '固定常驻'}>
-                <Button
-                  size="small"
-                  type="text"
-                  icon={moduleDirPinned ? <PushpinFilled style={{ color: '#5258e8' }} /> : <PushpinOutlined />}
-                  onClick={togglePin}
-                />
-              </Tooltip>
-            }
-          >
-            <Spin spinning={draftsLoading} size="small">
-              <div style={{ maxHeight: 'calc(100vh - 320px)', overflowY: 'auto', paddingRight: 4 }}>
-                {treeNodes.length > 0 ? (
-                  <Tree
-                    showLine={{ showLeafIcon: false }}
-                    blockNode
-                    defaultExpandAll
-                    treeData={treeNodes}
-                    selectedKeys={selectedDraftId ? [String(selectedDraftId)] : []}
-                    onSelect={(keys) => {
-                      if (keys.length > 0) {
-                        setSelectedDraftId(Number(keys[0]));
-                      }
-                    }}
-                  />
-                ) : (
-                  <div className="ci-info-empty" style={{ padding: '24px 0 20px' }}>
-                    <div className="ci-info-empty-illus" style={{ width: 48, height: 48, fontSize: 22 }}>
-                      <InboxOutlined />
-                    </div>
-                    <strong>该工作区下暂无草稿</strong>
-                    <span>等待任务生成新的草稿节点</span>
-                  </div>
-                )}
-              </div>
-            </Spin>
-          </Card>
-        </div>
+        />
       )}
 
       {/* 修订说明输入弹框：手动保存时强制要求填写本次修改意图 */}
@@ -1881,67 +1861,26 @@ const DraftReviewWorkspace: React.FC<DraftReviewWorkspaceProps> = ({ taskId }) =
               >
                 <BarsOutlined />
                 <span className="ci-module-drawer-handle-label">模块</span>
-                <span className="ci-module-drawer-handle-count">{countTreeLeaves(treeData)}</span>
+                <span className="ci-module-drawer-handle-count">{hierarchyFunctionCount}</span>
               </div>
             </Tooltip>
           )}
 
-          {/* 全屏下的模块目录抽屉：hover/pin 行为与页面版一致 */}
           {workspace && (
-            <div
-              className={`ci-module-drawer ${drawerVisible ? 'is-open' : ''}`}
+            <DraftModuleDirectory
+              visible={drawerVisible}
+              pinned={moduleDirPinned}
+              loading={draftsLoading}
+              leafCount={hierarchyFunctionCount}
+              treeData={treeNodes}
+              selectedDraftId={selectedDraftId}
+              onSelectDraft={setSelectedDraftId}
+              onPinnedChange={handlePinnedChange}
+              onResetDock={handleResetModuleDir}
               onMouseEnter={openDrawer}
               onMouseLeave={scheduleCloseDrawer}
-            >
-              <Card
-                size="small"
-                className="ci-module-drawer-card"
-                title={
-                  <Space>
-                    <FileSearchOutlined />
-                    <span>模块目录</span>
-                    <Tag>{countTreeLeaves(treeData)}</Tag>
-                  </Space>
-                }
-                extra={
-                  <Tooltip title={moduleDirPinned ? '取消固定' : '固定常驻'}>
-                    <Button
-                      size="small"
-                      type="text"
-                      icon={moduleDirPinned ? <PushpinFilled style={{ color: '#5258e8' }} /> : <PushpinOutlined />}
-                      onClick={togglePin}
-                    />
-                  </Tooltip>
-                }
-              >
-                <Spin spinning={draftsLoading} size="small">
-                  <div style={{ maxHeight: 'calc(100vh - 200px)', overflowY: 'auto', paddingRight: 4 }}>
-                    {treeNodes.length > 0 ? (
-                      <Tree
-                        showLine={{ showLeafIcon: false }}
-                        blockNode
-                        defaultExpandAll
-                        treeData={treeNodes}
-                        selectedKeys={selectedDraftId ? [String(selectedDraftId)] : []}
-                        onSelect={(keys) => {
-                          if (keys.length > 0) {
-                            setSelectedDraftId(Number(keys[0]));
-                          }
-                        }}
-                      />
-                    ) : (
-                      <div className="ci-info-empty" style={{ padding: '24px 0 20px' }}>
-                        <div className="ci-info-empty-illus" style={{ width: 48, height: 48, fontSize: 22 }}>
-                          <InboxOutlined />
-                        </div>
-                        <strong>该工作区下暂无草稿</strong>
-                        <span>等待任务生成新的草稿节点</span>
-                      </div>
-                    )}
-                  </div>
-                </Spin>
-              </Card>
-            </div>
+              fullscreen
+            />
           )}
         </div>
       </Modal>
@@ -1964,19 +1903,6 @@ async function getWorkspaceTreeForTask(taskId: number): Promise<DraftTreeNode[]>
   } catch {
     return [];
   }
-}
-
-/** 在 DB 树中查找第一个非目录叶子节点 */
-function findFirstLeaf(nodes: DraftTreeNode[]): DraftTreeNode | null {
-  for (const n of nodes) {
-    if (n.isFolder) {
-      const child = findFirstLeaf(n.children || []);
-      if (child) return child;
-    } else {
-      return n;
-    }
-  }
-  return null;
 }
 
 /** 在 DB 树中按 id 查找草稿节点 */
@@ -2005,86 +1931,11 @@ function findDraftInTree(nodes: DraftTreeNode[], id: number): KnowledgeDraft | n
   return null;
 }
 
-/** 统计 DB 树中所有叶子节点数（作为工作区"模块数"） */
-function countTreeLeaves(nodes: DraftTreeNode[]): number {
-  let count = 0;
-  for (const n of nodes) {
-    if (n.isFolder) {
-      count += countTreeLeaves(n.children || []);
-    } else {
-      count += 1;
-    }
-  }
-  return count;
-}
-
-/**
- * 将 DB 树节点转换为 AntD Tree 节点。
- * 选择某个节点时，会顺带保证该节点的父链全部展开。
- */
-function buildAntTreeNodes(
-  nodes: DraftTreeNode[],
-  selectedId: number | null,
-  onSelect: (id: number) => void,
-): any[] {
-  return nodes.map((n) => {
-    const isSelected = selectedId === n.id;
-    // 文档级状态展示：每个文档后挂一个带文字的小 Tag，颜色与编辑器标题一致
-    const docStatus = n.status as keyof typeof statusColor;
-    const docStatusColor = statusColor[docStatus] ?? 'default';
-    const docStatusLabel = statusLabel[docStatus] ?? n.status;
-    return {
-      key: String(n.id),
-      title: (
-        <div
-          onClick={() => onSelect(n.id)}
-          className={`ci-tree-node-row ${isSelected ? 'is-selected' : ''}`}
-        >
-          {n.isFolder ? (
-            <FileSearchOutlined className="ci-tree-node-icon" />
-          ) : (
-            <FileTextOutlined className={`ci-tree-node-icon ${isSelected ? 'is-selected' : ''}`} />
-          )}
-          <span className="ci-tree-node-name">{n.moduleName}</span>
-          {!n.isFolder && (
-            <Tag
-              color={docStatusColor}
-              className="ci-tree-node-status"
-              title={`文档状态：${docStatusLabel}`}
-            >
-              {docStatusLabel}
-            </Tag>
-          )}
-        </div>
-      ),
-      children: n.children && n.children.length > 0 ? buildAntTreeNodes(n.children, selectedId, onSelect) : undefined,
-      selectable: false,
-    };
-  });
-}
-
-/**
- * 深度优先遍历，返回所有非 folder 叶子节点的平铺数组，
- * 用于"上一篇/下一篇"导航和复核进度计算。
- */
-function getFlatLeafList(nodes: DraftTreeNode[]): DraftTreeNode[] {
-  const result: DraftTreeNode[] = [];
-  for (const n of nodes) {
-    if (n.isFolder) {
-      result.push(...getFlatLeafList(n.children || []));
-    } else {
-      result.push(n);
-    }
-  }
-  return result;
-}
-
 /**
  * 按文档状态统计模块数量，用于确认通过前的完成度展示。
- * 返回形如 { DRAFT: 5, EDITING: 3, CONFIRMED: 7 } 的计数对象。
  */
 function countModulesByStatus(nodes: DraftTreeNode[]): Record<string, number> {
-  const leaves = getFlatLeafList(nodes);
+  const leaves = flattenDraftLeaves(nodes);
   return leaves.reduce(
     (acc, leaf) => {
       const s = leaf.status || 'DRAFT';
